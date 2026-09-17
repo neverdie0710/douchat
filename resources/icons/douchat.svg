@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <mask id="agent-pod" maskUnits="userSpaceOnUse">
+      <rect width="1024" height="1024" fill="black"/>
+      <path
+        fill="white"
+        d="M392 276c-79 2-146 53-163 137-20 98 23 199 108 268 93 77 209 102 315 69 49-15 84-24 127 3l58 36c-20-35-38-69-27-103 33-90-26-177-116-208-82-28-128-61-163-117-34-54-81-87-139-85Z"
+      />
+      <rect x="331" y="391" width="95" height="95" rx="24" fill="black"/>
+      <rect x="449" y="487" width="95" height="95" rx="24" fill="black"/>
+      <rect x="571" y="568" width="95" height="95" rx="24" fill="black"/>
+    </mask>
+  </defs>
+  <g transform="translate(61.44 61.44) scale(.88)">
+    <rect x="48" y="48" width="928" height="928" rx="218" fill="#F6F7FA"/>
+    <rect width="1024" height="1024" fill="#0B5CFF" mask="url(#agent-pod)"/>
+  </g>
+</svg>

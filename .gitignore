@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Build and package output
+out/
+dist/
+release/
+build/
+*.dmg
+*.exe
+*.AppImage
+*.blockmap
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+service-account*.json
+credentials*.json
+
+# Logs and diagnostic output
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tests and caches
+coverage/
+.nyc_output/
+.vite/
+.electron-vite/
+.eslintcache
+*.tsbuildinfo
+
+# Package-manager state
+.npm/
+.pnpm-store/
+
+# Editor and operating-system files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local application data and temporary files
+.douchat/
+douchat-data/
+tmp/
+temp/
