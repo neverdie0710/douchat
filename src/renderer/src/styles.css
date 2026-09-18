@@ -3522,6 +3522,25 @@ select:focus-visible {
   background-clip: padding-box;
 }
 
+/* The inbox and thread scrollbars belong to the column edge: keep the slim
+   thumb flush with the divider instead of centering it inside a padded track. */
+.messenger .conversation-list::-webkit-scrollbar,
+.messenger .message-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.messenger .conversation-list::-webkit-scrollbar-thumb,
+.messenger .message-scroll::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 999px 0 0 999px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.messenger .conversation-list:hover::-webkit-scrollbar-thumb,
+.messenger .message-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
 .messenger .wordmark {
   color: #333538;
   font-size: calc(13px * var(--font-scale, 0.92));

@@ -13,6 +13,8 @@
   </defs>
   <g transform="translate(30.72 30.72) scale(.94)">
     <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
-    <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod)"/>
+    <g transform="translate(512 512) scale(1.1) translate(-512 -512)">
+      <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod)"/>
+    </g>
   </g>
 </svg>

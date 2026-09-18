@@ -3,7 +3,8 @@
 The app uses the Douchat `icon-v2` artwork: a white agent mark on the product's
 blue theme-color plate. The source artwork keeps a roughly 7.5% transparent
 safety margin on the 1024px canvas so its perceived Dock size matches full-bleed
-macOS app icons without clipping the rounded plate.
+macOS app icons without clipping the rounded plate. The white mark is enlarged
+within that plate so it remains legible at Dock and taskbar sizes.
 The development variant adds a red `DEV` badge at the lower right. PNG and
 ICNS files are generated from the SVG sources in this directory.
 

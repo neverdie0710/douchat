@@ -121,7 +121,7 @@ npm run typecheck  # check main, preload and renderer TypeScript
 npm test           # run the Vitest suite
 npm run build      # create production bundles in out/
 npm run package    # create an unpacked app for the current platform
-npm run package:mac    # unsigned universal DMG + ZIP for local smoke tests
+npm run package:mac    # unsigned Apple Silicon + Intel DMGs/ZIPs for smoke tests
 npm run package:win    # x64 NSIS installer
 npm run package:linux  # x64 AppImage + deb package
 npm run preview    # preview the production bundles
@@ -162,7 +162,10 @@ git tag v0.2.0
 git push origin dev v0.2.0
 ```
 
-Tagged releases currently ship one signed, notarized universal macOS build.
+Tagged releases ship separate signed and notarized Apple Silicon (`arm64`) and
+Intel (`x64`) macOS builds. Both architectures share `latest-mac.yml`; the
+updater selects the matching ZIP automatically, so users never download the
+other architecture's Electron runtime.
 Windows and Linux installers can be produced from the workflow's manual action,
 but are not attached to public tagged releases until their signing and support
 channels are enabled.
