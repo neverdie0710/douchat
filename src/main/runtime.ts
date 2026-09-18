@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core'
-import { Type } from '@earendil-works/pi-ai'
+import { Type, type ImageContent } from '@earendil-works/pi-ai'
 import { builtinModels } from '@earendil-works/pi-ai/providers/all'
 import type {
   AgentConfig,
@@ -16,6 +16,7 @@ import type {
   ModelOption,
   ChatMessage,
   MessageAttachment,
+  MessageImageInput,
   Conversation,
   ConversationActivityState,
   ConversationPhase,
@@ -71,6 +72,44 @@ import { DouchatStore } from './store'
  */
 const NO_MODEL =
   'No cloud model is available for this account — try again later, or give this bot a local agent.'
+const MAX_INPUT_IMAGES = 4
+const MAX_INPUT_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_INPUT_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+const INPUT_IMAGE_TYPES = new Set<MessageAttachment['mimeType']>([
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif'
+])
+
+function validInputImages(images: MessageImageInput[] | undefined): MessageImageInput[] {
+  if (images === undefined) return []
+  if (!Array.isArray(images)) throw new Error('Invalid image attachments')
+  if (!images.length) return []
+  if (images.length > MAX_INPUT_IMAGES) throw new Error('You can paste up to 4 images at a time.')
+  let total = 0
+  return images.map((image, index) => {
+    if (!image || !INPUT_IMAGE_TYPES.has(image.mimeType)) throw new Error('Only PNG, JPEG, WebP, and GIF images are supported.')
+    const rawData: unknown = image.data
+    const data = rawData instanceof Uint8Array
+      ? rawData
+      : ArrayBuffer.isView(rawData)
+        ? new Uint8Array(rawData.buffer, rawData.byteOffset, rawData.byteLength)
+        : undefined
+    if (!data?.byteLength || data.byteLength > MAX_INPUT_IMAGE_BYTES) throw new Error('Each image must be 8 MB or smaller.')
+    total += data.byteLength
+    if (total > MAX_INPUT_IMAGE_TOTAL_BYTES) throw new Error('Images must total 20 MB or less.')
+    return {
+      name: image.name?.trim().slice(0, 240) || `pasted-image-${index + 1}`,
+      mimeType: image.mimeType,
+      data
+    }
+  })
+}
+
+function imagePrompt(text: string, imageCount: number): string {
+  if (text) return text
+  return imageCount === 1
+    ? 'The human sent an image. Examine it and respond helpfully.'
+    : `The human sent ${imageCount} images. Examine them and respond helpfully.`
+}
 
 function noModelError(agent: AgentConfig): Error {
   return new Error(`${agent.name} has no model to answer with. ${NO_MODEL}`)
@@ -130,6 +169,12 @@ export interface CloudGatewayOptions {
   onUnauthorized?: () => void | Promise<void>
 }
 
+export interface ConnectorProvider {
+  snapshot(): AppSnapshot['connectors']
+  createTools(agentId: string): AgentTool[]
+}
+const emptyConnectors: ConnectorProvider = { snapshot: () => [], createTools: () => [] }
+
 export class DouchatRuntime {
   private readonly models = builtinModels()
   private readonly localRuns = new Map<string, Set<AbortController>>()
@@ -154,7 +199,8 @@ export class DouchatRuntime {
     private readonly store: DouchatStore,
     private readonly computer: ComputerProvider,
     private readonly onChange: (snapshot: AppSnapshot) => void,
-    private readonly cloudGateway?: CloudGatewayOptions
+    private readonly cloudGateway?: CloudGatewayOptions,
+    private readonly connectors: ConnectorProvider = emptyConnectors
   ) {
     for (const agent of store.agents) this.statuses.set(agent.id, 'idle')
   }
@@ -178,6 +224,8 @@ export class DouchatRuntime {
       runtime: this.runtimeStatus(),
       endpoint: this.endpointSettings(),
       models: this.availableCloudModels(),
+      connectors: this.connectors.snapshot(),
+      defaultConversationId: this.store.defaultConversationId,
       userName: this.store.userName,
       userAvatar: this.store.userAvatar
     }
@@ -198,6 +246,7 @@ export class DouchatRuntime {
         authName: 'Douchat account',
         authSource: 'desktop session',
         providerName: 'Douchat Cloud',
+        assumeImageInput: true,
         onUnauthorized: this.cloudGateway.onUnauthorized
       }
     }
@@ -436,7 +485,7 @@ export class DouchatRuntime {
             context === 'group'
               ? 'You are replying inside a group chat. Other members see your public text; use the private transport described in the request when a message is meant for one recipient.'
               : 'You are replying in your private chat with the human.',
-            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, and Documents with computer_list_files, computer_make_directory, and computer_move_file. File moves never overwrite and deletion is unavailable. Never claim a computer action or handoff happened without calling its tool.'
+            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, and Documents with computer_list_files, computer_make_directory, and computer_move_file. File moves never overwrite and deletion is unavailable. You may also receive explicitly authorized connector tools such as email_search and email_read; the actual tool list is the source of truth for what is connected. Never claim a computer action, connector action, or handoff happened without calling its tool.'
           ].join('\n')
     return [config.instructions, identity, workspace].filter(Boolean).join('\n\n')
   }
@@ -452,8 +501,8 @@ export class DouchatRuntime {
       context === 'controller'
         ? []
         : context === 'group'
-          ? this.computer.createTools(config.id)
-          : [this.messageAgentTool(config), ...this.computer.createTools(config.id)]
+          ? [...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
+          : [this.messageAgentTool(config), ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
 
     const agent = new Agent({
       initialState: {
@@ -534,15 +583,6 @@ export class DouchatRuntime {
           }
         }
 
-        this.store.addMessage({
-          conversationId,
-          topicId,
-          authorId: config.id,
-          authorName: config.name,
-          text: `${config.name} → ${target.name} · ${params.message}`,
-          kind: 'handoff'
-        })
-        this.emit()
         const responded = this.activeResponded.get(config.id) ?? new Set<string>()
         responded.add(target.id)
         const runId = this.activeRun.get(config.id)
@@ -559,10 +599,10 @@ export class DouchatRuntime {
             responded
           })
         )
-        if (reply.text.trim() || reply.attachments?.length) {
-          this.saveBubbles(conversationId, topicId, target, reply.text, { attachments: reply.attachments })
-          this.emit()
-        }
+        // Inline delegation is private working context for the current bot.
+        // Return the specialist's answer to the caller, but do not publish the
+        // handoff request or the specialist as standalone messages in the
+        // human's direct-chat transcript.
         return {
           content: [{ type: 'text' as const, text: `${target.name} replied: ${reply.text || reply.error || 'no answer'}` }],
           details: { delivered: true, agentId: target.id }
@@ -597,7 +637,8 @@ export class DouchatRuntime {
     runId,
     depth = 0,
     responded = new Set<string>(),
-    signal
+    signal,
+    images
   }: {
     config: AgentConfig
     sessionKey: string
@@ -609,6 +650,7 @@ export class DouchatRuntime {
     depth?: number
     responded?: Set<string>
     signal?: AbortSignal
+    images?: ImageContent[]
   }): Promise<{ text: string; error?: string; attachments?: MessageAttachment[] }> {
     this.statuses.set(config.id, 'thinking')
     this.busyAgents.add(config.id)
@@ -641,7 +683,11 @@ export class DouchatRuntime {
               ? 'When an image is requested, use your image-generation capability. Douchat will attach image files produced by that tool automatically. Never say an image was created or sent unless the tool actually produced the image file.'
               : '',
             history ? `Conversation so far:\n${history}` : '', prompt
-          ].filter(Boolean).join('\n\n'), abort.signal)
+          ].filter(Boolean).join('\n\n'), abort.signal, images?.map((image, index) => ({
+            name: `input-image-${index + 1}`,
+            mimeType: image.mimeType as MessageAttachment['mimeType'],
+            data: Buffer.from(image.data, 'base64')
+          })))
           const attachments = await Promise.all(reply.images.map((image) => this.store.saveImageAttachment(image)))
           return { text: reply.text, ...(attachments.length ? { attachments } : {}) }
         } finally {
@@ -654,7 +700,7 @@ export class DouchatRuntime {
       const abort = (): void => session.abort()
       signal?.addEventListener('abort', abort, { once: true })
       try {
-        await session.prompt(prompt)
+        await session.prompt(prompt, images)
       } finally {
         signal?.removeEventListener('abort', abort)
       }
@@ -700,7 +746,7 @@ export class DouchatRuntime {
     common: Partial<ChatMessage> = {}
   ): ChatMessage[] {
     const blocks = splitBotReply(text)
-    if (!blocks.length && extra.attachments?.length) blocks.push('')
+    if (!blocks.length && (extra.attachments?.length || extra.deliveries?.length)) blocks.push('')
     if (!blocks.length) return []
     const replyGroupId = blocks.length > 1 ? randomUUID() : undefined
     const conversation = this.store.conversation(conversationId)
@@ -788,7 +834,7 @@ export class DouchatRuntime {
         authorName: sender.name,
         text: delivery.content,
         kind: 'message',
-        source: { kind: 'group', id: group.id, name: group.name },
+        source: { kind: 'group', id: group.id, name: group.name, content: delivery.content },
         createdAt: delivery.createdAt
       })
       this.store.addUnread(direct.id, 1)
@@ -797,12 +843,13 @@ export class DouchatRuntime {
 
   // ───────────────────────────── sending ─────────────────────────────
 
-  async sendMessage(conversationId: string, text: string): Promise<void> {
+  async sendMessage(conversationId: string, text: string, inputImages?: MessageImageInput[]): Promise<void> {
     if (!this.gateway) await this.connect()
     const conversation = this.store.conversation(conversationId)
     if (!conversation) throw new Error('Conversation not found')
     const content = text.trim()
-    if (!content) return
+    const preparedImages = validInputImages(inputImages)
+    if (!content && !preparedImages.length) return
     if (this.aborts.has(conversationId)) throw new Error('This conversation is still replying')
 
     const topicId = this.store.activeTopicId(conversationId)
@@ -816,6 +863,13 @@ export class DouchatRuntime {
           content,
           members.map(asMember)
         )
+    const attachments = await Promise.all(preparedImages.map((image) => this.store.saveImageAttachment(image)))
+    const images: ImageContent[] = preparedImages.map((image) => ({
+      type: 'image',
+      data: Buffer.from(image.data).toString('base64'),
+      mimeType: image.mimeType
+    }))
+    const prompt = imagePrompt(content, images.length)
     const user = this.store.addMessage({
       conversationId,
       topicId,
@@ -823,6 +877,7 @@ export class DouchatRuntime {
       authorName: 'You',
       text: content,
       kind: 'message',
+      ...(attachments.length ? { attachments } : {}),
       ...(recipients.length ? { recipients: recipients.map((member) => ({ id: member.id, name: member.name })) } : {})
     })
     this.store.markConversationRead(conversationId)
@@ -835,16 +890,16 @@ export class DouchatRuntime {
       agentId: conversation.leadAgentId ?? members[0].id,
       conversationId,
       title: conversation.name,
-      prompt: content,
+      prompt,
       trigger: 'chat'
     })
     this.store.updateRun(run.id, { status: 'running', latestActivity: 'Thinking', startedAt: Date.now() })
     this.store.addRunEvent({ runId: run.id, type: 'status', label: 'Started', status: 'running' })
     try {
       if (conversation.type === 'group') {
-        await this.runGroupTurn(conversation, topicId, user, members, run.id, abort.signal)
+        await this.runGroupTurn(conversation, topicId, user, members, run.id, abort.signal, images)
       } else {
-        await this.runDirectTurn(conversation, topicId, members[0], user, run.id, abort.signal)
+        await this.runDirectTurn(conversation, topicId, members[0], user, run.id, abort.signal, images)
       }
       this.store.updateRun(run.id, { status: 'succeeded', latestActivity: 'Finished', finishedAt: Date.now() })
       this.store.addRunEvent({ runId: run.id, type: 'status', label: 'Finished', status: 'succeeded' })
@@ -881,18 +936,20 @@ export class DouchatRuntime {
     bot: AgentConfig,
     user: ChatMessage,
     runId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    images: ImageContent[] = []
   ): Promise<void> {
     if (!(await this.canRunLive(bot))) throw noModelError(bot)
     this.setActivity(conversation.id, topicId, 'replying', [bot.id], bot.name)
 
     const history = this.store.topicMessages(conversation.id, topicId)
     const peers = this.store.agents.filter((agent) => agent.id !== bot.id).map(asMember)
+    const promptText = imagePrompt(user.text, images.length)
     const contextual = directReplyPrompt(
-      user.text,
+      promptText,
       history.map((message) => ({ content: message.text, source: message.source }))
     )
-    const prompt = botReplyPrompt(directA2ASourcePrompt(user.text, asMember(bot), peers, contextual === user.text ? '' : contextual))
+    const prompt = botReplyPrompt(directA2ASourcePrompt(promptText, asMember(bot), peers, contextual === promptText ? '' : contextual))
     const reply = await this.runReply({
       config: bot,
       sessionKey: `direct:${conversation.id}:${topicId}`,
@@ -901,7 +958,8 @@ export class DouchatRuntime {
       conversationId: conversation.id,
       topicId,
       runId,
-      signal
+      signal,
+      images
     })
     if (signal.aborted) return
 
@@ -980,8 +1038,18 @@ export class DouchatRuntime {
       target,
       text,
       reply.text.trim() ? { attachments: reply.attachments } : { error: reply.error, attachments: reply.attachments },
-      { source: { kind: 'bot', id: delivery.sender.id, name: delivery.sender.name } }
+      { source: { kind: 'bot', id: delivery.sender.id, name: delivery.sender.name, content: delivery.content } }
     )
+    this.store.addDeliveryReplies(delivery.id, saved.map((message) => ({
+      id: message.id,
+      senderId: message.authorId,
+      senderName: message.authorName,
+      content: message.text,
+      createdAt: message.createdAt,
+      replyGroupId: message.replyGroupId,
+      attachments: message.attachments,
+      error: message.error
+    })))
     this.store.addUnread(direct.id, saved.length)
     this.emit()
   }
@@ -994,7 +1062,8 @@ export class DouchatRuntime {
     user: ChatMessage,
     members: AgentConfig[],
     runId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    images: ImageContent[] = []
   ): Promise<void> {
     const group = this.group(conversation)
     const liveness = await Promise.all(members.map((member) => this.canRunLive(member)))
@@ -1003,7 +1072,7 @@ export class DouchatRuntime {
     const userMessage: GroupMessage = {
       id: user.id,
       role: 'user',
-      content: user.text,
+      content: imagePrompt(user.text, images.length),
       recipients: user.recipients
     }
     const privateMessages: PrivateDelivery[] = this.store
@@ -1043,7 +1112,8 @@ export class DouchatRuntime {
             prompt: groupDecisionPrompt(group, context, candidate),
             conversationId: conversation.id,
             topicId,
-            signal
+            signal,
+            images
           })
         )
         if (reply.text.trim()) {
@@ -1080,7 +1150,8 @@ export class DouchatRuntime {
           conversationId: conversation.id,
           topicId,
           runId,
-          signal
+          signal,
+          images
         })
       )
       if (signal.aborted) return { messages: [] }

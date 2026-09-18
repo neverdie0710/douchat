@@ -1,4 +1,4 @@
-import { t } from '../preferences'
+import { t, tr } from '../preferences'
 import {
   BellOff,
   LoaderCircle,
@@ -14,7 +14,7 @@ import type { ReactElement } from 'react'
 import type { AppSnapshot, ChatMessage, Conversation } from '../../../shared/types'
 import { latestAssistantPreview } from '../../../shared/bot/preview'
 import { compareConversationActivity, compareConversationOrganization } from '../../../shared/bot/order'
-import { ConversationAvatar, SidebarResizer, formatTime, relativeTime } from './common'
+import { ConversationAvatar, SidebarResizer, conversationDisplayName, formatTime, relativeTime } from './common'
 
 interface ContextMenuState {
   id: string
@@ -113,34 +113,36 @@ export function BotInbox({
     const needle = query.trim().toLowerCase()
     return ordered.filter((conversation) => {
       if (conversation.hidden && !needle) return false
-      return !needle || conversation.name.toLowerCase().includes(needle)
+      const displayName = conversationDisplayName(conversation, snapshot.agents)
+      return !needle || `${conversation.name} ${displayName}`.toLowerCase().includes(needle)
     })
-  }, [ordered, query])
+  }, [ordered, query, snapshot.agents, document.documentElement.lang])
 
   const pinned = filtered.filter((conversation) => conversation.pinned)
   const rest = filtered.filter((conversation) => !conversation.pinned)
   const menuTarget = snapshot.conversations.find((conversation) => conversation.id === contextMenu?.id)
 
   const row = (conversation: Conversation): ReactElement => {
+    const displayName = conversationDisplayName(conversation, snapshot.agents)
     const messages = messagesByConversation.get(conversation.id) ?? []
     const working = workingIds.has(conversation.id)
     const preview = latestAssistantPreview(
       messages.map((message) => ({
         authorId: message.authorId,
         authorName: message.authorName,
-        text: message.kind === 'handoff' ? `Handoff · ${message.text}` : message.text,
+        text: message.kind === 'handoff' ? `${t('Handoff')} · ${message.text}` : message.text,
         createdAt: message.createdAt,
         error: message.error
       }))
     )
     const last = messages[messages.length - 1]
     const previewText = last?.authorId === 'user'
-        ? `You: ${last.text}`
+        ? tr('You: {message}', { message: last.text })
         : preview
           ? conversation.type === 'group'
-            ? `${preview.authorName}: ${preview.text}`
+            ? `${preview.authorName === 'Dr. Dou' ? t('Dr. Dou') : preview.authorName}: ${preview.text}`
             : preview.text
-          : 'Start a conversation'
+          : t('Start a conversation')
 
     return (
       <button
@@ -164,7 +166,7 @@ export function BotInbox({
         <span className="conversation-copy">
           <span className="conversation-line">
             <strong>
-              {conversation.name || 'New chat'}
+              {displayName || 'New chat'}
               {conversation.pinned && <Pin size={11} className="pin-mark" />}
             </strong>
             <time>{new Date(lastMessageAt(conversation)).toDateString() === new Date(now).toDateString() ? formatTime(lastMessageAt(conversation)) : relativeTime(lastMessageAt(conversation), now)}</time>
@@ -183,7 +185,7 @@ export function BotInbox({
         <Search size={15} />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} />
         {query && (
-          <button onClick={() => setQuery('')} aria-label="Clear search">
+          <button onClick={() => setQuery('')} aria-label={t('Clear search')}>
             <X size={13} />
           </button>
         )}
@@ -200,7 +202,7 @@ export function BotInbox({
                   <MessageSquare size={14} /><span>{t('Start chat')}</span>
                 </button>
                 <button role="menuitem" onClick={() => { setCreateOpen(false); onCreateBot() }}>
-                  <UserPlus size={14} /><span>{t('Create contact')}</span>
+                  <UserPlus size={14} /><span>{t('Create agent')}</span>
                 </button>
               </div>
             )}
@@ -213,7 +215,7 @@ export function BotInbox({
         {rest.map(row)}
         {!filtered.length && (
           <p className="empty-search">
-            {query.trim() ? `No chats match “${query.trim()}”.` : t('No chats yet')}
+            {query.trim() ? tr('No chats match “{query}”.', { query: query.trim() }) : t('No chats yet')}
           </p>
         )}
       </nav>

@@ -7,7 +7,7 @@ on the computer.
 
 ## Highlights
 
-- Create agents with their own identity, role, instructions, labels and model.
+- Create agents with their own identity, role, instructions and labels.
 - Use direct chats, group chats, topics, `@` mentions and lead-agent dispatch.
 - Hand work between agents with private and agent-to-agent messages.
 - Connect supported local agent CLIs without copying their credentials into Douchat.
@@ -70,6 +70,11 @@ with Electron `safeStorage`, remains in the main process and is never sent to th
 renderer or copied into generic endpoint settings. Cloud models are loaded from
 `GET /v1/models`, and replies stream through `POST /v1/chat/completions`.
 
+The first time an account signs in on a local profile, Douchat creates the Cloud
+contact **Dr. Dou** (豆博士), opens its private chat by default, and asks it to
+send a short welcome after Cloud Chat connects. The account is marked as onboarded,
+so later sign-ins do not create duplicates and deleting the contact is respected.
+
 Renderer windows use context isolation, sandboxing and no Node.js integration.
 User-selected avatars are stored as local data URLs, and message attachments are
 served to the renderer through IPC rather than exposing arbitrary file paths.
@@ -98,7 +103,7 @@ Open **Settings → Agents**, or choose **Manage local agents** in Contacts, the
 refresh the catalog. Detection uses the login-shell `PATH`, including tools
 installed through nvm, pnpm or `~/.local/bin`.
 
-Claude Code, Codex, Gemini, OpenCode, Cursor and Kimi currently have headless chat
+Claude Code, Codex, Gemini, Grok Build, OpenCode, Cursor and Kimi currently have headless chat
 adapters. Install and sign in to a CLI in the terminal before creating a contact.
 Several contacts may use the same CLI while retaining separate topic histories.
 Detection confirms that an executable exists; it cannot guarantee login state or
@@ -115,8 +120,71 @@ npm run dev        # start Electron with hot reload
 npm run typecheck  # check main, preload and renderer TypeScript
 npm test           # run the Vitest suite
 npm run build      # create production bundles in out/
+npm run package    # create an unpacked app for the current platform
+npm run package:mac    # unsigned universal DMG + ZIP for local smoke tests
+npm run package:win    # x64 NSIS installer
+npm run package:linux  # x64 AppImage + deb package
 npm run preview    # preview the production bundles
 ```
+
+Packaged artifacts are written to `release/<version>/`.
+
+## Release and automatic updates
+
+Production updates are served from the public `douchat` Cloudflare R2 bucket at
+`https://cdn.douchat.ai`, while GitHub Releases remain the private staging area.
+`electron-builder` creates each platform installer plus its checksum-protected
+update manifest, and the packaged app embeds only the public CDN URL. The
+renderer can request a check or installation over IPC, but it cannot replace the
+release feed or access the R2 publishing credentials.
+
+Installed builds check quietly after launch. Users can also open
+**Settings → About** to check manually. One click downloads the verified update,
+installs it and restarts Douchat. If an agent task is active, the completed
+download waits until the task has finished before restarting.
+
+To prepare a release:
+
+1. Set the same version in `package.json` and `package-lock.json`.
+2. Commit the version change and push it.
+3. Tag that commit with `v<version>` and push the tag.
+4. Wait for `.github/workflows/release.yml` to create a draft GitHub Release.
+5. Test the attached DMG, then publish the draft. Publishing runs
+   `.github/workflows/publish-cdn.yml`, which uploads versioned files first and
+   `latest-mac.yml` last. The manifest update is the shipping step seen by
+   installed clients.
+
+```bash
+npm version 0.2.0 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "release: Douchat 0.2.0"
+git tag v0.2.0
+git push origin dev v0.2.0
+```
+
+Tagged releases currently ship one signed, notarized universal macOS build.
+Windows and Linux installers can be produced from the workflow's manual action,
+but are not attached to public tagged releases until their signing and support
+channels are enabled.
+
+The release workflows use these repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | Password for the certificate archive |
+| `APPLE_ID` | Apple account used for notarization |
+| `APPLE_PASSWORD` | App-specific Apple password |
+| `APPLE_TEAM_ID` | Apple Developer team identifier |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account containing the `douchat` bucket |
+| `R2_ACCESS_KEY_ID` | Bucket-scoped R2 Object Read & Write token id |
+| `R2_SECRET_ACCESS_KEY` | Bucket-scoped R2 token secret |
+
+Never store these values in `.env`, the builder configuration or Git history.
+The R2 token is restricted to the `douchat` bucket and exists only in GitHub
+Actions Secrets; downloads through `cdn.douchat.ai` are public and credential-free.
+The local `package:mac` command explicitly disables signing and notarization, so
+it is suitable for smoke testing but not distribution or automatic-update tests.
 
 Project layout:
 
@@ -126,6 +194,7 @@ src/preload/       typed IPC bridge exposed to sandboxed renderer windows
 src/renderer/      React application and UI assets
 src/shared/        shared data types and collaboration protocol helpers
 resources/icons/   development and production application icons
+resources/entitlements.mac.plist  hardened-runtime permissions for signed macOS builds
 ```
 
 Before committing a change, run `npm run typecheck`, `npm test` and `npm run build`.

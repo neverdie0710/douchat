@@ -26,12 +26,14 @@ describe('Douchat Cloud gateway', () => {
       baseUrl: 'http://localhost:3004/v1',
       resolveApiKey: () => token,
       authName: 'Douchat account',
-      authSource: 'desktop session'
+      authSource: 'desktop session',
+      assumeImageInput: true
     }
 
     const models = await fetchGatewayModels(config)
     expect(models).toHaveLength(1)
     expect(models[0]).toMatchObject({ id: 'douchat-default', provider: 'gateway' })
+    expect(models[0].input).toEqual(['text', 'image'])
     expect(request).toHaveBeenCalledWith('http://localhost:3004/v1/models', {
       headers: { Authorization: 'Bearer dch_first' },
       signal: undefined
@@ -44,6 +46,16 @@ describe('Douchat Cloud gateway', () => {
       signal: new AbortController().signal
     })
     expect(resolved).toEqual({ auth: { apiKey: 'dch_second' }, source: 'desktop session' })
+  })
+
+  it('recognizes explicit multimodal capabilities on custom endpoints', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      data: [{ id: 'custom-chat', model_type: 'chat', capabilities: ['chat.completions', 'multimodal'] }]
+    })))
+
+    const models = await fetchGatewayModels({ baseUrl: 'http://localhost:3004/v1', apiKey: 'test' })
+
+    expect(models[0].input).toEqual(['text', 'image'])
   })
 
   it('invalidates the desktop session when the model API returns 401', async () => {

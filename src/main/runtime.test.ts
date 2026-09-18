@@ -23,6 +23,7 @@ interface ReplyOptions {
   config: { id: string; name: string }
   context: 'direct' | 'group' | 'controller'
   prompt: string
+  images?: { type: 'image'; data: string; mimeType: string }[]
 }
 
 interface DecisionPayload {
@@ -30,6 +31,13 @@ interface DecisionPayload {
   members: { id: string }[]
   messages: { id: string; role: string }[]
   completedTurns: { memberId: string }[]
+}
+
+interface MessageAgentToolLike {
+  execute: (
+    toolCallId: string,
+    params: { agent: string; message: string }
+  ) => Promise<{ content: Array<{ type: string; text: string }> }>
 }
 
 /**
@@ -146,6 +154,63 @@ describe('DouchatRuntime', () => {
     )
   })
 
+  it('keeps the incoming private content with the reply source', async () => {
+    const { store, runtime } = createRuntime()
+    ;(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }).runReply = async ({ config }) => (
+      config.id === 'dobi'
+        ? { text: '[[a2a:lin]]今晚七点半，老地方见。[[/a2a]]' }
+        : { text: '好，我会准时到。\n<!-- message_break -->\n七点见。' }
+    )
+
+    await runtime.sendMessage('direct-dobi', '邀请 Lin')
+
+    const replies = store.topicMessages('direct-lin', store.activeTopicId('direct-lin'))
+    const receivedReplies = replies.filter((message) => message.source?.id === 'dobi')
+    expect(receivedReplies[0]).toMatchObject({
+      authorId: 'lin',
+      text: '好，我会准时到。',
+      source: {
+        kind: 'bot',
+        id: 'dobi',
+        content: '今晚七点半，老地方见。'
+      }
+    })
+    const sent = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+      .find((message) => message.deliveries?.length)
+    expect(sent?.deliveries?.[0].replies?.[0]).toMatchObject({
+      senderId: 'lin',
+      senderName: 'Lin',
+      content: '好，我会准时到。'
+    })
+    expect(sent?.deliveries?.[0].replies).toHaveLength(2)
+    expect(new Set(sent?.deliveries?.[0].replies?.map((reply) => reply.replyGroupId))).toEqual(
+      new Set([receivedReplies[0]?.replyGroupId])
+    )
+  })
+
+  it('keeps inline agent handoffs out of the direct-chat transcript', async () => {
+    const { store, runtime } = createRuntime()
+    const topicId = store.activeTopicId('direct-dobi')
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>
+      activeTopic: Map<string, string>
+      messageAgentTool: (config: { id: string; name: string }) => MessageAgentToolLike
+      runReply: (options: ReplyOptions) => Promise<{ text: string }>
+    }
+    internals.activeConversation.set('dobi', 'direct-dobi')
+    internals.activeTopic.set('dobi', topicId)
+    internals.runReply = async ({ config }) => ({ text: `${config.name} internal answer.` })
+
+    const before = store.topicMessages('direct-dobi', topicId)
+    const result = await internals.messageAgentTool(store.agent('dobi')!).execute('handoff-1', {
+      agent: 'lin',
+      message: 'Check this detail.'
+    })
+
+    expect(result.content[0]?.text).toBe('Lin replied: Lin internal answer.')
+    expect(store.topicMessages('direct-dobi', topicId)).toEqual(before)
+  })
+
   it('opens an empty topic with one proactive greeting', async () => {
     const { store, runtime } = createRuntime()
     store.clearConversation('direct-dobi', store.activeTopicId('direct-dobi'))
@@ -170,5 +235,35 @@ describe('DouchatRuntime', () => {
 
     expect(store.topicMessages('direct-lin', first).some((message) => message.text === 'second task')).toBe(false)
     expect(store.topicMessages('direct-lin', second.id)[0].text).toBe('second task')
+  })
+
+  it('persists a pasted image and passes its bytes to the model', async () => {
+    const { store, runtime } = createRuntime()
+    let received: ReplyOptions | undefined
+    ;(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }).runReply = async (options) => {
+      received = options
+      return { text: 'I can see it.' }
+    }
+    const bytes = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
+
+    await runtime.sendMessage('direct-dobi', '', [{ name: 'clipboard.png', mimeType: 'image/png', data: bytes }])
+
+    const messages = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    const user = [...messages].reverse().find((message) => message.authorId === 'user')
+    expect(user).toMatchObject({ text: '', attachments: [{ name: 'clipboard.png', mimeType: 'image/png', size: 8 }] })
+    expect(await store.attachmentDataUrl(user!.attachments![0].id)).toBe(`data:image/png;base64,${Buffer.from(bytes).toString('base64')}`)
+    expect(received?.prompt).toContain('The human sent an image')
+    expect(received?.images).toEqual([{ type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType: 'image/png' }])
+  })
+
+  it('rejects pasted image batches beyond the safe limit before writing a message', async () => {
+    const { store, runtime } = createRuntime()
+    const before = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi')).length
+    const image = { name: 'clipboard.png', mimeType: 'image/png' as const, data: Uint8Array.from([1]) }
+
+    await expect(runtime.sendMessage('direct-dobi', '', Array.from({ length: 5 }, () => image))).rejects.toThrow(
+      'You can paste up to 4 images at a time.'
+    )
+    expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(before)
   })
 })

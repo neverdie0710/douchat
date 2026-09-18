@@ -1,20 +1,63 @@
 import douchatLogo from '../../../../resources/icons/douchat.png'
-import { t } from '../preferences'
-import { AtSign, Check, ChevronDown, Copy, Lock, MoreHorizontal, Smile, TriangleAlert, Sparkles, Square } from 'lucide-react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { KeyboardEvent, ReactElement } from 'react'
+import { t, tr } from '../preferences'
+import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, TriangleAlert, Sparkles, Square, X } from 'lucide-react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
   AgentConfig,
   ChatMessage,
   Conversation,
   ConversationActivityState,
   MessageAttachment,
+  MessageDelivery,
+  MessageImageInput,
+  MessageSource,
   Topic
 } from '../../../shared/types'
 import { MessageMarkdown } from './MessageMarkdown'
 import { summarizeRuntimeError } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
-import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, dayLabel, formatTime, isDifferentDay } from './common'
+import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
+import {
+  speechRecognitionConstructor,
+  speechRecognitionErrorMessage,
+  speechRecognitionLanguage,
+  type SpeechRecognitionLike
+} from '../speechRecognition'
+
+const MAX_PASTED_IMAGES = 4
+const MAX_PASTED_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_PASTED_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
+const PASTED_IMAGE_TYPES = new Set<MessageAttachment['mimeType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+
+interface PendingImage {
+  id: string
+  name: string
+  mimeType: MessageAttachment['mimeType']
+  size: number
+  data: Uint8Array
+  previewUrl: string
+}
+
+type VoiceInputState = 'idle' | 'starting' | 'listening' | 'processing'
+
+async function readPastedImage(file: File): Promise<PendingImage> {
+  const buffer = await file.arrayBuffer()
+  const previewUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('Invalid image data'))
+    reader.onerror = () => reject(reader.error ?? new Error('Invalid image data'))
+    reader.readAsDataURL(new Blob([buffer], { type: file.type }))
+  })
+  return {
+    id: crypto.randomUUID(),
+    name: file.name || 'pasted-image',
+    mimeType: file.type as MessageAttachment['mimeType'],
+    size: file.size,
+    data: new Uint8Array(buffer),
+    previewUrl
+  }
+}
 
 function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactElement {
   const [source, setSource] = useState('')
@@ -32,9 +75,9 @@ function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactE
     return () => { active = false }
   }, [attachment.id])
 
-  if (failed) return <div className="message-image-state">图片加载失败</div>
-  if (!source) return <div className="message-image-state is-loading" aria-label="正在加载图片" />
-  return <img className="message-image" src={source} alt={attachment.name || 'Agent generated image'} />
+  if (failed) return <div className="message-image-state">{t('Image could not be loaded')}</div>
+  if (!source) return <div className="message-image-state is-loading" aria-label={t('Loading image')} />
+  return <img className="message-image" src={source} alt={attachment.name || t('Agent generated image')} />
 }
 
 function MessageAttachments({ attachments }: { attachments?: MessageAttachment[] }): ReactElement | null {
@@ -46,16 +89,275 @@ function MessageAttachments({ attachments }: { attachments?: MessageAttachment[]
   )
 }
 
-function MessageGroupRow({
+function deliveryRecipientName(delivery: MessageDelivery): string {
+  return delivery.recipientName === 'Dr. Dou' ? t('Dr. Dou') : delivery.recipientName
+}
+
+function sourceContentFromMessages(
+  source: MessageSource,
+  receiverId: string,
+  receivedAt: number,
+  messages: ChatMessage[]
+): string {
+  return messages
+    .filter((message) => message.authorId === source.id && message.createdAt <= receivedAt)
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .flatMap((message) => message.deliveries ?? [])
+    .find((delivery) => delivery.recipientId === receiverId)?.content ?? ''
+}
+
+function repliesForDelivery(
+  delivery: MessageDelivery,
+  senderId: string,
+  sentAt: number,
+  messages: ChatMessage[]
+): NonNullable<MessageDelivery['replies']> {
+  const messagesById = new Map(messages.map((message) => [message.id, message]))
+  const replies = (delivery.replies ?? []).map((reply) => {
+    const replyGroupId = reply.replyGroupId ?? messagesById.get(reply.id)?.replyGroupId
+    return replyGroupId && !reply.replyGroupId ? { ...reply, replyGroupId } : reply
+  })
+  const known = new Set(replies.map((reply) => reply.id))
+  const nextDeliveryAt = messages
+    .filter((message) => message.authorId === senderId && message.createdAt > sentAt)
+    .filter((message) => message.deliveries?.some((candidate) => candidate.recipientId === delivery.recipientId))
+    .reduce((earliest, message) => Math.min(earliest, message.createdAt), Number.POSITIVE_INFINITY)
+  for (const message of messages) {
+    if (
+      known.has(message.id) ||
+      message.authorId !== delivery.recipientId ||
+      message.source?.kind !== 'bot' ||
+      message.source.id !== senderId ||
+      message.createdAt < sentAt ||
+      message.createdAt >= nextDeliveryAt
+    ) continue
+    replies.push({
+      id: message.id,
+      senderId: message.authorId,
+      senderName: message.authorName,
+      content: message.text,
+      createdAt: message.createdAt,
+      replyGroupId: message.replyGroupId,
+      attachments: message.attachments,
+      error: message.error
+    })
+    known.add(message.id)
+  }
+  return replies.sort((left, right) => left.createdAt - right.createdAt)
+}
+
+type DeliveryReply = NonNullable<MessageDelivery['replies']>[number]
+
+export function groupDeliveryReplies(replies: DeliveryReply[]): DeliveryReply[][] {
+  const groups: DeliveryReply[][] = []
+  for (const reply of replies) {
+    const previousGroup = groups.at(-1)
+    const previous = previousGroup?.at(-1)
+    const sameReplyTurn = Boolean(
+      previous &&
+      previous.senderId === reply.senderId &&
+      (
+        (reply.replyGroupId && previous.replyGroupId === reply.replyGroupId) ||
+        (!reply.replyGroupId && !previous.replyGroupId && previous.createdAt === reply.createdAt)
+      )
+    )
+    if (sameReplyTurn) previousGroup!.push(reply)
+    else groups.push([reply])
+  }
+  return groups
+}
+
+export function MessageDeliveries({
+  deliveries,
+  agents = [],
+  userName = '',
+  userAvatar = '',
+  senderId = '',
+  sentAt = 0,
+  relatedMessages = []
+}: {
+  deliveries: MessageDelivery[]
+  agents?: AgentConfig[]
+  userName?: string
+  userAvatar?: string
+  senderId?: string
+  sentAt?: number
+  relatedMessages?: ChatMessage[]
+}): ReactElement {
+  const [open, setOpen] = useState(false)
+  const detailsId = useId()
+  const recipientNames = deliveries.map(deliveryRecipientName).join(', ')
+  const summary = tr('Sent private message to {names}', { names: recipientNames })
+
+  return (
+    <div className={`bubble-delivery-disclosure ${open ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="bubble-deliveries"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={detailsId}
+        title={t(open ? 'Hide private messages' : 'Show private messages')}
+      >
+        <Lock size={10} />
+        <span>{summary}</span>
+        <ChevronDown className="bubble-delivery-chevron" size={12} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="bubble-delivery-details" id={detailsId}>
+          {deliveries.map((delivery) => {
+            const recipient = agents.find((agent) => agent.id === delivery.recipientId)
+            const recipientName = deliveryRecipientName(delivery)
+            const replies = repliesForDelivery(delivery, senderId, sentAt, relatedMessages)
+            const replyGroups = groupDeliveryReplies(replies)
+            return (
+              <section className="bubble-delivery-note" key={delivery.id}>
+                <div
+                  className="bubble-delivery-recipient"
+                  aria-label={tr('To {name}', { name: recipientName })}
+                >
+                  <span>{t('To')}</span>
+                  <span className="bubble-delivery-inline-avatar" aria-hidden="true">
+                    {recipient
+                      ? <AgentAvatar agent={recipient} size={18} />
+                      : delivery.recipientId === 'human'
+                        ? <UserAvatar src={userAvatar} name={userName || recipientName} size={18} />
+                        : <EmptyAvatar size={18} />}
+                  </span>
+                  <span>{recipientName}</span>
+                </div>
+                <div className="bubble-delivery-copy">
+                  <div className="bubble-delivery-content">
+                    <MessageMarkdown text={delivery.content} />
+                  </div>
+                  {replies.length ? (
+                    <div className="bubble-delivery-replies">
+                      {replyGroups.map((replyGroup) => {
+                        const firstReply = replyGroup[0]
+                        return (
+                          <div className="bubble-delivery-reply" key={firstReply.id}>
+                            <div className="bubble-delivery-reply-author">
+                              <CornerDownRight size={11} aria-hidden="true" />
+                              {tr('{name} replied', { name: firstReply.senderName })}
+                            </div>
+                            {replyGroup.map((reply) => (
+                              <div className="bubble-delivery-reply-segment" key={reply.id}>
+                                {reply.content ? (
+                                  <div className="bubble-delivery-reply-content">
+                                    <MessageMarkdown text={reply.content} />
+                                  </div>
+                                ) : null}
+                                <MessageAttachments attachments={reply.attachments} />
+                                {reply.error ? <span className="bubble-error">{t(reply.error)}</span> : null}
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function MessageSourceCard({
+  source,
+  agents = [],
+  fallbackContent = '',
+  receiverId = '',
+  receivedAt = 0,
+  relatedMessages = []
+}: {
+  source: MessageSource
+  agents?: AgentConfig[]
+  fallbackContent?: string
+  receiverId?: string
+  receivedAt?: number
+  relatedMessages?: ChatMessage[]
+}): ReactElement {
+  const [open, setOpen] = useState(false)
+  const detailsId = useId()
+  const sender = agents.find((agent) => agent.id === source.id)
+  const senderName = source.name === 'Dr. Dou' ? t('Dr. Dou') : source.name
+  const content = source.content?.trim() ||
+    sourceContentFromMessages(source, receiverId, receivedAt, relatedMessages).trim() ||
+    fallbackContent.trim()
+  return (
+    <div className={`bubble-private-source-disclosure ${open ? 'is-open' : ''}`}>
+      <button
+        type="button"
+        className="bubble-deliveries"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={detailsId}
+        title={t(open ? 'Hide private messages' : 'Show private messages')}
+      >
+        <Lock size={10} />
+        <span>{tr('Received privately from {name}', { name: senderName })}</span>
+        <ChevronDown className="bubble-delivery-chevron" size={12} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="bubble-delivery-details bubble-private-source" id={detailsId}>
+          <section className="bubble-delivery-note">
+            <div
+              className="bubble-delivery-recipient"
+              aria-label={tr('From {name}', { name: senderName })}
+            >
+              <span>{t('From')}</span>
+              <span className="bubble-delivery-inline-avatar" aria-hidden="true">
+                {sender
+                  ? <AgentAvatar agent={sender} size={18} />
+                  : <EmptyAvatar size={18} group={source.kind === 'group'} />}
+              </span>
+              <span>{senderName}</span>
+            </div>
+            <div className="bubble-delivery-copy">
+              <div className="bubble-delivery-content">
+                <MessageMarkdown text={content || t('Private message details are unavailable.')} />
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function MessageGroupRow({
   messages,
   agent,
+  agents,
+  relatedMessages,
+  userName,
+  userAvatar,
   showAuthor
 }: {
   messages: ChatMessage[]
   agent?: AgentConfig
+  agents: AgentConfig[]
+  relatedMessages: ChatMessage[]
+  userName: string
+  userAvatar: string
   showAuthor: boolean
 }): ReactElement {
   const first = messages[0]
+  const mergePrivateReply = Boolean(
+    first.replyGroupId &&
+    first.source?.kind === 'bot' &&
+    messages.length > 1 &&
+    messages.every((message) =>
+      message.replyGroupId === first.replyGroupId &&
+      message.source?.kind === first.source?.kind &&
+      message.source?.id === first.source?.id
+    )
+  )
+  const bubbleGroups = mergePrivateReply ? [messages] : messages.map((message) => [message])
   return (
     <div className="message-row agent-message-row">
       <div className="message-avatar-slot">
@@ -64,28 +366,51 @@ function MessageGroupRow({
       <div className="message-body">
         {(showAuthor || first.source) && (
           <div className="message-author">
-            {first.authorName}
-            {first.source && (
-              <span className="message-source">
-                <Sparkles size={10} />
-                {first.source.kind === 'group' ? `private from ${first.source.name}` : `via ${first.source.name}`}
-              </span>
-            )}
+            {agent ? agentDisplayName(agent) : first.authorName}
           </div>
         )}
-        {messages.map((message) => (
-          <div key={message.id} className={`message-bubble agent-bubble ${message.error ? 'has-error' : ''} ${message.attachments?.length ? 'has-attachments' : ''} ${!message.text && message.attachments?.length ? 'image-only' : ''}`}>
-            {message.text && <MessageMarkdown text={message.text} />}
-            <MessageAttachments attachments={message.attachments} />
-            {message.error && <span className="bubble-error">{message.error}</span>}
-            {message.deliveries?.length ? (
-              <span className="bubble-deliveries">
-                <Lock size={10} />
-                {message.deliveries.map((delivery) => `Sent privately to ${delivery.recipientName}`).join(' · ')}
-              </span>
-            ) : null}
-          </div>
-        ))}
+        {bubbleGroups.map((bubbleMessages) => {
+          const bubble = bubbleMessages[0]
+          const hasError = bubbleMessages.some((message) => Boolean(message.error))
+          const hasAttachments = bubbleMessages.some((message) => Boolean(message.attachments?.length))
+          const hasText = bubbleMessages.some((message) => Boolean(message.text))
+          return (
+            <div key={bubble.id} className={`message-bubble agent-bubble ${hasError ? 'has-error' : ''} ${hasAttachments ? 'has-attachments' : ''} ${!hasText && hasAttachments ? 'image-only' : ''}`}>
+              {bubble.source ? (
+                <MessageSourceCard
+                  source={bubble.source}
+                  agents={agents}
+                  receiverId={bubble.authorId}
+                  receivedAt={bubble.createdAt}
+                  relatedMessages={relatedMessages}
+                  fallbackContent={bubble.source.kind === 'group' ? bubble.text : ''}
+                />
+              ) : null}
+              {bubbleMessages.map((message) => message.source?.kind !== 'group' ? (
+                <div className="bubble-reply-segment" key={message.id}>
+                  {message.text ? (
+                    <div className="bubble-primary-content">
+                      <MessageMarkdown text={message.text} />
+                    </div>
+                  ) : null}
+                  <MessageAttachments attachments={message.attachments} />
+                  {message.error ? <span className="bubble-error">{t(message.error)}</span> : null}
+                  {message.deliveries?.length ? (
+                    <MessageDeliveries
+                      deliveries={message.deliveries}
+                      agents={agents}
+                      userName={userName}
+                      userAvatar={userAvatar}
+                      senderId={message.authorId}
+                      sentAt={message.createdAt}
+                      relatedMessages={relatedMessages}
+                    />
+                  ) : null}
+                </div>
+              ) : null)}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -110,19 +435,19 @@ function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
     : message.text.length > 200
       ? summarizeRuntimeError(message.text)
       : null
-  if (!summary) return <div className="system-message">{message.text}</div>
+  if (!summary) return <div className="system-message">{t(message.text)}</div>
 
   return (
     <div className={`system-message is-error ${open ? 'is-open' : ''}`}>
       <div className="system-line">
         <TriangleAlert size={13} />
-        <span>{summary.title}</span>
+        <span>{t(summary.title)}</span>
         <button
           className="system-toggle"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
         >
-          {open ? 'Hide' : 'Details'}
+          {t(open ? 'Hide' : 'Details')}
           <ChevronDown size={11} className={open ? 'open' : ''} />
         </button>
       </div>
@@ -136,7 +461,7 @@ function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
             }}
           >
             {copied ? <Check size={11} /> : <Copy size={11} />}
-            {copied ? 'Copied' : 'Copy'}
+            {t(copied ? 'Copied' : 'Copy')}
           </button>
         </div>
       )}
@@ -145,18 +470,23 @@ function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
 }
 
 function MessageRow({
-  message,
+  messages,
   agent,
+  agents,
+  relatedMessages,
   userName,
   userAvatar,
   showAuthor
 }: {
-  message: ChatMessage
+  messages: ChatMessage[]
   agent?: AgentConfig
+  agents: AgentConfig[]
+  relatedMessages: ChatMessage[]
   userName: string
   userAvatar: string
   showAuthor: boolean
 }): ReactElement {
+  const message = messages[0]
   if (message.kind === 'handoff') {
     return (
       <div className="handoff-row">
@@ -171,9 +501,13 @@ function MessageRow({
   }
   if (message.kind === 'system') return <SystemMessage message={message} />
   if (message.authorId === 'user') {
+    const hasAttachments = Boolean(message.attachments?.length)
     return (
       <div className="message-row user-message-row">
-        <div className="message-bubble user-bubble">{message.text}</div>
+        <div className={`message-bubble user-bubble ${hasAttachments ? 'has-attachments' : ''} ${!message.text && hasAttachments ? 'image-only' : ''}`}>
+          {message.text && <span>{message.text}</span>}
+          <MessageAttachments attachments={message.attachments} />
+        </div>
         <UserAvatar
           src={userAvatar}
           name={userName}
@@ -183,7 +517,49 @@ function MessageRow({
       </div>
     )
   }
-  return <MessageGroupRow messages={[message]} agent={agent} showAuthor={showAuthor} />
+  return (
+    <MessageGroupRow
+      messages={messages}
+      agent={agent}
+      agents={agents}
+      relatedMessages={relatedMessages}
+      userName={userName}
+      userAvatar={userAvatar}
+      showAuthor={showAuthor}
+    />
+  )
+}
+
+export function visibleConversationMessages(
+  conversation: Conversation | undefined,
+  messages: ChatMessage[]
+): ChatMessage[] {
+  if (!conversation || conversation.type !== 'direct') return messages
+  const participantIds = new Set(conversation.agentIds)
+  return messages.filter((message) =>
+    message.kind !== 'handoff' &&
+    (message.authorId === 'user' || message.authorId === 'system' || participantIds.has(message.authorId))
+  )
+}
+
+export function groupConversationMessages(messages: ChatMessage[]): ChatMessage[][] {
+  const groups: ChatMessage[][] = []
+  for (const message of messages) {
+    const previousGroup = groups.at(-1)
+    const previous = previousGroup?.at(-1)
+    if (
+      message.kind === 'message' &&
+      message.replyGroupId &&
+      previous?.kind === 'message' &&
+      previous.replyGroupId === message.replyGroupId &&
+      previous.authorId === message.authorId
+    ) {
+      previousGroup!.push(message)
+    } else {
+      groups.push([message])
+    }
+  }
+  return groups
 }
 
 export function ChatPane({
@@ -192,6 +568,7 @@ export function ChatPane({
   conversation,
   topic,
   messages: recentMessages,
+  allMessages,
   agents,
   members,
   activity,
@@ -207,6 +584,7 @@ export function ChatPane({
   conversation?: Conversation
   topic?: Topic
   messages: ChatMessage[]
+  allMessages: ChatMessage[]
   agents: AgentConfig[]
   members: AgentConfig[]
   activity?: ConversationActivityState
@@ -214,7 +592,7 @@ export function ChatPane({
   onConnect: () => void
   inspectorOpen: boolean
   onToggleInspector: () => void
-  onSend: (text: string) => Promise<void>
+  onSend: (text: string, images?: MessageImageInput[]) => Promise<void>
   onStop: () => void
 }): ReactElement {
   const [history, setHistory] = useState(() => ({ source: recentMessages, messages: recentMessages.slice(-50) }))
@@ -238,19 +616,48 @@ export function ChatPane({
     if (!recentMessages.length) setHasMore(false)
   }
   const [draft, setDraft] = useState('')
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
+  const [attachmentError, setAttachmentError] = useState('')
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [mention, setMention] = useState<MentionQuery | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
   const [sending, setSending] = useState(false)
+  const [voiceState, setVoiceState] = useState<VoiceInputState>('idle')
+  const [voiceError, setVoiceError] = useState('')
+  const [voiceNeedsSettings, setVoiceNeedsSettings] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const voiceAttemptRef = useRef(0)
+  const voiceEndTimerRef = useRef<number | null>(null)
+  const voiceBaseRef = useRef('')
+  const voiceTranscriptRef = useRef('')
   const working = Boolean(activity)
+  const conversationName = conversation ? conversationDisplayName(conversation, agents) : ''
+  const timelineMessages = visibleConversationMessages(conversation, messages)
+  const timelineGroups = groupConversationMessages(timelineMessages)
 
   useEffect(() => {
+    voiceAttemptRef.current += 1
+    if (voiceEndTimerRef.current !== null) window.clearTimeout(voiceEndTimerRef.current)
+    voiceEndTimerRef.current = null
+    recognitionRef.current?.abort()
+    recognitionRef.current = null
+    voiceTranscriptRef.current = ''
+    setVoiceState('idle')
+    setVoiceError('')
+    setVoiceNeedsSettings(false)
     setDraft('')
     setMention(null)
     setEmojiOpen(false)
   }, [conversation?.id, topic?.id])
+
+  useEffect(() => () => {
+    voiceAttemptRef.current += 1
+    if (voiceEndTimerRef.current !== null) window.clearTimeout(voiceEndTimerRef.current)
+    recognitionRef.current?.abort()
+    recognitionRef.current = null
+  }, [])
 
   const nearBottom = useRef(true)
   const initialScroll = useRef(true)
@@ -294,8 +701,8 @@ export function ChatPane({
     if (!mention || conversation?.type !== 'group') return []
     const needle = mention.query.normalize('NFKC').toLocaleLowerCase()
     return [
-      { id: 'all', name: 'all', label: 'Everyone', agent: undefined as AgentConfig | undefined },
-      ...members.map((member) => ({ id: member.id, name: member.name, label: member.name, agent: member }))
+      { id: 'all', name: 'all', label: t('Everyone'), agent: undefined as AgentConfig | undefined },
+      ...members.map((member) => ({ id: member.id, name: member.name, label: agentDisplayName(member), agent: member }))
     ].filter((option) => `${option.label} ${option.name}`.normalize('NFKC').toLocaleLowerCase().includes(needle))
   }, [mention, members, conversation?.type])
 
@@ -320,19 +727,182 @@ export function ChatPane({
     setMention(mentionQuery(value, cursor, members.map((member) => ({ id: member.id, name: member.name }))))
   }
 
+  const stopVoiceInput = (): void => {
+    voiceAttemptRef.current += 1
+    const recognition = recognitionRef.current
+    if (!recognition) {
+      setVoiceState('idle')
+      return
+    }
+    setVoiceState('processing')
+    recognition.stop()
+    if (voiceEndTimerRef.current !== null) window.clearTimeout(voiceEndTimerRef.current)
+    voiceEndTimerRef.current = window.setTimeout(() => {
+      if (recognitionRef.current !== recognition) return
+      recognition.abort()
+      recognitionRef.current = null
+      setVoiceState('idle')
+    }, 1800)
+  }
+
+  const startVoiceInput = async (): Promise<void> => {
+    const Recognition = speechRecognitionConstructor()
+    if (!Recognition) {
+      setVoiceError(t('Voice input is unavailable in this version of Douchat.'))
+      setVoiceNeedsSettings(false)
+      return
+    }
+
+    const attempt = voiceAttemptRef.current + 1
+    voiceAttemptRef.current = attempt
+    setEmojiOpen(false)
+    setMention(null)
+    setVoiceError('')
+    setVoiceNeedsSettings(false)
+    setVoiceState('starting')
+
+    try {
+      const access = await window.douchat.requestMicrophoneAccess()
+      if (voiceAttemptRef.current !== attempt) return
+      if (access !== 'granted') {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setVoiceError(t('Voice input is unavailable in this version of Douchat.'))
+          setVoiceNeedsSettings(false)
+          setVoiceState('idle')
+          return
+        }
+        try {
+          // Electron's native status API can report `denied` before macOS has
+          // created a TCC entry for a development build. A real audio capture
+          // request is the authoritative first-use prompt. Stop the temporary
+          // stream immediately; SpeechRecognition opens its own input stream.
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+          stream.getTracks().forEach((track) => track.stop())
+        } catch {
+          if (voiceAttemptRef.current !== attempt) return
+          setVoiceError(tr('Microphone access is off. Allow {name} in System Settings, then restart the app.', {
+            name: window.douchat.microphonePermissionOwner
+          }))
+          setVoiceNeedsSettings(true)
+          setVoiceState('idle')
+          return
+        }
+      }
+      if (voiceAttemptRef.current !== attempt) return
+
+      const recognition = new Recognition()
+      recognitionRef.current = recognition
+      voiceBaseRef.current = draft
+      voiceTranscriptRef.current = ''
+      recognition.lang = speechRecognitionLanguage(document.documentElement.lang)
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.maxAlternatives = 1
+      recognition.onstart = () => {
+        if (recognitionRef.current === recognition) setVoiceState('listening')
+      }
+      recognition.onresult = (event) => {
+        let transcript = ''
+        for (let index = 0; index < event.results.length; index += 1) {
+          transcript += event.results[index]?.[0]?.transcript ?? ''
+        }
+        voiceTranscriptRef.current = transcript.trimStart()
+        const separator = voiceBaseRef.current && !/\s$/.test(voiceBaseRef.current) && voiceTranscriptRef.current ? ' ' : ''
+        setDraft(`${voiceBaseRef.current}${separator}${voiceTranscriptRef.current}`)
+      }
+      recognition.onerror = (event) => {
+        if (event.error !== 'aborted') {
+          const permissionDenied = event.error === 'not-allowed' || event.error === 'service-not-allowed'
+          setVoiceError(permissionDenied
+            ? tr('Microphone access is off. Allow {name} in System Settings, then restart the app.', {
+                name: window.douchat.microphonePermissionOwner
+              })
+            : t(speechRecognitionErrorMessage(event.error)))
+          setVoiceNeedsSettings(permissionDenied)
+        }
+      }
+      recognition.onend = () => {
+        if (voiceEndTimerRef.current !== null) window.clearTimeout(voiceEndTimerRef.current)
+        voiceEndTimerRef.current = null
+        if (recognitionRef.current !== recognition) return
+        recognitionRef.current = null
+        setVoiceState('idle')
+        textareaRef.current?.focus()
+      }
+      recognition.start()
+    } catch {
+      if (voiceAttemptRef.current !== attempt) return
+      recognitionRef.current = null
+      setVoiceState('idle')
+      setVoiceError(t('Voice input could not start. Try again.'))
+      setVoiceNeedsSettings(false)
+    }
+  }
+
+  const toggleVoiceInput = (): void => {
+    if (voiceState === 'idle') void startVoiceInput()
+    else stopVoiceInput()
+  }
+
   const send = async (): Promise<void> => {
     const content = draft.trim()
-    if (!content || !conversation || sending || working) return
-    setDraft('')
-    setMention(null)
+    if ((!content && !pendingImages.length) || !conversation || sending || working || voiceState !== 'idle') return
+    const sendingImages = pendingImages
+    const sendingImageIds = new Set(sendingImages.map((image) => image.id))
     setSending(true)
     try {
-      await onSend(content)
+      const images: MessageImageInput[] = sendingImages.map(({ name, mimeType, data }) => ({ name, mimeType, data }))
+      setDraft('')
+      setPendingImages((current) => current.filter((image) => !sendingImageIds.has(image.id)))
+      setMention(null)
+      setAttachmentError('')
+      await onSend(content, images)
     } catch {
       setDraft(content)
+      setPendingImages((current) => [
+        ...sendingImages.filter((image) => !current.some((candidate) => candidate.id === image.id)),
+        ...current
+      ])
     } finally {
       setSending(false)
     }
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const imageFiles = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .flatMap((item) => item.getAsFile() ?? [])
+    if (!imageFiles.length) return
+    event.preventDefault()
+    setAttachmentError('')
+    if (imageFiles.some((file) => !PASTED_IMAGE_TYPES.has(file.type as MessageAttachment['mimeType']))) {
+      setAttachmentError(t('Only PNG, JPEG, WebP, and GIF images are supported.'))
+      return
+    }
+    if (imageFiles.some((file) => !file.size || file.size > MAX_PASTED_IMAGE_BYTES)) {
+      setAttachmentError(t('Each image must be 8 MB or smaller.'))
+      return
+    }
+    if (pendingImages.length + imageFiles.length > MAX_PASTED_IMAGES) {
+      setAttachmentError(t('You can paste up to 4 images at a time.'))
+      return
+    }
+    const total = pendingImages.reduce((sum, image) => sum + image.size, 0) + imageFiles.reduce((sum, file) => sum + file.size, 0)
+    if (total > MAX_PASTED_IMAGE_TOTAL_BYTES) {
+      setAttachmentError(t('Images must total 20 MB or less.'))
+      return
+    }
+    void Promise.all(imageFiles.map(readPastedImage)).then((images) => {
+      setPendingImages((current) => [...current, ...images])
+    }).catch(() => setAttachmentError(t('Pasted image could not be read.')))
+  }
+
+  const removePendingImage = (id: string): void => {
+    setPendingImages((current) => current.filter((image) => {
+      if (image.id !== id) return true
+      return false
+    }))
+    setAttachmentError('')
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -381,7 +951,7 @@ export function ChatPane({
         <div className="workspace-identity">
           <div>
             <strong>
-              {conversation?.name || 'Douchat'}
+              {conversationName || 'Douchat'}
               {conversation?.type === 'group' ? ` (${members.length})` : ''}
             </strong>
           </div>
@@ -400,18 +970,9 @@ export function ChatPane({
       }}>
         <div className="message-canvas">
           {hasMore && <button className="history-load" disabled={loadingHistory} onClick={() => void loadOlder()}>{t(loadingHistory ? 'Loading…' : historyError ? 'Retry loading earlier messages' : 'Load earlier messages')}</button>}
-          {!messages.length && !working && (
-            <div className="empty-thread">
-              {conversation ? <ConversationAvatar conversation={conversation} agents={agents} size={46} /> : <EmptyAvatar size={46} />}
-              <h1>{t('No messages yet')}</h1>
-              <p>
-                Send a message to {conversation?.name || 'a contact'}
-                {conversation?.type === 'group' ? ', or @ a member to address them directly.' : '.'}
-              </p>
-            </div>
-          )}
-          {messages.map((message, index) => {
-            const previous = messages[index - 1]
+          {timelineGroups.map((messageGroup, index) => {
+            const message = messageGroup[0]
+            const previous = timelineGroups[index - 1]?.at(-1)
             const agent = agents.find((item) => item.id === message.authorId)
             const breaks = !previous || isDifferentDay(message, previous) || message.createdAt - previous.createdAt >= 300_000
             return (
@@ -422,8 +983,10 @@ export function ChatPane({
                   </div>
                 )}
                 <MessageRow
-                  message={message}
+                  messages={messageGroup}
                   agent={agent}
+                  agents={agents}
+                  relatedMessages={allMessages}
                   userName={userName}
                   userAvatar={userAvatar}
                   showAuthor={conversation?.type === 'group'}
@@ -440,14 +1003,17 @@ export function ChatPane({
                   <AgentAvatar key={agent.id} agent={agent} size={36} />
                 ))}
               <div className="typing-content" role="status">
-                <span className="typing-label">{activity.agentIds.map((id) => agents.find((agent) => agent.id === id)?.name).filter(Boolean).join('、') || activity.label}</span>
+                <span className="typing-label">{activity.agentIds.map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentConfig => Boolean(agent)).map(agentDisplayName).join('、') || activity.label}</span>
                 <span className="typing-bubble typing-activity"><span>{activityLabel()}</span><span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></span>
               </div>
             </div>
           )}
           {activity?.takeover && (
             <div className="system-message">
-              {activity.takeover.unavailableName} is unavailable — {activity.takeover.replacementName} is standing in.
+              {tr('{name} is unavailable — {replacement} is standing in.', {
+                name: activity.takeover.unavailableName,
+                replacement: activity.takeover.replacementName
+              })}
             </div>
           )}
         </div>
@@ -456,13 +1022,13 @@ export function ChatPane({
       <div className="composer-wrap">
         {offline && (
           <div className="offline-banner">
-            <span>Choose a local agent or connect a model endpoint to start chatting.</span>
-            <button onClick={onConnect}>Choose agent</button>
+            <span>{t('Choose a local proxy or connect a model endpoint to start chatting.')}</span>
+            <button onClick={onConnect}>{t('Choose agent')}</button>
           </div>
         )}
         {mention && mentionOptions.length > 0 && (
-          <div className="mention-menu" role="listbox" aria-label="Mention a member">
-            <div className="mention-title">Mention a member</div>
+          <div className="mention-menu" role="listbox" aria-label={t('Mention a member')}>
+            <div className="mention-title">{t('Mention a member')}</div>
             {mentionOptions.map((option, index) => (
               <button
                 key={option.id}
@@ -479,7 +1045,19 @@ export function ChatPane({
             ))}
           </div>
         )}
-        <div className={`composer ${draft.trim() ? 'has-content' : ''}`}>
+        <div className={`composer ${draft.trim() || pendingImages.length ? 'has-content' : ''}`}>
+          {pendingImages.length > 0 && (
+            <div className="composer-images" aria-label={t('Images ready to send')}>
+              {pendingImages.map((image) => (
+                <div className="composer-image" key={image.id}>
+                  <img src={image.previewUrl} alt={image.name || t('Pasted image')} />
+                  <button type="button" onClick={() => removePendingImage(image.id)} aria-label={t('Remove image')} title={t('Remove image')}>
+                    <X size={13} strokeWidth={2.2} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             value={draft}
@@ -490,35 +1068,65 @@ export function ChatPane({
             onKeyUp={(event) => trackMention(event.currentTarget.value, event.currentTarget.selectionStart)}
             onClick={(event) => trackMention(event.currentTarget.value, event.currentTarget.selectionStart)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={
               conversation
-                ? `Message ${conversation.name}${conversation.type === 'group' ? ' · @ to mention' : ''}`
-                : 'Create a bot to start chatting'
+                ? tr(conversation.type === 'group' ? 'Message {name} · @ to mention' : 'Message {name}', { name: conversationName })
+                : t('Create an agent to start chatting')
             }
             rows={2}
             disabled={!conversation}
+            readOnly={voiceState !== 'idle'}
           />
+          {attachmentError && <div className="composer-attachment-error" role="alert">{attachmentError}</div>}
+          {voiceError && (
+            <div className="composer-voice-error" role="alert">
+              <span>{voiceError}</span>
+              {voiceNeedsSettings && (
+                <button type="button" onClick={() => void window.douchat.openMicrophoneSettings()}>
+                  {t('Open System Settings')}
+                </button>
+              )}
+            </div>
+          )}
           <div className="composer-bottom">
             <div className="composer-tools">
-              <button className="emoji-toggle" onClick={() => setEmojiOpen((open) => !open)} aria-label={t('Emoji')} aria-expanded={emojiOpen}><Smile size={22} /></button>
-              {conversation?.type === 'group' && <button className="emoji-toggle" aria-label="Mention a member" onClick={() => {
+              <button type="button" className="emoji-toggle" disabled={voiceState !== 'idle'} onClick={() => setEmojiOpen((open) => !open)} aria-label={t('Emoji')} aria-expanded={emojiOpen}><Smile size={18} strokeWidth={2.1} /></button>
+              <button
+                type="button"
+                className={`voice-toggle is-${voiceState}`}
+                onClick={toggleVoiceInput}
+                aria-label={t(voiceState === 'idle' ? 'Start voice input' : 'Stop voice input')}
+                aria-pressed={voiceState !== 'idle'}
+                title={t(voiceState === 'idle' ? 'Voice input' : 'Stop voice input')}
+              >
+                {voiceState === 'starting' || voiceState === 'processing'
+                  ? <LoaderCircle className="voice-spinner" size={17} />
+                  : <Mic size={18} strokeWidth={2.1} />}
+              </button>
+              {voiceState !== 'idle' && (
+                <span className="voice-status" role="status">
+                  {t(voiceState === 'listening' ? 'Listening…' : voiceState === 'starting' ? 'Starting microphone…' : 'Finishing voice input…')}
+                </span>
+              )}
+              {conversation?.type === 'group' && <button className="emoji-toggle" aria-label={t('Mention a member')} onClick={() => {
                 const next = `${draft}${draft && !draft.endsWith(' ') ? ' ' : ''}@`
                 setDraft(next); trackMention(next, next.length); textareaRef.current?.focus()
-              }}><AtSign size={21} /></button>}
+              }} disabled={voiceState !== 'idle'}><AtSign size={18} strokeWidth={2.1} /></button>}
             </div>
-            {emojiOpen && <div className="emoji-picker" aria-label="Choose an emoji">{['😀', '😂', '🥰', '👍', '🎉', '❤️', '🙏', '🤔'].map((emoji) => <button key={emoji} onClick={() => { setDraft((text) => text + emoji); setEmojiOpen(false); textareaRef.current?.focus() }}>{emoji}</button>)}</div>}
+            {emojiOpen && <div className="emoji-picker" aria-label={t('Choose an emoji')}>{['😀', '😂', '🥰', '👍', '🎉', '❤️', '🙏', '🤔'].map((emoji) => <button key={emoji} onClick={() => { setDraft((text) => text + emoji); setEmojiOpen(false); textareaRef.current?.focus() }}>{emoji}</button>)}</div>}
           {working ? (
-            <button className="stop-button" onClick={onStop} aria-label="Stop the current reply" title="Stop">
+            <button className="stop-button" onClick={onStop} aria-label={t('Stop the current reply')} title={t('Stop')}>
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
             <button
               className="send-button"
               onClick={() => void send()}
-              disabled={sending || !draft.trim()}
+              disabled={sending || voiceState !== 'idle' || (!draft.trim() && !pendingImages.length)}
               aria-label={t('Send message')}
             >
-              Send
+              {t('Send')}
             </button>
           )}
           </div>

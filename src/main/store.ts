@@ -10,6 +10,8 @@ import type {
   CreateGroupInput,
   CreateRoutineInput,
   MessageAttachment,
+  MessageDeliveryReply,
+  EmailConnectorAccount,
   PrivateMessage,
   ResolvedCreateAgentInput,
   Routine,
@@ -28,7 +30,11 @@ const AVATAR_LIMIT = 1_500_000
 const PRIVATE_MESSAGE_LIMIT = 400
 const RUN_LIMIT = 120
 const RUN_EVENT_LIMIT = 600
+const ACCOUNT_DEFAULT_CONTACTS_META = 'accountDefaultContacts:v1'
+const CURRENT_ACCOUNT_META = 'currentAccountId'
+const CONNECTORS_META = 'connectors:v1'
 const ATTACHMENT_ID = /^[0-9a-f-]{36}$/i
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 const IMAGE_EXTENSION: Record<MessageAttachment['mimeType'], string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -38,6 +44,18 @@ const IMAGE_EXTENSION: Record<MessageAttachment['mimeType'], string> = {
 
 function validAvatar(dataUrl: string): boolean {
   return !dataUrl || (/^data:image\/(png|jpeg|webp);base64,/.test(dataUrl) && dataUrl.length <= AVATAR_LIMIT)
+}
+
+interface AccountDefaultContact {
+  accountId: string
+  agentId: string
+  conversationId: string
+}
+
+export interface DefaultCloudContactResult {
+  agent?: AgentConfig
+  conversation?: Conversation
+  created: boolean
 }
 
 /**
@@ -165,6 +183,8 @@ export class DouchatStore {
     this.db.exec('PRAGMA foreign_keys = ON')
     this.db.exec(SCHEMA)
     this.seed()
+    this.backfillMessageSourceContent()
+    this.backfillDeliveryReplies()
   }
 
   static atUserData(userDataPath: string): DouchatStore {
@@ -180,6 +200,8 @@ export class DouchatStore {
     mimeType: MessageAttachment['mimeType']
     data: Uint8Array
   }): Promise<MessageAttachment> {
+    if (!IMAGE_EXTENSION[input.mimeType]) throw new Error('Unsupported image format')
+    if (!input.data.byteLength || input.data.byteLength > MAX_IMAGE_BYTES) throw new Error('Each image must be 8 MB or smaller.')
     const id = randomUUID()
     const extension = IMAGE_EXTENSION[input.mimeType]
     await writeFile(join(this.attachmentDirectory, `${id}.${extension}`), input.data, { flag: 'wx' })
@@ -246,6 +268,22 @@ export class DouchatStore {
     this.write('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, value)
   }
 
+  private accountDefaultContacts(): AccountDefaultContact[] {
+    try {
+      const records = JSON.parse(this.meta(ACCOUNT_DEFAULT_CONTACTS_META)) as unknown
+      if (!Array.isArray(records)) return []
+      return records.filter((record): record is AccountDefaultContact => {
+        if (!record || typeof record !== 'object') return false
+        const candidate = record as Partial<AccountDefaultContact>
+        return typeof candidate.accountId === 'string'
+          && typeof candidate.agentId === 'string'
+          && typeof candidate.conversationId === 'string'
+      })
+    } catch {
+      return []
+    }
+  }
+
   private putConversation(conversation: Conversation): void {
     this.write(
       `INSERT INTO conversations (id, type, updatedAt, data) VALUES (?, ?, ?, ?)
@@ -291,6 +329,86 @@ export class DouchatStore {
       run.createdAt,
       JSON.stringify(run)
     )
+  }
+
+  /** Replies created before source content was stored still have a matching
+   * outbound delivery. Recover the closest one so existing transcripts gain
+   * the same expandable private-message detail as new replies. */
+  private backfillMessageSourceContent(): void {
+    this.db.exec(`
+      UPDATE messages AS received
+      SET data = json_set(received.data, '$.source.content', (
+        SELECT json_extract(delivery.value, '$.content')
+        FROM messages AS sent, json_each(sent.data, '$.deliveries') AS delivery
+        WHERE sent.rowid < received.rowid
+          AND json_extract(sent.data, '$.authorId') = json_extract(received.data, '$.source.id')
+          AND json_extract(delivery.value, '$.recipientId') = json_extract(received.data, '$.authorId')
+        ORDER BY sent.rowid DESC, CAST(delivery.key AS INTEGER) DESC
+        LIMIT 1
+      ))
+      WHERE json_extract(received.data, '$.source.kind') = 'bot'
+        AND json_extract(received.data, '$.source.content') IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM messages AS sent, json_each(sent.data, '$.deliveries') AS delivery
+          WHERE sent.rowid < received.rowid
+            AND json_extract(sent.data, '$.authorId') = json_extract(received.data, '$.source.id')
+            AND json_extract(delivery.value, '$.recipientId') = json_extract(received.data, '$.authorId')
+        )
+    `)
+  }
+
+  /** Older A2A replies lived only in the recipient's direct transcript.
+   * Reconnect them to the outbound delivery so the sender can read the thread
+   * as a parent message followed by its replies. */
+  private backfillDeliveryReplies(): void {
+    const messages = this.all<ChatMessage>('SELECT data FROM messages ORDER BY rowid')
+    const messagesById = new Map(messages.map((message) => [message.id, message]))
+    const latestDelivery = new Map<string, { message: ChatMessage; deliveryId: string }>()
+    const changed = new Map<string, ChatMessage>()
+    const key = (senderId: string, recipientId: string, content: string): string =>
+      `${senderId}\u0000${recipientId}\u0000${content}`
+
+    for (const message of messages) {
+      for (const delivery of message.deliveries ?? []) {
+        for (const reply of delivery.replies ?? []) {
+          const replyMessage = messagesById.get(reply.id)
+          if (!reply.replyGroupId && replyMessage?.replyGroupId) {
+            reply.replyGroupId = replyMessage.replyGroupId
+            changed.set(message.id, message)
+          }
+        }
+        latestDelivery.set(key(message.authorId, delivery.recipientId, delivery.content), {
+          message,
+          deliveryId: delivery.id
+        })
+      }
+      if (message.source?.kind !== 'bot' || !message.source.content) continue
+      const parent = latestDelivery.get(key(message.source.id, message.authorId, message.source.content))
+      const delivery = parent?.message.deliveries?.find((candidate) => candidate.id === parent.deliveryId)
+      if (!parent || !delivery || delivery.replies?.some((reply) => reply.id === message.id)) continue
+      delivery.replies = [
+        ...(delivery.replies ?? []),
+        {
+          id: message.id,
+          senderId: message.authorId,
+          senderName: message.authorName,
+          content: message.text,
+          createdAt: message.createdAt,
+          replyGroupId: message.replyGroupId,
+          attachments: message.attachments,
+          error: message.error
+        }
+      ]
+      changed.set(parent.message.id, parent.message)
+    }
+
+    if (!changed.size) return
+    this.tx(() => {
+      for (const message of changed.values()) {
+        this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(message), message.id)
+      }
+    })
   }
 
   /** The starting crew, written once. An empty workspace is a deliberate
@@ -411,6 +529,21 @@ export class DouchatStore {
     return this.all<RunEvent>('SELECT data FROM runEvents ORDER BY rowid')
   }
 
+  get connectors(): EmailConnectorAccount[] {
+    try {
+      const value = JSON.parse(this.meta(CONNECTORS_META)) as unknown
+      return Array.isArray(value) ? value.filter((item): item is EmailConnectorAccount => Boolean(
+        item && typeof item === 'object' && (item as EmailConnectorAccount).kind === 'email'
+      )) : []
+    } catch {
+      return []
+    }
+  }
+
+  setConnectors(connectors: EmailConnectorAccount[]): void {
+    this.setMeta(CONNECTORS_META, JSON.stringify(connectors))
+  }
+
   // ───────────────────────────── profile & endpoint ─────────────────────────────
 
   get userName(): string {
@@ -419,6 +552,14 @@ export class DouchatStore {
 
   get userAvatar(): string {
     return this.meta('userAvatar')
+  }
+
+  /** The welcome chat is account-specific. A deleted default contact stays
+   * deleted because onboarding records that the account was already set up. */
+  get defaultConversationId(): string | undefined {
+    const accountId = this.meta(CURRENT_ACCOUNT_META)
+    const record = this.accountDefaultContacts().find((item) => item.accountId === accountId)
+    return record && this.conversation(record.conversationId) ? record.conversationId : undefined
   }
 
   /** The OpenAI-compatible endpoint saved from the app's own settings. */
@@ -453,6 +594,60 @@ export class DouchatStore {
   }
 
   // ───────────────────────────── agents ─────────────────────────────
+
+  /** Create Dr. Dou exactly once for each Douchat account seen on this local
+   * profile. Repeated profile refreshes and later sign-ins are idempotent. */
+  ensureDefaultCloudContact(
+    accountId: string,
+    binding: Pick<AgentConfig, 'provider' | 'model'>
+  ): DefaultCloudContactResult {
+    const normalizedAccountId = accountId.trim()
+    if (!normalizedAccountId) return { created: false }
+    const records = this.accountDefaultContacts()
+    const existing = records.find((record) => record.accountId === normalizedAccountId)
+    if (existing) {
+      this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
+      return {
+        agent: this.agent(existing.agentId),
+        conversation: this.conversation(existing.conversationId),
+        created: false
+      }
+    }
+
+    const input: ResolvedCreateAgentInput = {
+      name: 'Dr. Dou',
+      role: '豆博士',
+      instructions:
+        '你是豆博士（Dr. Dou），Douchat 的云端智能助手。友好、可靠、简洁地帮助用户解决问题、完成任务，默认使用用户正在使用的语言回复。',
+      labels: '豆博士, Douchat',
+      color: '#14B8A6',
+      ...binding
+    }
+    const id = `dr-dou-${randomUUID().slice(0, 6)}`
+    const now = Date.now()
+    const agent: AgentConfig = { ...input, avatar: '', id, createdAt: now }
+    const topic = newTopic('', now)
+    const conversation: Conversation = {
+      id: `direct-${id}`,
+      type: 'direct',
+      name: agent.name,
+      agentIds: [agent.id],
+      topics: [topic],
+      activeTopicId: topic.id,
+      unread: 0,
+      readAt: now,
+      createdAt: now,
+      updatedAt: now
+    }
+    return this.tx(() => {
+      this.putAgent(agent)
+      this.putConversation(conversation)
+      records.push({ accountId: normalizedAccountId, agentId: agent.id, conversationId: conversation.id })
+      this.setMeta(ACCOUNT_DEFAULT_CONTACTS_META, JSON.stringify(records))
+      this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
+      return { agent, conversation, created: true }
+    })
+  }
 
   agent(agentId: string): AgentConfig | undefined {
     return this.one<AgentConfig>('SELECT data FROM agents WHERE id = ?', agentId)
@@ -539,6 +734,37 @@ export class DouchatStore {
   }
 
   // ───────────────────────────── conversations ─────────────────────────────
+
+  /** Restore an existing private thread, or recreate it after the user deleted
+   * it while keeping the contact. The stable id prevents duplicate directs. */
+  ensureDirectConversation(agentId: string): { conversation: Conversation; created: boolean } {
+    const agent = this.agent(agentId)
+    if (!agent) throw new Error('Contact not found')
+    const existing = this.conversations.find(
+      (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agentId
+    )
+    if (existing) {
+      existing.hidden = undefined
+      this.putConversation(existing)
+      return { conversation: existing, created: false }
+    }
+    const now = Date.now()
+    const topic = newTopic('', now)
+    const conversation: Conversation = {
+      id: `direct-${agentId}`,
+      type: 'direct',
+      name: agent.name,
+      agentIds: [agentId],
+      topics: [topic],
+      activeTopicId: topic.id,
+      unread: 0,
+      readAt: now,
+      createdAt: now,
+      updatedAt: now
+    }
+    this.putConversation(conversation)
+    return { conversation, created: true }
+  }
 
   createGroup(input: CreateGroupInput): Conversation {
     const now = Date.now()
@@ -738,11 +964,31 @@ export class DouchatStore {
         if (topic) {
           topic.updatedAt = result.createdAt
           // The first human line names the topic, the way a chat thread is titled.
-          if (!topic.title && result.authorId === 'user') topic.title = result.text.slice(0, 80)
+          if (!topic.title && result.authorId === 'user') {
+            topic.title = (result.text || result.attachments?.map((attachment) => attachment.name).join(', ') || 'Image').slice(0, 80)
+          }
         }
         this.putConversation(conversation)
       }
       return result
+    })
+  }
+
+  addDeliveryReplies(deliveryId: string, replies: MessageDeliveryReply[]): void {
+    if (!replies.length) return
+    this.tx(() => {
+      const message = this.one<ChatMessage>(
+        `SELECT messages.data AS data
+         FROM messages, json_each(messages.data, '$.deliveries') AS delivery
+         WHERE json_extract(delivery.value, '$.id') = ?
+         ORDER BY messages.rowid DESC LIMIT 1`,
+        deliveryId
+      )
+      const delivery = message?.deliveries?.find((candidate) => candidate.id === deliveryId)
+      if (!message || !delivery) return
+      const known = new Set(delivery.replies?.map((reply) => reply.id) ?? [])
+      delivery.replies = [...(delivery.replies ?? []), ...replies.filter((reply) => !known.has(reply.id))]
+      this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(message), message.id)
     })
   }
 

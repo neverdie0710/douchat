@@ -1,7 +1,7 @@
 import { LocalAgentSelect } from './LocalAgentSelect'
-import { t } from '../preferences'
+import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
-import { CalendarClock, Camera, Check, Cloud, Laptop, PlugZap, Search, X } from 'lucide-react'
+import { CalendarClock, Camera, Check, ChevronRight, Cloud, Laptop, PlugZap, Search, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import type {
@@ -18,7 +18,7 @@ import type {
   RoutineSchedule,
   UpdateAgentInput
 } from '../../../shared/types'
-import { AgentAvatar, colors } from './common'
+import { AgentAvatar, ConversationAvatar, agentDisplayName, colors, conversationDisplayName } from './common'
 
 export function BotModal({
   agent,
@@ -37,7 +37,7 @@ export function BotModal({
   onCreate: (input: CreateAgentInput) => Promise<void>
   onUpdate: (agentId: string, input: UpdateAgentInput) => Promise<void>
 }): ReactElement {
-  const [localAgentId, setLocalAgentId] = useState(agent?.localAgentId ?? initialLocalAgentId ?? (!agent ? localAgents.find((item) => item.installed && item.chatSupported)?.id : '') ?? '')
+  const [localAgentId, setLocalAgentId] = useState(agent?.localAgentId ?? initialLocalAgentId ?? (!agent ? localAgents.find((item) => item.installed)?.id : '') ?? '')
   const [agentSource, setAgentSource] = useState<'cloud' | 'local'>(agent?.localAgentId || initialLocalAgentId ? 'local' : 'cloud')
   const localAgent = localAgents.find((item) => item.id === localAgentId)
   const [error, setError] = useState('')
@@ -57,7 +57,7 @@ export function BotModal({
     event.preventDefault()
     if (!name.trim()) return
     if (!agent && (!role.trim() || !instructions.trim())) return
-    if (!agent && agentSource === 'local' && (!localAgent?.installed || !localAgent.chatSupported)) return
+    if (!agent && agentSource === 'local' && !localAgent?.installed) return
     setSaving(true)
     setError('')
     try {
@@ -82,7 +82,7 @@ export function BotModal({
       await onCreate(input)
       onClose()
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not save contact')
+      setError(cause instanceof Error ? cause.message : 'Could not save agent')
     } finally {
       setSaving(false)
     }
@@ -104,34 +104,34 @@ export function BotModal({
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <form className="agent-modal create-contact-modal" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="create-contact-title">
         <div className="modal-heading">
-          <h2 id="create-contact-title">{t('Create contact')}</h2>
+          <h2 id="create-contact-title">{t('Create agent')}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')}><X size={18} /></button>
         </div>
-        <label className="field-row"><span>{t('Contact name')}</span>
-          <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('Enter contact name')} />
+        <label className="field-row"><span>{t('Agent name')}</span>
+          <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('Enter agent name')} />
         </label>
-        <div className="field-row agent-source-field"><span>{t('Agent type')}</span>
-          <div className="agent-source-cards" role="radiogroup" aria-label={t('Agent type')}>
+        <div className="field-row agent-source-field"><span>{t('Runs with')}</span>
+          <div className="agent-source-cards" role="radiogroup" aria-label={t('Runs with')}>
             <button type="button" role="radio" aria-checked={agentSource === 'cloud'} className={agentSource === 'cloud' ? 'selected' : ''} onClick={() => setAgentSource('cloud')}>
               <span className="agent-source-icon"><Cloud size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Cloud agent')}</strong><small>{t('Uses the cloud default model')}</small></span>
+              <span className="agent-source-copy"><strong>{t('Use cloud model')}</strong><small>{t('Douchat cloud model')}</small></span>
               <span className="agent-source-radio" aria-hidden="true"><i /></span>
             </button>
             <button type="button" role="radio" aria-checked={agentSource === 'local'} className={agentSource === 'local' ? 'selected' : ''} onClick={() => setAgentSource('local')}>
               <span className="agent-source-icon"><Laptop size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Local agent')}</strong><small>{t('Use this computer')}</small></span>
+              <span className="agent-source-copy"><strong>{t('Use local proxy')}</strong><small>{t('AI tools on this computer')}</small></span>
               <span className="agent-source-radio" aria-hidden="true"><i /></span>
             </button>
           </div>
         </div>
-        {agentSource === 'local' && <div className="field-row"><span>{t('Local agent')}</span>
-          <LocalAgentSelect agents={localAgents.filter((item) => item.installed && item.chatSupported)} value={localAgentId} onChange={setLocalAgentId} />
+        {agentSource === 'local' && <div className="field-row"><span>{t('Local proxy')}</span>
+          <LocalAgentSelect agents={localAgents.filter((item) => item.installed)} value={localAgentId} onChange={setLocalAgentId} />
         </div>}
-        {agentSource === 'local' && !localAgents.some((item) => item.installed && item.chatSupported) && <p className="settings-note">{t('No available local agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
-        {error && <p className="settings-error" role="alert">{error}</p>}
+        {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available local proxies')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
+        {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
-          <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && (!localAgent?.installed || !localAgent.chatSupported))}>{t(saving ? 'Saving…' : 'Create contact')}</button>
+          <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && !localAgent?.installed)}>{t(saving ? 'Saving…' : 'Create agent')}</button>
         </div>
       </form>
     </div>
@@ -141,7 +141,7 @@ export function BotModal({
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
       <form className="agent-modal edit-contact-modal" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="edit-contact-title">
         <div className="edit-contact-heading">
-          <h2 id="edit-contact-title">{t('Edit contact information')}</h2>
+          <h2 id="edit-contact-title">{t('Edit agent')}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')} disabled={saving}><X size={18} /></button>
         </div>
 
@@ -161,7 +161,7 @@ export function BotModal({
         </div>
 
         <label className="edit-contact-field"><span>{t('Nickname')}</span>
-          <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('Enter contact name')} />
+          <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('Enter agent name')} />
         </label>
         <label className="edit-contact-field"><span>{t('Description')}</span>
           <textarea value={instructions} onChange={(event) => setInstructions(event.target.value)} rows={4} placeholder={t('Add a description')} />
@@ -170,7 +170,7 @@ export function BotModal({
           <input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder={t('Search or create labels')} />
         </label>
 
-        {error && <p className="settings-error" role="alert">{error}</p>}
+        {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="edit-contact-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
           <button className="primary-button" type="submit" disabled={saving || !name.trim()}>{t(saving ? 'Saving…' : 'Done')}</button>
@@ -180,31 +180,68 @@ export function BotModal({
   )
 }
 
-export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, manage = false, remove = false, initialAgentIds, onCreate }: {
+export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, manage = false, remove = false, initialAgentIds, onCreate, onStartDirect, onOpenConversation }: {
   snapshot: AppSnapshot
   conversation?: Conversation
   remove?: boolean
   manage?: boolean
   initialAgentIds?: string[]
   onCreate?: (input: CreateGroupInput) => Promise<void>
+  onStartDirect?: (agentId: string) => Promise<void>
+  onOpenConversation?: (conversationId: string) => Promise<void>
   onClose: () => void
   onUpdate: (id: string, input: { name: string; description: string; agentIds: string[]; leadAgentId: string }) => Promise<void>
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string[]>(manage ? conversation?.agentIds ?? initialAgentIds ?? [] : [])
+  const [selectedConversationId, setSelectedConversationId] = useState('')
+  const [groupsOpen, setGroupsOpen] = useState(false)
+  const [contactsOpen, setContactsOpen] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const startMode = manage && !conversation && !(initialAgentIds?.length)
   const members = new Set(manage || remove ? [] : conversation?.agentIds ?? [])
-  const matching = snapshot.agents.filter((agent) => (!remove || conversation?.agentIds.includes(agent.id)) && agent.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name))
-  const toggle = (id: string): void => setSelected((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
-  const invalid = selected.length < (manage ? 2 : 1) || (remove && selected.length >= (conversation?.agentIds.length ?? 0))
+  const needle = query.trim().toLocaleLowerCase()
+  const matchingAgents = snapshot.agents.filter((agent) => (!remove || conversation?.agentIds.includes(agent.id)) && `${agent.name} ${agentDisplayName(agent)}`.toLocaleLowerCase().includes(needle))
+    .sort((a, b) => agentDisplayName(a).localeCompare(agentDisplayName(b)))
+  const matchingGroups = startMode
+    ? snapshot.conversations.filter((item) => item.type === 'group' && `${item.name} ${conversationDisplayName(item, snapshot.agents)}`.toLocaleLowerCase().includes(needle))
+      .sort((a, b) => conversationDisplayName(a, snapshot.agents).localeCompare(conversationDisplayName(b, snapshot.agents)))
+    : []
+  const selectedConversation = matchingGroups.find((item) => item.id === selectedConversationId)
+    ?? snapshot.conversations.find((item) => item.id === selectedConversationId && item.type === 'group')
+  const selectedDirect = selected.length === 1
+    ? snapshot.conversations.find((item) => item.type === 'direct' && item.agentIds[0] === selected[0])
+    : undefined
+  const toggle = (id: string): void => {
+    setSelectedConversationId('')
+    setSelected((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
+  }
+  const chooseConversation = (id: string): void => {
+    setSelected([])
+    setSelectedConversationId((current) => current === id ? '' : id)
+  }
+  const selectionCount = selectedConversationId ? 1 : selected.length
+  const invalid = startMode
+    ? selectionCount < 1 || (Boolean(selectedConversationId) && !onOpenConversation) || (selected.length === 1 && !onStartDirect)
+    : selected.length < (manage ? 2 : 1) || (remove && selected.length >= (conversation?.agentIds.length ?? 0))
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (invalid || saving) return
     setSaving(true)
     setError('')
     try {
+      if (startMode && selectedConversationId && onOpenConversation) {
+        await onOpenConversation(selectedConversationId)
+        onClose()
+        return
+      }
+      if (startMode && selected.length === 1) {
+        if (selectedDirect && onOpenConversation) await onOpenConversation(selectedDirect.id)
+        else if (onStartDirect) await onStartDirect(selected[0])
+        onClose()
+        return
+      }
       const agentIds = remove ? (conversation?.agentIds ?? []).filter((id) => !selected.includes(id)) : manage ? selected : [...new Set([...(conversation?.agentIds ?? []), ...selected])]
       const input = {
         name: conversation?.name ?? snapshot.agents.filter((agent) => selected.includes(agent.id)).map((agent) => agent.name).join('、'),
@@ -218,38 +255,81 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
       setError(t('Could not save changes'))
     } finally { setSaving(false) }
   }
+  const title = remove
+    ? 'Remove group members'
+    : manage
+      ? conversation
+        ? 'Group members'
+        : startMode && selected.length <= 1
+          ? 'New chat'
+          : 'Create group'
+      : 'Add group members'
+  const action = remove
+    ? 'Remove'
+    : manage
+      ? conversation
+        ? 'Save'
+        : startMode
+          ? selectedConversationId
+            ? 'Open group'
+            : selected.length > 1
+              ? 'Create group'
+              : selectedDirect
+                ? 'Open chat'
+                : 'Start chat'
+          : 'Create group'
+      : 'Add'
   return (
     <div className="modal-backdrop" onMouseDown={(event) => !saving && event.target === event.currentTarget && onClose()}>
       <form className="agent-modal add-members-modal" role="dialog" aria-modal="true" aria-labelledby="add-members-title" onSubmit={submit}
         onKeyDown={(event) => { if (event.key === 'Escape' && !saving) { event.stopPropagation(); onClose() } }}>
         <section className="member-picker-source">
-          <label className="member-picker-search"><Search size={17} /><input autoFocus aria-label={t('Search contacts')} placeholder={t('Search contacts')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-          <h3>{t('Contacts')}</h3>
+          <label className="member-picker-search"><Search size={17} /><input autoFocus aria-label={t('Search agents')} placeholder={t('Search agents')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <div className="member-picker-list">
-            {matching.map((agent) => {
+            {startMode && <>
+              <button type="button" className="member-picker-folder" aria-expanded={groupsOpen || Boolean(needle)} onClick={() => setGroupsOpen((open) => !open)}>
+                <ChevronRight size={15} className={groupsOpen || needle ? 'open' : ''} /><span>{t('Existing groups')}</span><em>{matchingGroups.length}</em>
+              </button>
+              {(groupsOpen || Boolean(needle)) && <div className="member-picker-folder-body">
+                {matchingGroups.map((item) => {
+                  const checked = selectedConversationId === item.id
+                  return <button type="button" key={item.id} className={`member-picker-row ${checked ? 'selected' : ''}`} role="radio" aria-checked={checked} disabled={saving} onClick={() => chooseConversation(item.id)}>
+                    <span className={`member-picker-check ${checked ? 'checked' : ''}`}><Check size={13} /></span>
+                    <ConversationAvatar conversation={item} agents={snapshot.agents} size={36} /><span className="member-picker-name">{conversationDisplayName(item, snapshot.agents)}</span>
+                  </button>
+                })}
+                {!matchingGroups.length && <p className="member-picker-empty compact">{t('No matching groups')}</p>}
+              </div>}
+              <button type="button" className="member-picker-folder" aria-expanded={contactsOpen || Boolean(needle)} onClick={() => setContactsOpen((open) => !open)}>
+                <ChevronRight size={15} className={contactsOpen || needle ? 'open' : ''} /><span>{t('Agents')}</span><em>{matchingAgents.length}</em>
+              </button>
+            </>}
+            {!startMode && <h3>{t('Agents')}</h3>}
+            {(!startMode || contactsOpen || Boolean(needle)) && matchingAgents.map((agent) => {
               const joined = members.has(agent.id)
               const checked = selected.includes(agent.id)
               return <button type="button" key={agent.id} className={`member-picker-row ${checked ? 'selected' : ''}`} role="checkbox" aria-checked={joined || checked} disabled={joined || saving} onClick={() => toggle(agent.id)}>
                 <span className={`member-picker-check ${joined || checked ? 'checked' : ''}`}><Check size={13} /></span>
-                <AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agent.name}</span>
+                <AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agentDisplayName(agent)}</span>
                 {joined && <small>{t('Already added')}</small>}
               </button>
             })}
-            {!matching.length && <p className="member-picker-empty">{t('No matching contacts')}</p>}
+            {(!startMode || contactsOpen || Boolean(needle)) && !matchingAgents.length && <p className="member-picker-empty">{t('No matching agents')}</p>}
           </div>
         </section>
         <section className="member-picker-selection">
-          <header><h2 id="add-members-title">{t(remove ? 'Remove group members' : manage ? conversation ? 'Group members' : 'Create group' : 'Add group members')}</h2><span>{t('Selected contacts')}: {selected.length}</span></header>
+          <header><h2 id="add-members-title">{t(title)}</h2><span>{t(startMode ? 'Selected' : 'Selected agents')}: {selectionCount}</span></header>
           <div className="member-picker-list">
+            {selectedConversation && <div className="member-picker-chosen"><ConversationAvatar conversation={selectedConversation} agents={snapshot.agents} size={36} /><span className="member-picker-name">{conversationDisplayName(selectedConversation, snapshot.agents)}</span><button type="button" disabled={saving} onClick={() => setSelectedConversationId('')} aria-label={`${t('Remove')} ${conversationDisplayName(selectedConversation, snapshot.agents)}`}><X size={13} /></button></div>}
             {selected.map((id) => {
               const agent = snapshot.agents.find((item) => item.id === id)
-              return agent && <div className="member-picker-chosen" key={id}><AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agent.name}</span><button type="button" disabled={saving} onClick={() => toggle(id)} aria-label={`${t('Remove')} ${agent.name}`}><X size={13} /></button></div>
+              return agent && <div className="member-picker-chosen" key={id}><AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agentDisplayName(agent)}</span><button type="button" disabled={saving} onClick={() => toggle(id)} aria-label={`${t('Remove')} ${agentDisplayName(agent)}`}><X size={13} /></button></div>
             })}
-            {!selected.length && <p className="member-picker-empty">{t(remove ? 'Select members to remove' : 'Select contacts to add')}</p>}
+            {!selectionCount && <p className="member-picker-empty">{t(remove ? 'Select members to remove' : startMode ? 'Select one agent to chat, several to create a group, or open an existing group.' : 'Select agents to add')}</p>}
           </div>
           {remove && selected.length >= (conversation?.agentIds.length ?? 0) && <p className="member-picker-error">{t('Keep at least one member')}</p>}
           {error && <p role="alert" className="member-picker-error">{error}</p>}
-          <footer><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={invalid || saving}>{saving ? t('Saving…') : t(remove ? 'Remove' : manage ? conversation ? 'Save' : 'Create group' : 'Add')}</button></footer>
+          <footer><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={invalid || saving}>{saving ? t('Saving…') : t(action)}</button></footer>
         </section>
       </form>
     </div>
@@ -262,6 +342,8 @@ export function GroupModal(props: {
   initialAgentIds?: string[]
   onClose: () => void
   onCreate: (input: CreateGroupInput) => Promise<void>
+  onStartDirect: (agentId: string) => Promise<void>
+  onOpenConversation: (conversationId: string) => Promise<void>
   onUpdate: (id: string, input: { name: string; description: string; agentIds: string[]; leadAgentId: string }) => Promise<void>
   onNewBot: () => void
 }): ReactElement {
@@ -340,10 +422,10 @@ export function RoutineModal({
       <form className="agent-modal routine-modal" onSubmit={submit}>
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">Automation</span>
-            <h2>Create a routine</h2>
+            <span className="eyebrow">{t('Automation')}</span>
+            <h2>{t('Create a routine')}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')}>
             <X size={18} />
           </button>
         </div>
@@ -353,50 +435,50 @@ export function RoutineModal({
             <CalendarClock size={21} />
           </span>
           <div>
-            <strong>{name.trim() || 'Untitled routine'}</strong>
-            <span>{selectedAgent?.name ?? 'Choose a bot'} will run this in a private computer.</span>
+            <strong>{name.trim() || t('Untitled routine')}</strong>
+            <span>{tr('{name} will run this in a private computer.', { name: selectedAgent ? agentDisplayName(selectedAgent) : t('Choose an agent') })}</span>
           </div>
         </div>
 
         <label className="field-row">
-          <span>Name</span>
+          <span>{t('Name')}</span>
           <input
             autoFocus
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Review the morning brief"
+            placeholder={t('e.g. Review the morning brief')}
           />
         </label>
 
         <label className="field-row">
-          <span>What should happen?</span>
+          <span>{t('What should happen?')}</span>
           <textarea
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Give the bot a complete instruction, including the expected result."
+            placeholder={t('Give the agent a complete instruction, including the expected result.')}
             rows={4}
           />
         </label>
 
         <div className="field-row two-fields">
           <label>
-            <span>Bot</span>
+            <span>{t('Agent')}</span>
             <select value={agentId} onChange={(event) => changeAgent(event.target.value)}>
               {snapshot.agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>
-                  {agent.name}
+                  {agentDisplayName(agent)}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            <span>Post results to</span>
+            <span>{t('Post results to')}</span>
             <select value={conversationId} onChange={(event) => setConversationId(event.target.value)}>
               {snapshot.conversations
                 .filter((conversation) => conversation.agentIds.includes(agentId))
                 .map((conversation) => (
                   <option key={conversation.id} value={conversation.id}>
-                    {conversation.name}
+                    {conversationDisplayName(conversation, snapshot.agents)}
                   </option>
                 ))}
             </select>
@@ -404,42 +486,42 @@ export function RoutineModal({
         </div>
 
         <div className="field-row routine-schedule-fields">
-          <span>Schedule</span>
+          <span>{t('Schedule')}</span>
           <div className="schedule-grid">
             <select value={cadence} onChange={(event) => setCadence(event.target.value as typeof cadence)}>
-              <option value="daily">Every day</option>
-              <option value="weekdays">Weekdays</option>
-              <option value="weekly">Every week</option>
-              <option value="interval">Repeating interval</option>
+              <option value="daily">{t('Every day')}</option>
+              <option value="weekdays">{t('Weekdays')}</option>
+              <option value="weekly">{t('Every week')}</option>
+              <option value="interval">{t('Repeating interval')}</option>
             </select>
             {cadence === 'weekly' && (
               <select value={day} onChange={(event) => setDay(event.target.value)}>
                 {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((label, index) => (
                   <option key={label} value={index}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
             )}
             {cadence === 'interval' ? (
               <select value={intervalMinutes} onChange={(event) => setIntervalMinutes(event.target.value)}>
-                <option value="15">Every 15 minutes</option>
-                <option value="30">Every 30 minutes</option>
-                <option value="60">Every hour</option>
-                <option value="360">Every 6 hours</option>
-                <option value="720">Every 12 hours</option>
+                <option value="15">{t('Every 15 minutes')}</option>
+                <option value="30">{t('Every 30 minutes')}</option>
+                <option value="60">{t('Every hour')}</option>
+                <option value="360">{t('Every 6 hours')}</option>
+                <option value="720">{t('Every 12 hours')}</option>
               </select>
             ) : (
               <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
             )}
           </div>
-          <small>Times use {Intl.DateTimeFormat().resolvedOptions().timeZone}.</small>
+          <small>{tr('Times use {timezone}.', { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })}</small>
         </div>
 
         <div className="modal-footer">
-          <p>The app must be running. Missed times run once when the computer wakes.</p>
+          <p>{t('The app must be running. Missed times run once when the computer wakes.')}</p>
           <button className="primary-button" type="submit" disabled={saving || !name.trim() || !prompt.trim()}>
-            {saving ? 'Creating…' : 'Create routine'}
+            {t(saving ? 'Creating…' : 'Create routine')}
           </button>
         </div>
       </form>
@@ -511,10 +593,10 @@ export function EndpointModal({
       <form className="agent-modal" onSubmit={submit}>
         <div className="modal-heading">
           <div>
-            <span className="eyebrow">Models</span>
-            <h2>Connect an endpoint</h2>
+            <span className="eyebrow">{t('Models')}</span>
+            <h2>{t('Connect an endpoint')}</h2>
           </div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">
+          <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')}>
             <X size={18} />
           </button>
         </div>
@@ -524,17 +606,17 @@ export function EndpointModal({
             <PlugZap size={20} />
           </span>
           <div>
-            <strong>{endpoint.hasApiKey ? `${models} chat models available` : 'Not connected yet'}</strong>
+            <strong>{endpoint.hasApiKey ? tr('{count} chat models available', { count: models }) : t('Not connected yet')}</strong>
             <span>
               {endpoint.source === 'env'
-                ? 'Currently read from .env — saving here overrides it.'
-                : 'Any OpenAI-compatible base URL works, including a local router.'}
+                ? t('Currently read from .env — saving here overrides it.')
+                : t('Any OpenAI-compatible base URL works, including a local router.')}
             </span>
           </div>
         </div>
 
         <label className="field-row">
-          <span>Base URL</span>
+          <span>{t('Base URL')}</span>
           <input
             autoFocus
             value={baseUrl}
@@ -545,29 +627,29 @@ export function EndpointModal({
         </label>
 
         <label className="field-row">
-          <span>API key</span>
+          <span>{t('API key')}</span>
           <input
             type="password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder={endpoint.hasApiKey ? 'Saved — type to replace it' : 'sk-…'}
+            placeholder={endpoint.hasApiKey ? t('Saved — type to replace it') : 'sk-…'}
             spellCheck={false}
           />
-          <small>Stored on this computer, in the app&apos;s own data folder.</small>
+          <small>{t("Stored on this computer, in the app's own data folder.")}</small>
         </label>
 
         {result && (
           <p className={`endpoint-result ${result.ok ? 'ok' : 'failed'}`}>
-            {result.ok ? `Reached the endpoint · ${result.models} chat models` : result.error}
+            {result.ok ? tr('Reached the endpoint · {count} chat models', { count: result.models }) : t(result.error ?? '')}
           </p>
         )}
 
         <div className="modal-footer">
           <button type="button" className="quiet-link" onClick={() => void test()} disabled={busy}>
-            Test connection
+            {t('Test connection')}
           </button>
           <button className="primary-button" type="submit" disabled={busy || !baseUrl.trim()}>
-            {busy ? 'Checking…' : 'Save and connect'}
+            {t(busy ? 'Checking…' : 'Save and connect')}
           </button>
         </div>
       </form>

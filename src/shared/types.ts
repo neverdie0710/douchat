@@ -61,6 +61,21 @@ export interface MessageSource {
   kind: 'group' | 'bot'
   id: string
   name: string
+  /** The private message that led to this reply. Older stored messages may
+   *  only have the sender metadata. */
+  content?: string
+}
+
+export interface MessageDeliveryReply {
+  id: string
+  senderId: string
+  senderName: string
+  content: string
+  createdAt: number
+  /** Bubbles split from the same recipient turn share this id. */
+  replyGroupId?: string
+  attachments?: MessageAttachment[]
+  error?: string
 }
 
 export interface MessageDelivery {
@@ -68,6 +83,7 @@ export interface MessageDelivery {
   recipientId: string
   recipientName: string
   content: string
+  replies?: MessageDeliveryReply[]
 }
 
 /** A binary asset owned by Douchat. The renderer receives the bytes lazily
@@ -78,6 +94,59 @@ export interface MessageAttachment {
   name: string
   mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
   size: number
+}
+
+/** An image crossing the isolated renderer/main boundary before Douchat owns it. */
+export interface MessageImageInput {
+  name: string
+  mimeType: MessageAttachment['mimeType']
+  data: Uint8Array
+}
+
+/** A code file handed to a short-lived, isolated preview window. */
+export interface CodeArtifactInput {
+  title: string
+  language: string
+  code: string
+}
+
+export interface EmailConnectorAccount {
+  id: string
+  kind: 'email'
+  name: string
+  email: string
+  username: string
+  imapHost: string
+  imapPort: number
+  imapSecure: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpSecure: boolean
+  agentIds: string[]
+  status: 'connected' | 'error'
+  error?: string
+  updatedAt: number
+}
+
+export interface EmailConnectorInput {
+  id?: string
+  name: string
+  email: string
+  username: string
+  password?: string
+  imapHost: string
+  imapPort: number
+  imapSecure: boolean
+  smtpHost: string
+  smtpPort: number
+  smtpSecure: boolean
+  agentIds: string[]
+}
+
+export interface EmailConnectionTestResult {
+  ok: boolean
+  imap: { ok: boolean; error?: string }
+  smtp: { ok: boolean; error?: string }
 }
 
 export interface ChatMessage {
@@ -251,6 +320,9 @@ export interface AppSnapshot {
   runtime: RuntimeStatus
   endpoint: EndpointSettings
   models: ModelOption[]
+  connectors: EmailConnectorAccount[]
+  /** The signed-in account's onboarding chat, when it still exists. */
+  defaultConversationId?: string
   userName: string
   /** The picture the user chose, already downscaled, as a data URL. */
   userAvatar: string
@@ -320,15 +392,46 @@ export type DesktopAuthState =
   | { status: 'error'; error: string }
   | { status: 'signed-in'; user: DesktopAuthUser }
 
+export type UpdateStatus =
+  | 'disabled'
+  | 'idle'
+  | 'checking'
+  | 'up-to-date'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'error'
+
+export interface UpdateState {
+  status: UpdateStatus
+  currentVersion: string
+  availableVersion?: string
+  releaseNotes?: string
+  percent?: number
+  transferred?: number
+  total?: number
+  bytesPerSecond?: number
+  busyTasks?: number
+  error?: string
+}
+
 export interface DouchatApi {
   platform: string
+  /** The app name macOS shows in Privacy & Security for this build. */
+  microphonePermissionOwner: 'Douchat' | 'Electron'
   windowAction: (action: 'close' | 'minimize' | 'fullscreen') => void
+  requestMicrophoneAccess: () => Promise<'granted' | 'denied' | 'unsupported'>
+  openMicrophoneSettings: () => Promise<void>
   getAuthState: () => Promise<DesktopAuthState>
   startLogin: () => Promise<DesktopAuthState>
   retryAuth: () => Promise<DesktopAuthState>
   signOut: () => Promise<DesktopAuthState>
   refreshProfile: () => Promise<DesktopAuthState>
   updateProfile: (input: UpdateDesktopProfileInput) => Promise<DesktopAuthState>
+  getUpdateState: () => Promise<UpdateState>
+  checkForUpdates: () => Promise<UpdateState>
+  installUpdate: () => Promise<UpdateState>
   detectLocalAgents: () => Promise<LocalAgent[]>
   searchMessages: (conversationId: string, query: string) => Promise<ChatMessage[]>
   getMessagePage: (conversationId: string, topicId: string, before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
@@ -337,9 +440,15 @@ export interface DouchatApi {
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>
   deleteAgent: (agentId: string) => Promise<AppSnapshot>
+  startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
   openConversationWindow: (conversationId: string) => Promise<void>
+  openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
+  getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
+  testEmailConnector: (input: EmailConnectorInput) => Promise<EmailConnectionTestResult>
+  saveEmailConnector: (input: EmailConnectorInput) => Promise<AppSnapshot>
+  disconnectEmailConnector: (connectorId: string) => Promise<AppSnapshot>
   deleteConversation: (conversationId: string) => Promise<AppSnapshot>
   setConversationPinned: (conversationId: string, pinned: boolean) => Promise<AppSnapshot>
   markConversationRead: (conversationId: string) => Promise<AppSnapshot>
@@ -348,7 +457,7 @@ export interface DouchatApi {
   renameTopic: (conversationId: string, topicId: string, title: string) => Promise<AppSnapshot>
   deleteTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
   setActiveTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
-  sendMessage: (conversationId: string, text: string) => Promise<void>
+  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[]) => Promise<void>
   stopConversation: (conversationId: string) => Promise<void>
   clearConversation: (conversationId: string) => Promise<AppSnapshot>
   setEndpoint: (input: EndpointInput) => Promise<AppSnapshot>
@@ -361,5 +470,6 @@ export interface DouchatApi {
   stopComputer: (agentId: string) => Promise<AppSnapshot>
   showComputer: (agentId: string) => Promise<void>
   onAuthState: (listener: (state: DesktopAuthState) => void) => () => void
+  onUpdateState: (listener: (state: UpdateState) => void) => () => void
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => () => void
 }

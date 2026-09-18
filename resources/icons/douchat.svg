@@ -11,8 +11,8 @@
       <rect x="571" y="568" width="95" height="95" rx="24" fill="black"/>
     </mask>
   </defs>
-  <g transform="translate(61.44 61.44) scale(.88)">
-    <rect x="48" y="48" width="928" height="928" rx="218" fill="#F6F7FA"/>
-    <rect width="1024" height="1024" fill="#0B5CFF" mask="url(#agent-pod)"/>
+  <g transform="translate(30.72 30.72) scale(.94)">
+    <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
+    <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod)"/>
   </g>
 </svg>

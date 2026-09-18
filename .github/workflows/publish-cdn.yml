@@ -1,0 +1,65 @@
+name: Publish release to CDN
+
+# Draft releases are safe to smoke-test. Publishing a draft triggers this
+# workflow, which mirrors its updater artifacts into R2 and makes the release
+# visible to installed clients only after every referenced binary is present.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (for example v0.2.0)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir dist
+          find dist -maxdepth 1 -type f -print
+
+      - name: Verify AWS CLI
+        run: aws --version
+
+      - name: Upload artifacts and publish update feed
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_MAX_ATTEMPTS: "5"
+          AWS_RETRY_MODE: standard
+        run: bash scripts/publish-release.sh dist/*
+
+      - name: Verify public update feed
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          found=false
+          for manifest in latest-mac.yml latest.yml latest-linux.yml; do
+            [ -f "dist/$manifest" ] || continue
+            found=true
+            curl --fail --silent --show-error \
+              --retry 8 --retry-all-errors --retry-delay 5 \
+              "https://cdn.douchat.ai/$manifest" | grep -F "version: $version"
+          done
+          $found

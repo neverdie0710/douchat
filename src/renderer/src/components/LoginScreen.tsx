@@ -6,10 +6,10 @@ import { t } from '../preferences'
 
 function WindowControls(): ReactElement | null {
   if (window.douchat.platform !== 'darwin') return null
-  return <div className="window-controls login-window-controls no-drag" role="group" aria-label="Window controls">
-    <button className="window-control close" title="Close window" aria-label="Close window" onClick={() => window.douchat.windowAction('close')}><X size={8} strokeWidth={2} /></button>
-    <button className="window-control minimize" title="Minimize window" aria-label="Minimize window" onClick={() => window.douchat.windowAction('minimize')}><Minus size={8} strokeWidth={2} /></button>
-    <button className="window-control fullscreen" title="Toggle full screen" aria-label="Toggle full screen" onClick={() => window.douchat.windowAction('fullscreen')}><Maximize2 size={7} strokeWidth={2} /></button>
+  return <div className="window-controls login-window-controls no-drag" role="group" aria-label={t('Window controls')}>
+    <button className="window-control close" title={t('Close window')} aria-label={t('Close window')} onClick={() => window.douchat.windowAction('close')}><X size={8} strokeWidth={2} /></button>
+    <button className="window-control minimize" title={t('Minimize window')} aria-label={t('Minimize window')} onClick={() => window.douchat.windowAction('minimize')}><Minus size={8} strokeWidth={2} /></button>
+    <button className="window-control fullscreen" title={t('Toggle full screen')} aria-label={t('Toggle full screen')} onClick={() => window.douchat.windowAction('fullscreen')}><Maximize2 size={7} strokeWidth={2} /></button>
   </div>
 }
 

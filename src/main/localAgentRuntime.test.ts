@@ -11,13 +11,18 @@ describe('local agent output', () => {
   it('extracts final replies without leaking CLI metadata', () => {
     expect(localAgentText('claude', '{"result":"Hello","session_id":"private"}')).toBe('Hello')
     expect(localAgentText('gemini', '{"response":"Hello","stats":{}}')).toBe('Hello')
+    expect(localAgentText('grok', '{"text":"Hello","sessionId":"private","usage":{"input_tokens":3}}')).toBe('Hello')
     expect(localAgentText('cursor', '{"result":"Hello"}')).toBe('Hello')
     expect(localAgentText('opencode', '{"type":"step_start"}\n{"type":"text","part":{"text":"Hello"}}\n')).toBe('Hello')
+    expect(localAgentText('openclaw', '{"ok":true,"status":"ok","final":"Hello"}')).toBe('Hello')
+    for (const id of ['fastclaw', 'hermes', 'omp']) expect(localAgentText(id, 'Hello\n')).toBe('Hello')
   })
   it('reports authentication or agent failures instead of treating errors as replies', () => {
     expect(() => localAgentText('claude', '{"is_error":true,"result":"Log in first"}')).toThrow('Log in first')
     expect(() => localAgentText('gemini', '{"error":{"message":"Missing credentials"}}')).toThrow('Missing credentials')
+    expect(() => localAgentText('grok', '{"error":"Authentication required"}')).toThrow('Authentication required')
     expect(() => localAgentText('opencode', '{"type":"error","error":{"data":{"message":"No model"}}}')).toThrow('No model')
+    expect(() => localAgentText('openclaw', '{"ok":false,"status":"error","error":{"message":"Log in first"}}')).toThrow('Log in first')
   })
   it('allows built-in web research without bypassing shell permissions', () => {
     expect(localAgentArgs('claude', 'Research', '/tmp/output')).toContain('WebSearch,WebFetch')
@@ -25,6 +30,11 @@ describe('local agent output', () => {
     expect(localAgentArgs('codex', 'Research', '/tmp/output')).toContain('workspace-write')
     expect(localAgentArgs('codex', 'Research', '/tmp/output')).toContain('sandbox_workspace_write.network_access=true')
     expect(localAgentArgs('codex', 'Research', '/tmp/output')).toContain('--json')
+    expect(localAgentArgs('grok', 'Research', '/tmp/output')).toEqual(expect.arrayContaining([
+      '--output-format', 'json', '--permission-mode', 'dontAsk', '--sandbox', 'strict',
+      '--allow', 'Read', 'Grep', 'WebFetch', 'WebSearch'
+    ]))
+    expect(localAgentArgs('grok', 'Research', '/tmp/output')).not.toContain('--always-approve')
   })
   it('links Codex image output to the exact CLI thread', () => {
     expect(codexThreadId([
@@ -35,11 +45,13 @@ describe('local agent output', () => {
   })
   it('passes prompts as data and does not bypass CLI permissions', () => {
     const prompt = '$(touch /tmp/should-not-exist); --force'
-    for (const id of ['claude', 'gemini', 'cursor', 'opencode', 'kimi']) {
+    for (const id of ['claude', 'gemini', 'grok', 'cursor', 'opencode', 'kimi', 'fastclaw', 'hermes', 'omp']) {
       const args = localAgentArgs(id, prompt, '/tmp/output')
       expect(args).toContain(prompt)
       expect(args.join(' ')).not.toContain('--dangerously')
     }
     expect(localAgentArgs('codex', prompt, '/tmp/output')).toContain('workspace-write')
+    expect(localAgentArgs('openclaw', prompt, '/tmp/output')).toEqual(expect.arrayContaining(['agent', 'exec', '--message-file', '-', '--json']))
+    expect(localAgentArgs('omp', prompt, '/tmp/output')).toContain('--no-tools')
   })
 })

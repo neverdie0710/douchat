@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { AgentConfig, MessageAttachment } from '../shared/types'
@@ -11,15 +11,25 @@ export function localAgentArgs(id: string, prompt: string, output: string): stri
     case 'codex': return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'web_search="live"', '--output-last-message', output, '-']
     case 'claude': return ['-p', '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch', '--', prompt]
     case 'gemini': return ['-p', prompt, '--output-format', 'json']
+    case 'grok': return [
+      '--no-auto-update', '-p', prompt, '--output-format', 'json',
+      '--permission-mode', 'dontAsk',
+      '--allow', 'Read', '--allow', 'Grep', '--allow', 'WebFetch', '--allow', 'WebSearch',
+      '--sandbox', 'strict'
+    ]
     case 'cursor': return ['--print', '--output-format', 'json', '--mode', 'ask', '--', prompt]
     case 'opencode': return ['run', '--format', 'json', '--', prompt]
     case 'kimi': return ['--prompt', prompt, '--output-format', 'text']
+    case 'openclaw': return ['agent', 'exec', '--message-file', '-', '--json', '--code-mode', 'direct']
+    case 'fastclaw': return ['chat', '--query', prompt]
+    case 'hermes': return ['--oneshot', prompt]
+    case 'omp': return ['--print', '--mode', 'text', '--no-session', '--no-tools', prompt]
     default: throw new Error('This local agent has no chat adapter yet')
   }
 }
 
 export function localAgentText(id: string, stdout: string): string {
-  if (id === 'kimi') return stdout.trim()
+  if (['kimi', 'fastclaw', 'hermes', 'omp'].includes(id)) return stdout.trim()
   if (id === 'opencode') {
     const events = stdout.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line))
     const error = events.find((event) => event.type === 'error')
@@ -27,8 +37,11 @@ export function localAgentText(id: string, stdout: string): string {
     return events.filter((event) => event.type === 'text').map((event) => event.part?.text || '').join('\n').trim()
   }
   const data = JSON.parse(stdout)
-  if (data.is_error || data.error) throw new Error(data.error?.message || data.result || 'Local agent failed')
-  return String(data.result ?? data.response ?? '').trim()
+  if (data.ok === false || data.status === 'error' || data.status === 'timeout' || data.is_error || data.error) {
+    const message = typeof data.error === 'string' ? data.error : data.error?.message
+    throw new Error(message || data.result || data.text || 'Local agent failed')
+  }
+  return String(data.final ?? data.result ?? data.response ?? data.text ?? '').trim()
 }
 
 /** Only for the fresh, application-owned temporary workspace created below. */
@@ -97,15 +110,31 @@ async function generatedImages(threadId: string | undefined, env: NodeJS.Process
   return images
 }
 
-export async function runLocalAgent(config: AgentConfig, prompt: string, signal?: AbortSignal): Promise<LocalAgentReply> {
+export async function runLocalAgent(
+  config: AgentConfig,
+  prompt: string,
+  signal?: AbortSignal,
+  inputImages: LocalAgentImage[] = []
+): Promise<LocalAgentReply> {
   const agent = await validateLocalAgent(config.localAgentId!)
   const env = await spawnEnvironment()
   signal?.throwIfAborted()
   const directory = await mkdtemp(join(tmpdir(), 'douchat-agent-'))
   try {
+    const extensions: Record<MessageAttachment['mimeType'], string> = {
+      'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'
+    }
+    const imagePaths = await Promise.all(inputImages.map(async (image, index) => {
+      const path = join(directory, `input-image-${index + 1}.${extensions[image.mimeType]}`)
+      await writeFile(path, image.data)
+      return path
+    }))
+    const effectivePrompt = imagePaths.length
+      ? `${prompt}\n\nThe human attached ${imagePaths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${imagePaths.length === 1 ? '' : 's'} before answering:\n${imagePaths.join('\n')}`
+      : prompt
     const output = join(directory, 'reply.txt')
     const stdout = await new Promise<string>((resolve, reject) => {
-      const child = spawn(agent.path!, localAgentArgs(agent.id, prompt, output), {
+      const child = spawn(agent.path!, localAgentArgs(agent.id, effectivePrompt, output), {
         cwd: directory, env: localAgentEnvironment(agent.id, env), windowsHide: true, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe']
       })
@@ -144,7 +173,7 @@ export async function runLocalAgent(config: AgentConfig, prompt: string, signal?
       signal?.addEventListener('abort', abort, { once: true })
       if (signal?.aborted) abort()
       child.stdin.on('error', () => { /* Process exit is reported by close. */ })
-      child.stdin.end(agent.id === 'codex' ? prompt : undefined)
+      child.stdin.end(['codex', 'openclaw'].includes(agent.id) ? effectivePrompt : undefined)
     })
     const text = agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
     if (!text) throw new Error(`${agent.name} finished without a text response. Check its local login and configuration.`)

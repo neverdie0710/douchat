@@ -1,9 +1,9 @@
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { t } from '../preferences'
-import { ChevronRight, Minus, Plus, Search, X } from 'lucide-react'
+import { ChevronRight, Minus, Pencil, Plus, Search, X } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, ChatMessage, Conversation } from '../../../shared/types'
-import { AgentAvatar } from './common'
+import { AgentAvatar, agentDisplayName, agentDisplayRole } from './common'
 
 export function InspectorRail({
   snapshot,
@@ -11,21 +11,16 @@ export function InspectorRail({
   members,
   selectedAgentId,
   onSelectAgent,
-  onEditConversation,
   onAddMembers,
-  onRemoveMembers,
-  onEditBot
+  onRemoveMembers
 }: {
   snapshot: AppSnapshot
   conversation?: Conversation
   members: AgentConfig[]
   selectedAgentId?: string
   onSelectAgent: (agentId: string, anchor: ProfileAnchor) => void
-  onClose: () => void
   onAddMembers: () => void
   onRemoveMembers: () => void
-  onEditConversation: () => void
-  onEditBot: (agent: AgentConfig) => void
 }): ReactElement {
   const [memberQuery, setMemberQuery] = useState('')
   const [searching, setSearching] = useState(false)
@@ -34,7 +29,13 @@ export function InspectorRail({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
-  useEffect(() => { setMemberQuery(''); setSearching(false); setQuery(''); setResults([]); setConfirmClear(false); setError('') }, [conversation?.id])
+  const [editingName, setEditingName] = useState(false)
+  const [nameDraft, setNameDraft] = useState(conversation?.name ?? '')
+  useEffect(() => {
+    setMemberQuery(''); setSearching(false); setQuery(''); setResults([]); setConfirmClear(false); setError('')
+    setEditingName(false); setNameDraft(conversation?.name ?? '')
+  }, [conversation?.id])
+  useEffect(() => { if (!editingName) setNameDraft(conversation?.name ?? '') }, [conversation?.name, editingName])
   useEffect(() => {
     let cancelled = false
     setResults([])
@@ -46,11 +47,21 @@ export function InspectorRail({
     }, 200)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [searching, query, conversation?.id, snapshot.messages])
-  async function update(action: () => Promise<unknown>): Promise<void> {
+  async function update(action: () => Promise<unknown>): Promise<boolean> {
     setBusy(true); setError('')
-    try { await action(); setConfirmClear(false) }
-    catch { setError(t('Could not save changes')) }
+    try { await action(); setConfirmClear(false); return true }
+    catch { setError(t('Could not save changes')); return false }
     finally { setBusy(false) }
+  }
+  async function saveGroupName(): Promise<void> {
+    if (!conversation || conversation.type !== 'group') return
+    const name = nameDraft.trim()
+    if (!name || name === conversation.name) {
+      setNameDraft(conversation.name)
+      setEditingName(false)
+      return
+    }
+    if (await update(() => window.douchat.updateConversation(conversation.id, { name }))) setEditingName(false)
   }
   function highlight(value: string): ReactElement {
     const needle = memberQuery.trim().toLocaleLowerCase()
@@ -66,28 +77,52 @@ export function InspectorRail({
           <section className="member-section">
             {conversation.type === 'group' && <label className="group-member-search"><Search size={16} /><input aria-label={t('Search group members')} placeholder={t('Search group members')} value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} />{memberQuery && <button type="button" aria-label={t('Clear search')} onClick={() => setMemberQuery('')}><X size={14} /></button>}</label>}
             {conversation.type === 'group' && memberQuery.trim() ? <div className="group-member-results">
-              {orderedMembers.filter((member) => member.name.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())).map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><AgentAvatar agent={member} size={40} /><span><strong>{highlight(member.name)}</strong></span></button>)}
-              {!members.some((member) => member.name.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())) && <p>{t('No matching contacts')}</p>}
+              {orderedMembers.filter((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())).map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><AgentAvatar agent={member} size={40} /><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
+              {!members.some((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())) && <p>{t('No matching agents')}</p>}
             </div> : <div className="member-grid">
               {orderedMembers.map((member) => (
                 <button
                   key={member.id}
                   className={`member-tile ${member.id === agent?.id ? 'active' : ''}`}
                   onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}
-                  title={`${member.name} · ${member.role}`}
+                  title={`${agentDisplayName(member)} · ${agentDisplayRole(member)}`}
                 >
                   <AgentAvatar agent={member} size={40} />
-                  <span>{member.name}</span>
+                  <span>{agentDisplayName(member)}</span>
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>
               ))}
-              {<button className="member-tile add" onClick={onAddMembers} aria-label="Add a member">
+              {<button className="member-tile add" onClick={onAddMembers} aria-label={t('Add a member')}>
                 <span className="member-add">
                   <Plus size={26} strokeWidth={1.5} />
                 </span>
                 <span>{t('Add')}</span>
               </button>}
               {conversation.type === 'group' && <button className="member-tile add" onClick={onRemoveMembers} aria-label={t('Remove group members')}><span className="member-add"><Minus size={26} strokeWidth={1.5} /></span><span>{t('Remove')}</span></button>}
+            </div>}
+            {conversation.type === 'group' && !memberQuery.trim() && <div className="group-conversation-details">
+              <section className="group-name-setting">
+                <h2>{t('Group chat name')}</h2>
+                {editingName ? <input
+                  autoFocus
+                  aria-label={t('Group chat name')}
+                  disabled={busy}
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onFocus={(event) => event.currentTarget.select()}
+                  onBlur={() => { if (!busy) { setNameDraft(conversation.name); setEditingName(false) } }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') { event.preventDefault(); void saveGroupName() }
+                    if (event.key === 'Escape') { event.preventDefault(); setNameDraft(conversation.name); setEditingName(false) }
+                  }}
+                /> : <button type="button" className="group-name-value" disabled={busy} aria-label={`${t('Edit group chat name')}: ${conversation.name}`} onClick={() => setEditingName(true)}>
+                  <span>{conversation.name}</span><Pencil size={15} />
+                </button>}
+              </section>
+              <div className="detail-toggles">
+                <label>{t('Mute notifications')}<button type="button" className="detail-switch" role="switch" aria-label={t('Mute notifications')} aria-checked={!!conversation.muted} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { muted: !conversation.muted }))} /></label>
+                <label>{t('Pin to top')}<button type="button" className="detail-switch" role="switch" aria-label={t('Pin to top')} aria-checked={!!conversation.pinned} disabled={busy} onClick={() => void update(() => window.douchat.setConversationPinned(conversation.id, !conversation.pinned))} /></label>
+              </div>
             </div>}
             {conversation.type === 'direct' ? <div className="direct-chat-options">
               <button className="detail-search-button" onClick={() => setSearching(!searching)}>{t('Search chat history')} <ChevronRight size={16} /></button>
@@ -105,9 +140,6 @@ export function InspectorRail({
               </div>
               {confirmClear ? <div className="detail-clear-confirm"><p>{t('Clear all messages in this chat? This cannot be undone.')}</p><button disabled={busy} onClick={() => setConfirmClear(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.clearConversation(conversation.id))}>{t('Clear chat history')}</button></div> : <button className="detail-clear" onClick={() => setConfirmClear(true)}>{t('Clear chat history')}</button>}
               {error && <p role="alert">{error}</p>}
-            </div> : !memberQuery.trim() ? <div className="chat-detail-options">
-              <button onClick={onEditConversation}>{t('Chat settings')} <ChevronRight size={16} /></button>
-              {agent && <button onClick={() => onEditBot(agent)}>{t('Bot settings')} <ChevronRight size={16} /></button>}
             </div> : null}
 
           </section>

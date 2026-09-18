@@ -1,0 +1,178 @@
+name: Build and Release
+
+# A version tag produces one signed, notarized universal macOS build and
+# attaches the DMG, ZIP, blockmaps and latest-mac.yml to a draft GitHub Release.
+# Publishing that draft is the deliberate shipping step: publish-cdn.yml copies
+# immutable artifacts to R2 first and replaces the update manifest last.
+# Windows and Linux remain available as manual test packages until their code
+# signing and public distribution channels are enabled.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to package (manual artifact only)
+        required: true
+        default: macos-universal
+        type: choice
+        options:
+          - macos-universal
+          - windows-x64
+          - linux-x64
+          - all
+
+permissions:
+  contents: write
+
+jobs:
+  select-matrix:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        shell: bash
+        env:
+          REQUESTED_PLATFORM: ${{ inputs.platform || 'macos-universal' }}
+        run: |
+          case "$REQUESTED_PLATFORM" in
+            macos-universal)
+              matrix='{"include":[{"platform":"macos-universal","runner":"macos-latest"}]}'
+              ;;
+            windows-x64)
+              matrix='{"include":[{"platform":"windows-x64","runner":"windows-latest"}]}'
+              ;;
+            linux-x64)
+              matrix='{"include":[{"platform":"linux-x64","runner":"ubuntu-22.04"}]}'
+              ;;
+            all)
+              matrix='{"include":[{"platform":"macos-universal","runner":"macos-latest"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"linux-x64","runner":"ubuntu-22.04"}]}'
+              ;;
+            *)
+              echo "Unsupported platform: $REQUESTED_PLATFORM" >&2
+              exit 1
+              ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: select-matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release version
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package_version=$(node -p "require('./package.json').version")
+          tag_version=${RELEASE_TAG#v}
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "package.json is $package_version but the tag is $RELEASE_TAG" >&2
+            exit 1
+          fi
+
+      - name: Verify macOS release secrets
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "Required release secret is missing: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Build signed macOS draft release
+        if: github.event_name == 'push'
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run release:mac
+
+      - name: Create draft release and upload signed artifacts
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          release_dir="release/$version"
+
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --draft \
+              --title "Douchat v$version" \
+              --notes "Signed and notarized universal macOS release. Publish this draft only after smoke testing the attached DMG."
+          fi
+
+          assets=()
+          while IFS= read -r -d '' artifact; do
+            assets+=("$artifact")
+          done < <(find "$release_dir" -maxdepth 1 -type f \( \
+            -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' -o \
+            -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o \
+            -name 'latest*.yml' \
+          \) -print0)
+
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No release artifacts found in $release_dir" >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+
+      - name: Build manual test package
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          case "$TARGET_PLATFORM" in
+            macos-universal) npm run package:mac ;;
+            windows-x64) npm run package:win ;;
+            linux-x64) npm run package:linux ;;
+          esac
+
+      - name: Upload manual test package
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Douchat-${{ matrix.platform }}-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            release/**/*.dmg
+            release/**/*.zip
+            release/**/*.exe
+            release/**/*.AppImage
+            release/**/*.deb
+            release/**/*.yml
+            release/**/*.blockmap

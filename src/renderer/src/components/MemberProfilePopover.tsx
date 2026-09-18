@@ -28,7 +28,7 @@ export function MemberProfilePopover({ anchor, onClose, children }: {
     return () => { observer.disconnect(); window.removeEventListener('resize', place) }
   }, [anchor])
   return <div className="modal-backdrop member-profile-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <section ref={panel} style={position} className="agent-modal member-profile-modal" role="dialog" aria-modal="true" aria-label={t('Contact details')}
+    <section ref={panel} style={position} className="agent-modal member-profile-modal" role="dialog" aria-modal="true" aria-label={t('Agent details')}
       onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); onClose() } }}>
       {children}
     </section>

@@ -1,7 +1,15 @@
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { MessageMarkdown } from './MessageMarkdown'
+import { describe, expect, it, vi } from 'vitest'
+vi.mock('../preferences', () => ({
+  t: (text: string) => text,
+  tr: (text: string, values: Record<string, string | number>) => Object.entries(values).reduce(
+    (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
+    text
+  )
+}))
+import { MessageMarkdown, messageMarkdownControls, messageMarkdownPlugins } from './MessageMarkdown'
+import { CodeArtifact } from './CodeArtifact'
 const render = (text: string): string => renderToStaticMarkup(<MessageMarkdown text={text} />)
 
 describe('message Markdown', () => {
@@ -11,14 +19,30 @@ describe('message Markdown', () => {
     expect(html).not.toContain('**')
     expect(html).toContain('<ul')
     expect(html).toContain('<li')
-    expect(html).toContain('<code>App.mp4</code>')
+    expect(html).toContain('data-streamdown="inline-code">App.mp4</code>')
   })
   it('preserves code blocks and renders GFM tables in a scroll container', () => {
     const html = render('```js\nconst video = "App.mp4";\n```\n\n| 文件 | 数量 |\n| --- | --- |\n| 视频 | 23 |')
-    expect(html).toContain('<pre>')
-    expect(html).toContain('language-js')
+    expect(html).toContain('data-streamdown="code-block"')
+    expect(html).toContain('data-language="js"')
     expect(html).toContain('markdown-table-scroll')
     expect(html).toContain('<table>')
+  })
+  it('collapses file-sized code into a compact artifact card', () => {
+    const source = Array.from({ length: 20 }, (_, index) => `<div>row ${index + 1}</div>`).join('\n')
+    const html = renderToStaticMarkup(<CodeArtifact code={source} language="html" isIncomplete={false} />)
+    expect(html).toContain('data-streamdown="code-artifact"')
+    expect(html).toContain('index.html')
+    expect(html).toContain('20 lines')
+    expect(html).not.toContain('data-streamdown="code-block-body"')
+  })
+  it('recognizes Mermaid and SVG fenced blocks as diagrams', () => {
+    expect(messageMarkdownPlugins.mermaid?.language).toBe('mermaid')
+    expect(messageMarkdownPlugins.renderers?.[0]?.language).toEqual(['svg', 'xml-svg'])
+    expect(messageMarkdownPlugins.renderers?.[1]?.language).toContain('html')
+    expect(messageMarkdownControls.mermaid).toEqual({ copy: false, download: false, fullscreen: true, panZoom: true })
+    expect(render('```mermaid\nflowchart TD\n  A --> B\n```')).not.toContain('language-mermaid')
+    expect(render('```svg\n<svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" /></svg>\n```')).not.toContain('language-svg')
   })
   it('opens web links externally and excludes executable HTML and unsafe links', () => {
     const html = render('[文档](https://example.com)\n\n[unsafe](javascript:alert%281%29)\n\n<script>alert(1)</script>\n\n<iframe src="https://example.com"></iframe>')

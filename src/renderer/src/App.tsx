@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
-import { t, usePreferences } from './preferences'
-import { useEffect, useMemo, useState } from 'react'
+import { t, tr, usePreferences } from './preferences'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -10,6 +10,7 @@ import type {
   CreateAgentInput,
   CreateGroupInput,
   DesktopAuthState,
+  MessageImageInput,
   UpdateAgentInput
 } from '../../shared/types'
 import { SettingsPanel, type SettingsTab } from './components/SettingsPanel'
@@ -21,8 +22,10 @@ import { ContactList, type ContactSelection } from './components/ContactList'
 import { ChatPane } from './components/ChatPane'
 import { InspectorRail } from './components/InspectorRail'
 import { AddMembersModal, BotModal, EndpointModal, GroupModal } from './components/dialogs'
-import { conversationMembers } from './components/common'
+import { agentDisplayName, conversationMembers } from './components/common'
 import { LoginScreen } from './components/LoginScreen'
+import { CodeArtifactWindow } from './components/CodeArtifactWindow'
+import { isImeCommitEnter } from './ime'
 
 type Dialog =
   | { kind: 'member-profile'; agentId: string; anchor: ProfileAnchor }
@@ -33,11 +36,17 @@ type Dialog =
   | null
 
 export function App(): ReactElement {
+  const artifactId = new URLSearchParams(window.location.search).get('artifact')
+  return artifactId ? <CodeArtifactWindow artifactId={artifactId} /> : <WorkspaceApp />
+}
+
+function WorkspaceApp(): ReactElement {
   usePreferences()
+  const imeComposing = useRef(false)
   const [authState, setAuthState] = useState<DesktopAuthState>({ status: 'checking' })
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
   const detachedId = new URLSearchParams(window.location.search).get('conversation')
-  const [activeId, setActiveId] = useState(detachedId || 'crew')
+  const [activeId, setActiveId] = useState(detachedId || '')
   const [view, setView] = useState<AppView>('chats')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile')
@@ -62,7 +71,7 @@ export function App(): ReactElement {
     setScanning(true)
     setScanError('')
     try { setLocalAgents(await window.douchat.detectLocalAgents()) }
-    catch (error) { setScanError(error instanceof Error ? error.message : 'Could not detect local agents. Try Refresh.') }
+    catch (error) { setScanError(error instanceof Error ? error.message : 'Could not detect local proxies. Try Detect again.') }
     finally { setScanning(false) }
   }
   useEffect(() => {
@@ -102,9 +111,21 @@ export function App(): ReactElement {
 
   useEffect(() => {
     if (snapshot && !snapshot.conversations.some((conversation) => conversation.id === activeId && (!conversation.hidden || detachedId))) {
-      setActiveId(snapshot.conversations.find((item) => !item.hidden)?.id ?? '')
+      const welcome = snapshot.defaultConversationId
+        ? snapshot.conversations.find((item) => item.id === snapshot.defaultConversationId && !item.hidden)
+        : undefined
+      setActiveId(welcome?.id ?? snapshot.conversations.find((item) => !item.hidden)?.id ?? '')
     }
   }, [snapshot, activeId])
+
+  // A newly signed-in account lands directly in its Dr. Dou welcome chat.
+  // Detached chat windows keep the explicit conversation from their URL.
+  useEffect(() => {
+    if (detachedId || authState.status !== 'signed-in' || !snapshot?.defaultConversationId) return
+    if (snapshot.conversations.some((item) => item.id === snapshot.defaultConversationId && !item.hidden)) {
+      setActiveId(snapshot.defaultConversationId)
+    }
+  }, [detachedId, authState.status === 'signed-in' ? authState.user.id : '', snapshot?.defaultConversationId])
 
   useEffect(() => {
     if (!snapshot || !contact) return
@@ -156,12 +177,12 @@ export function App(): ReactElement {
   }, [conversation?.id, members, inspectorAgentId])
 
   const fail = (error: unknown, fallback: string): void =>
-    setToast(error instanceof Error ? error.message : fallback)
+    setToast(t(error instanceof Error ? error.message : fallback))
 
-  async function send(text: string): Promise<void> {
+  async function send(text: string, images?: MessageImageInput[]): Promise<void> {
     if (!conversation) return
     try {
-      await window.douchat.sendMessage(conversation.id, text)
+      await window.douchat.sendMessage(conversation.id, text, images)
     } catch (error) {
       fail(error, 'Message could not be sent')
       throw error
@@ -179,24 +200,24 @@ export function App(): ReactElement {
     setContact({ kind: 'bot', id: created.id })
     setView('chats')
     setShowInspector(false)
-    setToast(`${created.name} joined the workspace`)
+    setToast(tr('{name} joined the workspace', { name: agentDisplayName(created) }))
   }
 
   async function updateAgent(agentId: string, input: UpdateAgentInput): Promise<void> {
     setSnapshot(await window.douchat.updateAgent(agentId, input))
-    setToast(`${input.name ?? 'Bot'} updated`)
+    setToast(tr('{name} updated', { name: input.name ?? t('Agent') }))
   }
 
   function deleteAgent(agent: AgentConfig): void {
-    if (!window.confirm(`Delete ${agent.name}? Their chat and group memberships are removed.`)) return
+    if (!window.confirm(tr('Delete {name}? Their chat and group memberships are removed.', { name: agentDisplayName(agent) }))) return
     void window.douchat
       .deleteAgent(agent.id)
       .then((next) => {
         setSnapshot(next)
         setDialog(null)
-        setToast(`${agent.name} was removed`)
+        setToast(tr('{name} was removed', { name: agentDisplayName(agent) }))
       })
-      .catch((error) => fail(error, 'Bot could not be deleted'))
+      .catch((error) => fail(error, 'Agent could not be deleted'))
   }
 
   async function createGroup(input: CreateGroupInput): Promise<void> {
@@ -204,7 +225,16 @@ export function App(): ReactElement {
     setSnapshot(next)
     const created = [...next.conversations].filter((item) => item.type === 'group').sort((a, b) => b.createdAt - a.createdAt)[0]
     if (created) setActiveId(created.id)
-    setToast(`${input.name} is ready`)
+    setToast(tr('{name} is ready', { name: input.name }))
+  }
+
+  async function startDirectChat(agentId: string): Promise<void> {
+    const result = await window.douchat.startDirectChat(agentId)
+    setSnapshot(result.snapshot)
+    setActiveId(result.conversationId)
+    setContact({ kind: 'bot', id: agentId })
+    setView('chats')
+    setShowInspector(false)
   }
 
   async function updateGroup(
@@ -212,7 +242,7 @@ export function App(): ReactElement {
     input: { name: string; description: string; agentIds: string[]; leadAgentId: string }
   ): Promise<void> {
     setSnapshot(await window.douchat.updateConversation(conversationId, input))
-    setToast('Group updated')
+    setToast(t('Group updated'))
   }
 
   function deleteConversation(target: Conversation): void {
@@ -223,12 +253,18 @@ export function App(): ReactElement {
       .catch((error) => fail(error, 'Chat could not be deleted'))
   }
 
-  function openChat(conversationId: string): void {
+  async function openChat(conversationId: string): Promise<void> {
     setView('chats')
-    void window.douchat.updateConversation(conversationId, { hidden: false })
-      .then(() => window.douchat.markConversationRead(conversationId))
-      .then((next) => { setSnapshot(next); setActiveId(conversationId) })
-      .catch((error) => fail(error, 'Chat could not be opened'))
+    try {
+      await window.douchat.updateConversation(conversationId, { hidden: false })
+      const next = await window.douchat.markConversationRead(conversationId)
+      setSnapshot(next)
+      setActiveId(conversationId)
+      setShowInspector(false)
+    } catch (error) {
+      fail(error, 'Chat could not be opened')
+      throw error
+    }
   }
 
   function togglePin(target: Conversation): void {
@@ -263,13 +299,22 @@ export function App(): ReactElement {
     return (
       <div className="loading-screen">
         <span className="brand-mark"><i /><i /></span>
-        <span>Opening Douchat…</span>
+        <span>{t('Opening Douchat…')}</span>
       </div>
     )
   }
 
   return (
-    <div className={`app-shell messenger with-rail ${detachedId ? 'detached-chat' : ''} ${view === 'chats' && showInspector ? 'with-inspector' : ''}`}>
+    <div
+      className={`app-shell messenger with-rail ${detachedId ? 'detached-chat' : ''} ${view === 'chats' && showInspector ? 'with-inspector' : ''}`}
+      onCompositionStartCapture={() => { imeComposing.current = true }}
+      onCompositionEndCapture={() => { imeComposing.current = false }}
+      onKeyDownCapture={(event) => {
+        if (!isImeCommitEnter(event.nativeEvent, imeComposing.current)) return
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+    >
       <AppRail
         view={view}
         unread={totalUnread}
@@ -292,9 +337,6 @@ export function App(): ReactElement {
             snapshot={snapshot}
             selected={contact}
             onSelect={setContact}
-            onManage={() => setDialog({ kind: 'bot' })}
-            onSettings={() => setSettingsOpen(true)}
-            onCreateGroup={() => setDialog({ kind: 'group' })}
           />
           <ContactCard
             snapshot={snapshot}
@@ -302,8 +344,6 @@ export function App(): ReactElement {
             onMessage={openChat}
             onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
             onDeleteBot={deleteAgent}
-            onEditGroup={(target) => setDialog({ kind: 'group', conversation: target })}
-            onSelect={setContact}
             onTogglePin={togglePin}
           />
         </>
@@ -332,6 +372,7 @@ export function App(): ReactElement {
         conversation={conversation}
         topic={topic}
         messages={messages}
+        allMessages={snapshot.messages}
         agents={snapshot.agents}
         members={members}
         activity={activity}
@@ -347,19 +388,15 @@ export function App(): ReactElement {
       />
 
       <div className={`chat-details-layer ${showInspector && conversation ? 'is-open' : ''}`} inert={!showInspector || !conversation} aria-hidden={!showInspector || !conversation}>
-        <button className="chat-details-dismiss" onClick={() => setShowInspector(false)} aria-label="Close chat details" tabIndex={-1} />
+        <button className="chat-details-dismiss" onClick={() => setShowInspector(false)} aria-label={t('Close chat details')} tabIndex={-1} />
         <InspectorRail
           snapshot={snapshot}
           conversation={conversation}
           members={members}
           selectedAgentId={inspectorAgentId}
           onSelectAgent={(agentId, anchor) => { setInspectorAgentId(agentId); setDialog({ kind: 'member-profile', agentId, anchor }) }}
-          onClose={() => setShowInspector(false)}
           onRemoveMembers={() => conversation && setDialog({ kind: 'remove-members', conversation })}
           onAddMembers={() => conversation && (conversation.type === 'group' ? setDialog({ kind: 'add-members', conversation }) : setDialog({ kind: 'group', initialAgentIds: conversation.agentIds }))}
-          onEditConversation={() => conversation && editConversation(conversation)}
-          onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
-
         />
       </div>
       </div>
@@ -373,8 +410,6 @@ export function App(): ReactElement {
               onMessage={(id) => { setDialog(null); openChat(id) }}
               onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
               onDeleteBot={deleteAgent}
-              onEditGroup={(target) => setDialog({ kind: 'group', conversation: target })}
-              onSelect={(selection) => { setDialog(null); setContact(selection); setView('contacts') }}
               onTogglePin={togglePin} />
         </MemberProfilePopover>
       )}
@@ -399,6 +434,8 @@ export function App(): ReactElement {
           initialAgentIds={dialog.initialAgentIds}
           onClose={() => setDialog(null)}
           onCreate={createGroup}
+          onStartDirect={startDirectChat}
+          onOpenConversation={openChat}
           onUpdate={updateGroup}
           onNewBot={() => setDialog({ kind: 'bot' })}
         />
@@ -411,14 +448,13 @@ export function App(): ReactElement {
           onSave={async (input) => {
             const next = await window.douchat.setEndpoint(input)
             setSnapshot(next)
-            setToast(next.models.length ? `Connected · ${next.models.length} models` : 'Endpoint saved')
+            setToast(next.models.length ? tr('Connected · {count} models', { count: next.models.length }) : t('Endpoint saved'))
           }}
           onTest={(input) => window.douchat.testEndpoint(input)}
         />
       )}
       {settingsOpen && (
         <SettingsPanel
-          snapshot={snapshot}
           user={authState.user}
           agents={localAgents}
           scanning={scanning}
@@ -436,20 +472,7 @@ export function App(): ReactElement {
             setAuthState(next)
             if (next.status !== 'signed-in') setSettingsOpen(false)
           }}
-          onRefresh={() => void scanAgents()}
-          onCreate={(agent) => {
-            setSettingsOpen(false)
-            setDialog({ kind: 'bot', localAgentId: agent.id })
-          }}
-          onContact={(id) => {
-            setContact({ kind: 'bot', id })
-            setSettingsOpen(false)
-            setView('contacts')
-          }}
-          onEndpoint={() => {
-            setSettingsOpen(false)
-            setDialog({ kind: 'endpoint' })
-          }}
+          onDetect={() => void scanAgents()}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

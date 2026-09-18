@@ -1,26 +1,36 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AppSnapshot,
+  CodeArtifactInput,
   CreateAgentInput,
   EndpointInput,
+  EmailConnectorInput,
+  MessageImageInput,
   CreateGroupInput,
   CreateRoutineInput,
   UpdateAgentInput,
   UpdateConversationInput,
   UpdateDesktopProfileInput,
+  UpdateState,
   DouchatApi,
   DesktopAuthState
 } from '../shared/types'
 
 const api: DouchatApi = {
   platform: process.platform,
+  microphonePermissionOwner: 'Douchat',
   windowAction: (action) => ipcRenderer.send('douchat:window-action', action),
+  requestMicrophoneAccess: () => ipcRenderer.invoke('douchat:request-microphone-access'),
+  openMicrophoneSettings: () => ipcRenderer.invoke('douchat:open-microphone-settings'),
   getAuthState: () => ipcRenderer.invoke('douchat:get-auth-state'),
   startLogin: () => ipcRenderer.invoke('douchat:start-login'),
   retryAuth: () => ipcRenderer.invoke('douchat:retry-auth'),
   signOut: () => ipcRenderer.invoke('douchat:sign-out'),
   refreshProfile: () => ipcRenderer.invoke('douchat:refresh-profile'),
   updateProfile: (input: UpdateDesktopProfileInput) => ipcRenderer.invoke('douchat:update-profile', input),
+  getUpdateState: () => ipcRenderer.invoke('douchat:get-update-state'),
+  checkForUpdates: () => ipcRenderer.invoke('douchat:check-for-updates'),
+  installUpdate: () => ipcRenderer.invoke('douchat:install-update'),
   detectLocalAgents: () => ipcRenderer.invoke('douchat:detect-local-agents'),
   searchMessages: (conversationId, query) => ipcRenderer.invoke('douchat:search-messages', conversationId, query),
   getMessagePage: (conversationId, topicId, before) => ipcRenderer.invoke('douchat:message-page', conversationId, topicId, before),
@@ -29,10 +39,16 @@ const api: DouchatApi = {
   createAgent: (input: CreateAgentInput) => ipcRenderer.invoke('douchat:create-agent', input),
   updateAgent: (agentId: string, input: UpdateAgentInput) => ipcRenderer.invoke('douchat:update-agent', agentId, input),
   deleteAgent: (agentId: string) => ipcRenderer.invoke('douchat:delete-agent', agentId),
+  startDirectChat: (agentId: string) => ipcRenderer.invoke('douchat:start-direct-chat', agentId),
   createGroup: (input: CreateGroupInput) => ipcRenderer.invoke('douchat:create-group', input),
   updateConversation: (conversationId: string, input: UpdateConversationInput) =>
     ipcRenderer.invoke('douchat:update-conversation', conversationId, input),
   openConversationWindow: (conversationId: string) => ipcRenderer.invoke('douchat:open-conversation-window', conversationId),
+  openCodeArtifact: (input: CodeArtifactInput) => ipcRenderer.invoke('douchat:open-code-artifact', input),
+  getCodeArtifact: (artifactId: string) => ipcRenderer.invoke('douchat:get-code-artifact', artifactId),
+  testEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:test-email-connector', input),
+  saveEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:save-email-connector', input),
+  disconnectEmailConnector: (connectorId: string) => ipcRenderer.invoke('douchat:disconnect-email-connector', connectorId),
   deleteConversation: (conversationId: string) => ipcRenderer.invoke('douchat:delete-conversation', conversationId),
   setConversationPinned: (conversationId: string, pinned: boolean) =>
     ipcRenderer.invoke('douchat:set-conversation-pinned', conversationId, pinned),
@@ -45,8 +61,8 @@ const api: DouchatApi = {
     ipcRenderer.invoke('douchat:delete-topic', conversationId, topicId),
   setActiveTopic: (conversationId: string, topicId: string) =>
     ipcRenderer.invoke('douchat:set-active-topic', conversationId, topicId),
-  sendMessage: (conversationId: string, text: string) =>
-    ipcRenderer.invoke('douchat:send-message', conversationId, text),
+  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[]) =>
+    ipcRenderer.invoke('douchat:send-message', conversationId, text, images),
   stopConversation: (conversationId: string) => ipcRenderer.invoke('douchat:stop-conversation', conversationId),
   clearConversation: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation', conversationId),
   setEndpoint: (input: EndpointInput) => ipcRenderer.invoke('douchat:set-endpoint', input),
@@ -63,6 +79,11 @@ const api: DouchatApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: DesktopAuthState): void => listener(state)
     ipcRenderer.on('douchat:auth-state', handler)
     return () => ipcRenderer.removeListener('douchat:auth-state', handler)
+  },
+  onUpdateState: (listener: (state: UpdateState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: UpdateState): void => listener(state)
+    ipcRenderer.on('douchat:update-state', handler)
+    return () => ipcRenderer.removeListener('douchat:update-state', handler)
   },
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot): void => listener(snapshot)

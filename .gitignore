@@ -19,9 +19,13 @@ build/
 *.key
 *.p12
 *.pfx
+*.p8
 *.mobileprovision
 service-account*.json
 credentials*.json
+*.r2-credentials
+electron-builder.env
+dev-app-update.yml
 
 # Logs and diagnostic output
 logs/

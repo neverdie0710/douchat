@@ -1,6 +1,8 @@
-import { t } from '../preferences'
+import { t, tr } from '../preferences'
 import { Settings, UsersRound, MessageCircle, X, Minus, Maximize2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
+import type { UpdateStatus } from '../../../shared/types'
 import { UserAvatar } from './common'
 
 export type AppView = 'chats' | 'contacts'
@@ -22,14 +24,22 @@ export function AppRail({
   onSelect: (view: AppView) => void
   onOpenSettings: (profile?: boolean) => void
 }): ReactElement {
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle')
+  useEffect(() => {
+    let active = true
+    void window.douchat.getUpdateState().then((state) => { if (active) setUpdateStatus(state.status) }).catch(() => {})
+    const unsubscribe = window.douchat.onUpdateState((state) => { if (active) setUpdateStatus(state.status) })
+    return () => { active = false; unsubscribe() }
+  }, [])
+  const updateReady = ['available', 'downloading', 'downloaded'].includes(updateStatus)
   return (
-    <nav className="app-rail window-drag" aria-label="Sections">
-      {window.douchat.platform === 'darwin' && <div className="window-controls no-drag" role="group" aria-label="Window controls">
-        <button className="window-control close" title="Close window" aria-label="Close window" onClick={() => window.douchat.windowAction('close')}><X size={8} strokeWidth={2} /></button>
-        <button className="window-control minimize" title="Minimize window" aria-label="Minimize window" onClick={() => window.douchat.windowAction('minimize')}><Minus size={8} strokeWidth={2} /></button>
-        <button className="window-control fullscreen" title="Toggle full screen" aria-label="Toggle full screen" onClick={() => window.douchat.windowAction('fullscreen')}><Maximize2 size={7} strokeWidth={2} /></button>
+    <nav className="app-rail window-drag" aria-label={t('Sections')}>
+      {window.douchat.platform === 'darwin' && <div className="window-controls no-drag" role="group" aria-label={t('Window controls')}>
+        <button className="window-control close" title={t('Close window')} aria-label={t('Close window')} onClick={() => window.douchat.windowAction('close')}><X size={8} strokeWidth={2} /></button>
+        <button className="window-control minimize" title={t('Minimize window')} aria-label={t('Minimize window')} onClick={() => window.douchat.windowAction('minimize')}><Minus size={8} strokeWidth={2} /></button>
+        <button className="window-control fullscreen" title={t('Toggle full screen')} aria-label={t('Toggle full screen')} onClick={() => window.douchat.windowAction('fullscreen')}><Maximize2 size={7} strokeWidth={2} /></button>
       </div>}
-      <button className="rail-profile no-drag" onClick={() => onOpenSettings(true)} title={userName} aria-label={`${userName} — open your profile`}>
+      <button className="rail-profile no-drag" onClick={() => onOpenSettings(true)} title={userName} aria-label={tr('{name} — open your profile', { name: userName })}>
         <UserAvatar src={userAvatar} name={userName} size={34} />
       </button>
       <button
@@ -52,7 +62,7 @@ export function AppRail({
         <UsersRound size={23} strokeWidth={1.8} />
       </button>
       <div className="rail-spacer" />
-      <button className={`rail-button no-drag ${settingsOpen ? 'active' : ''}`} onClick={() => onOpenSettings()} aria-label={t('Settings')} title={t('Settings')} aria-current={settingsOpen}><Settings size={23} strokeWidth={1.8} /></button>
+      <button className={`rail-button no-drag ${settingsOpen ? 'active' : ''}`} onClick={() => onOpenSettings()} aria-label={t('Settings')} title={updateReady ? t('Update available') : t('Settings')} aria-current={settingsOpen}><Settings size={23} strokeWidth={1.8} />{updateReady && <span className="rail-update-dot" />}</button>
     </nav>
   )
 }

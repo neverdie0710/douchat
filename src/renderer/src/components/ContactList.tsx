@@ -1,27 +1,21 @@
-import { t } from '../preferences'
-import { ChevronRight, Plus, Search, Star, Users, X } from 'lucide-react'
+import { t, tr } from '../preferences'
+import { ChevronRight, Search, Star, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import { contactSections, matchesContactQuery } from '../../../shared/bot/contacts'
-import { AgentAvatar, ConversationAvatar, SidebarResizer } from './common'
+import { AgentAvatar, ConversationAvatar, SidebarResizer, agentDisplayName, agentDisplayRole } from './common'
 
 export type ContactSelection = { kind: 'bot'; id: string } | { kind: 'group'; id: string }
 
 export function ContactList({
   snapshot,
   selected,
-  onSelect,
-  onManage,
-  onSettings,
-  onCreateGroup
+  onSelect
 }: {
   snapshot: AppSnapshot
   selected?: ContactSelection
   onSelect: (selection: ContactSelection) => void
-  onManage: () => void
-  onSettings: () => void
-  onCreateGroup: () => void
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [groupsOpen, setGroupsOpen] = useState(false)
@@ -46,8 +40,8 @@ export function ContactList({
   )
 
   const bots = useMemo(
-    () => snapshot.agents.filter((agent) => matchesContactQuery(agent.name, query)),
-    [snapshot.agents, query]
+    () => snapshot.agents.filter((agent) => matchesContactQuery(`${agent.name} ${agentDisplayName(agent)}`, query)),
+    [snapshot.agents, query, document.documentElement.lang]
   )
   const starred = bots.filter((agent) => pinnedBotIds.has(agent.id))
   const sections = useMemo(() => contactSections(bots.filter((agent) => !pinnedBotIds.has(agent.id))), [bots, pinnedBotIds])
@@ -60,8 +54,8 @@ export function ContactList({
     >
       <AgentAvatar agent={agent} size={34} />
       <span className="contact-row-copy">
-        <strong>{agent.name}</strong>
-        <small>{agent.role}{agent.localAgentId ? ` · ${agent.localAgentId}` : ''}</small>
+        <strong>{agentDisplayName(agent)}</strong>
+        <small>{agentDisplayRole(agent)}{agent.localAgentId ? ` · ${agent.localAgentId}` : ''}</small>
       </span>
       <span className={`contact-state ${snapshot.agentStatuses[agent.id] ?? 'idle'}`} />
     </button>
@@ -94,17 +88,7 @@ export function ContactList({
             </button>
           )}
         </div>
-        <div className="sidebar-titlebar-actions no-drag">
-          <button className="sidebar-add" onClick={onManage} aria-label={t('Create contact')} title={t('Create contact')}>
-            <Plus size={18} />
-          </button>
-        </div>
       </div>
-
-      <button className="contacts-manage" onClick={onSettings}>
-        <Users size={16} />
-        <span>Manage local agents</span>
-      </button>
 
       <div className="contact-list">
         <button className="contact-folder" onClick={() => setGroupsOpen((open) => !open)} aria-expanded={groupsOpen}>
@@ -115,21 +99,12 @@ export function ContactList({
         {groupsOpen && (
           <div className="contact-folder-body">
             {groups.map(groupRow)}
-            <button className="contact-row ghost" onClick={onCreateGroup}>
-              <span className="contact-add">
-                <Plus size={15} />
-              </span>
-              <span className="contact-row-copy">
-                <strong>{t('New group')}</strong>
-                <small>Put several bots in one room</small>
-              </span>
-            </button>
           </div>
         )}
 
         <button className="contact-folder" onClick={() => setBotsOpen((open) => !open)} aria-expanded={botsOpen}>
           <ChevronRight size={15} className={botsOpen ? 'open' : ''} />
-          <span>{t('Bots')}</span>
+          <span>{t('Agents')}</span>
           <em>{bots.length}</em>
         </button>
         {botsOpen && (
@@ -138,7 +113,7 @@ export function ContactList({
               <>
                 <div className="contact-letter starred">
                   <Star size={12} />
-                  <span>Starred</span>
+                  <span>{t('Starred')}</span>
                 </div>
                 {starred.map(botRow)}
               </>
@@ -149,7 +124,7 @@ export function ContactList({
                 {section.contacts.map(botRow)}
               </div>
             ))}
-            {!bots.length && <p className="empty-search">No bots match “{query.trim()}”.</p>}
+            {!bots.length && <p className="empty-search">{tr('No agents match “{query}”.', { query: query.trim() })}</p>}
           </div>
         )}
       </div>

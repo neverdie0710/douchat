@@ -8,16 +8,38 @@ import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarW
 
 export const colors = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
 
+export function isDrDou(agent: AgentConfig): boolean {
+  return agent.id.startsWith('dr-dou-')
+}
+
+/** Built-in identities are stored under a stable canonical name, while their
+ * presentation follows the interface language. A user-supplied rename wins. */
+export function agentDisplayName(agent: AgentConfig): string {
+  return isDrDou(agent) && agent.name === 'Dr. Dou' ? t('Dr. Dou') : agent.name
+}
+
+export function agentDisplayRole(agent: AgentConfig): string {
+  return isDrDou(agent) && agent.role === '豆博士' ? t('Douchat assistant') : agent.role
+}
+
+export function conversationDisplayName(conversation: Conversation, agents: AgentConfig[]): string {
+  if (conversation.type !== 'direct') return conversation.name
+  const agent = agents.find((item) => item.id === conversation.agentIds[0])
+  return agent ? agentDisplayName(agent) : conversation.name
+}
+
 export function AgentAvatar({ agent, size = 36 }: { agent: AgentConfig; size?: number }): ReactElement {
   const logo = agent.localAgentId ? agentIcons[agent.localAgentId] : undefined
-  const picture = agent.avatar || logo
+  const builtInPicture = isDrDou(agent) ? agentIcons['dr-dou-human'] : undefined
+  const picture = agent.avatar || logo || builtInPicture
+  const displayName = agentDisplayName(agent)
   return (
     <span
-      className={`agent-avatar${logo && !agent.avatar ? ' local-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}`}
+      className={`agent-avatar${logo && !agent.avatar ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}`}
       data-agent={agent.localAgentId}
       style={{ '--agent-color': agent.color, '--avatar-size': `${size}px` } as CSSProperties}
-      aria-label={agent.name}
-      title={agent.name}
+      aria-label={displayName}
+      title={displayName}
     >
       {picture ? <img src={picture} alt="" /> : <span className="avatar-eyes">
         <i />
@@ -95,18 +117,19 @@ export function ConversationAvatar({
 }
 
 export function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(timestamp)
+  return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { hour: 'numeric', minute: '2-digit' }).format(timestamp)
 }
 
 export function relativeTime(at: number, now: number): string {
   const minutes = Math.max(0, Math.floor((now - at) / 60_000))
-  if (minutes < 1) return 'now'
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 1) return t('now')
+  const relative = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, { numeric: 'always', style: 'narrow' })
+  if (minutes < 60) return relative.format(-minutes, 'minute')
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return relative.format(-hours, 'hour')
   const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(at)
+  if (days < 7) return relative.format(-days, 'day')
+  return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { month: 'short', day: 'numeric' }).format(at)
 }
 
 export function dayLabel(timestamp: number): string {
@@ -114,9 +137,9 @@ export function dayLabel(timestamp: number): string {
   const today = new Date()
   const yesterday = new Date(today)
   yesterday.setDate(today.getDate() - 1)
-  if (date.toDateString() === today.toDateString()) return 'Today'
-  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
+  if (date.toDateString() === today.toDateString()) return t('Today')
+  if (date.toDateString() === yesterday.toDateString()) return t('Yesterday')
+  return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { month: 'short', day: 'numeric' }).format(date)
 }
 
 export function isDifferentDay(current: ChatMessage, previous?: ChatMessage): boolean {

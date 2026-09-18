@@ -15,6 +15,9 @@ export interface GatewayConfig {
   authName?: string
   authSource?: string
   providerName?: string
+  /** First-party Cloud Chat guarantees a vision-capable default even when its
+   * public catalog keeps the capability list transport-focused. */
+  assumeImageInput?: boolean
   onUnauthorized?: () => void | Promise<void>
 }
 
@@ -53,7 +56,7 @@ interface GatewayModelEntry {
 
 /** Only chat models can back a bot; the same endpoint also lists image,
  * video, audio and music models. */
-function chatModels(payload: unknown, baseUrl: string): Model<'openai-completions'>[] {
+function chatModels(payload: unknown, baseUrl: string, assumeImageInput = false): Model<'openai-completions'>[] {
   const data = (payload as { data?: unknown })?.data
   if (!Array.isArray(data)) return []
   return data.flatMap((entry: GatewayModelEntry) => {
@@ -62,6 +65,9 @@ function chatModels(payload: unknown, baseUrl: string): Model<'openai-completion
     const chat = entry.model_type === 'chat' || capabilities.includes('chat.completions')
     if (!id || !chat) return []
     const name = typeof entry.display_name === 'string' && entry.display_name.trim() ? entry.display_name.trim() : id
+    const supportsImages = assumeImageInput
+      || /vision|image|omni|4o|glm-4v/i.test(id)
+      || capabilities.some((capability) => typeof capability === 'string' && /vision|image|multimodal/i.test(capability))
     return [
       {
         id,
@@ -72,7 +78,7 @@ function chatModels(payload: unknown, baseUrl: string): Model<'openai-completion
         // The endpoint publishes no pricing or window; keep the numbers honest
         // rather than inventing per-model limits.
         reasoning: /think|reason|-r\d|glm|deepseek/i.test(id),
-        input: /vision|image|omni|4o|glm-4v/i.test(id) ? ['text' as const, 'image' as const] : ['text' as const],
+        input: supportsImages ? ['text' as const, 'image' as const] : ['text' as const],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 8_192,
@@ -98,7 +104,7 @@ export async function fetchGatewayModels(
     const payload = await response.json().catch(() => null) as { error?: { message?: string } } | null
     throw new Error(payload?.error?.message || `The gateway rejected the model list (${response.status})`)
   }
-  return chatModels(await response.json(), baseUrl)
+  return chatModels(await response.json(), baseUrl, config.assumeImageInput)
 }
 
 /** Resolve on every request so sign-out immediately makes the provider unusable. */

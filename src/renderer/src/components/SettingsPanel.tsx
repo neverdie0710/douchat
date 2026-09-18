@@ -1,16 +1,16 @@
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t } from '../preferences'
-import { SlidersHorizontal, Bot, Camera, CircleUserRound, LogOut, PlugZap, RefreshCw, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, Camera, CircleUserRound, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
-import type { AppSnapshot, DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput } from '../../../shared/types'
+import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState } from '../../../shared/types'
+import douchatLogo from '../../../../resources/icons/douchat.png'
 import { readAvatarFile } from '../avatarFile'
 import { UserAvatar } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'agents' | 'models'
+export type SettingsTab = 'profile' | 'general' | 'agents' | 'about'
 
-export function SettingsPanel({ snapshot, user, agents, scanning, error, tab, onTab, onClose, onSignOut, onUpdateProfile, onRefresh, onCreate, onContact, onEndpoint }: {
-  snapshot: AppSnapshot
+export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClose, onSignOut, onUpdateProfile, onDetect }: {
   user: DesktopAuthUser
   agents: LocalAgent[]
   scanning: boolean
@@ -20,10 +20,7 @@ export function SettingsPanel({ snapshot, user, agents, scanning, error, tab, on
   onClose: () => void
   onSignOut: () => Promise<void>
   onUpdateProfile: (input: UpdateDesktopProfileInput) => Promise<void>
-  onRefresh: () => void
-  onCreate: (agent: LocalAgent) => void
-  onContact: (id: string) => void
-  onEndpoint: () => void
+  onDetect: () => void
 }): ReactElement {
   const preferences = usePreferences()
   const [signingOut, setSigningOut] = useState(false)
@@ -47,21 +44,15 @@ export function SettingsPanel({ snapshot, user, agents, scanning, error, tab, on
       setSigningOut(false)
     }
   }
-  const row = (agent: LocalAgent): ReactElement => {
-    const contacts = snapshot.agents.filter((contact) => contact.localAgentId === agent.id)
-    return <article className="local-agent-row" key={agent.id}>
+  const row = (agent: LocalAgent): ReactElement => (
+    <article className="local-agent-row" key={agent.id}>
       <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{agentIcons[agent.id] ? <img src={agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
       <div className="local-agent-copy">
         <strong>{agent.name}</strong>
         <code title={agent.path}>{agent.path || agent.command}</code>
-        <small>{!agent.installed ? t('Not installed') : agent.chatSupported ? t('Installed · uses your local login and default model') : t('Installed · chat adapter coming soon')}</small>
-        {contacts.length > 0 && <div className="local-agent-contacts">{contacts.map((contact) =>
-          <button key={contact.id} onClick={() => onContact(contact.id)}>{contact.name}</button>
-        )}</div>}
       </div>
-      {agent.installed && <button className="secondary-button" disabled={!agent.chatSupported} onClick={() => onCreate(agent)}>{t('Create contact')}</button>}
     </article>
-  }
+  )
   return <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <aside className="settings-sidebar">
@@ -69,8 +60,8 @@ export function SettingsPanel({ snapshot, user, agents, scanning, error, tab, on
       <div className="settings-tabs" role="tablist" aria-label={t('Settings')}>
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
-        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Agents')}</span></button>
-        <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><PlugZap size={18} /><span>{t('Models')}</span></button>
+        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local proxies')}</span></button>
+        <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
     </aside>
     <main id="settings-content" role="tabpanel" aria-labelledby={`${tab}-tab`} className="settings-content">
@@ -89,23 +80,98 @@ export function SettingsPanel({ snapshot, user, agents, scanning, error, tab, on
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
       </> : tab === 'agents'  ? <>
-        <header className="settings-heading"><div><h1>{t('Local agents')}</h1><p>{t('Connect the agents on this computer to your contacts.')}</p></div>
-          <button className="secondary-button" disabled={scanning} onClick={onRefresh}><RefreshCw size={15} />{scanning ? t('Scanning…') : t('Refresh')}</button>
+        <header className="settings-heading local-proxy-heading"><div><h1>{t('Local proxies')}</h1><p>{t('View the local proxies available on this computer.')}</p></div>
+          <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
-        <p className="settings-note">{t('Each contact has its own name, instructions and conversation history. Local agents use their existing login and model settings.')}</p>
-        {error && <p className="settings-error" role="alert">{error}</p>}
-        <section aria-label="Installed agents"><h2>{t('Installed')} <span>{installed.length}</span></h2>
+        {error && <p className="settings-error" role="alert">{t(error)}</p>}
+        <section aria-label={t('Installed proxies')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
           {installed.map(row)}
-          {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported agent commands found. Install an agent in your terminal, then refresh.')}</p>}
+          {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local proxies found. Install one in your terminal, then detect again.')}</p>}
         </section>
-        {missing.length > 0 && <section aria-label="Not installed agents"><h2>{t('Not installed')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : <>
-        <header className="settings-heading"><div><h1>{t('Models')}</h1><p>{t('Cloud models are provided by your Douchat account.')}</p></div></header>
-        <article className="local-agent-row"><PlugZap size={24} /><div className="local-agent-copy"><strong>{snapshot.runtime.mode === 'live' ? t('Douchat Cloud connected') : t('Douchat Cloud unavailable')}</strong><small>{snapshot.endpoint.baseUrl}</small><small>{t('Available cloud models').replace('{count}', String(snapshot.models.length))}</small>{snapshot.runtime.error && <small className="settings-error">{t(snapshot.runtime.error)}</small>}</div>{snapshot.endpoint.source !== 'account' && <button className="secondary-button" onClick={onEndpoint}>{t('Configure')}</button>}</article>
-      </>}
+        {missing.length > 0 && <section aria-label={t('Not installed proxies')}><h2>{t('Not installed')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
+      </> : <AboutTab />}
     </main>
     </section>
   </div>
+}
+
+function AboutTab(): ReactElement {
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+  const [requestError, setRequestError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void window.douchat.getUpdateState()
+      .then((state) => { if (active) setUpdate(state) })
+      .catch((cause) => { if (active) setRequestError(cause instanceof Error ? cause.message : String(cause)) })
+    const unsubscribe = window.douchat.onUpdateState((state) => { if (active) setUpdate(state) })
+    return () => { active = false; unsubscribe() }
+  }, [])
+
+  const check = async (): Promise<void> => {
+    setRequestError('')
+    try { setUpdate(await window.douchat.checkForUpdates()) }
+    catch (cause) { setRequestError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
+  const install = async (): Promise<void> => {
+    setRequestError('')
+    try { setUpdate(await window.douchat.installUpdate()) }
+    catch (cause) { setRequestError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+
+  const status = update?.status ?? 'idle'
+  const version = update?.availableVersion
+  const error = requestError || update?.error || ''
+  const checkButton = (
+    <button
+      className="secondary-button update-check-button"
+      disabled={status === 'checking' || status === 'disabled'}
+      title={status === 'disabled' ? t('Update checks are available in packaged builds.') : undefined}
+      onClick={() => void check()}
+    >
+      {status === 'checking' && <RefreshCw className="spin" size={15} />}
+      {status === 'checking' ? t('Checking for updates…') : t('Check for updates')}
+    </button>
+  )
+  return <>
+    <header className="settings-heading"><div><h1>{t('About')}</h1><p>{t('Version information and software updates.')}</p></div></header>
+    <section className="about-card">
+      <div className="about-version-row">
+        <div className="about-product">
+          <img src={douchatLogo} alt="" />
+          <div><strong>Douchat</strong><span>{t('Version')} {update?.currentVersion ?? '…'}</span></div>
+        </div>
+        <div className="about-action">
+          {status === 'available'
+            ? <button className="primary-button" onClick={() => void install()}>{t('Update to v{version} and restart').replace('{version}', version ?? '')}</button>
+            : status === 'downloaded'
+              ? <button className="primary-button" onClick={() => void install()}>{t('Restart to finish update')}</button>
+              : status === 'installing'
+                ? <button className="secondary-button update-check-button" disabled>{t('Installing update and restarting…')}</button>
+                : status === 'downloading'
+                  ? <button className="secondary-button update-check-button" disabled>{t('Downloading update…')} {update?.percent ?? 0}%</button>
+                  : checkButton}
+        </div>
+      </div>
+      <div className={`update-panel update-panel-${status}`} aria-live="polite">
+        {status === 'downloading' ? <>
+          <div className="update-progress"><i style={{ width: `${update?.percent ?? 0}%` }} /></div>
+          <span>{t('Downloading the verified update from Douchat…')}</span>
+        </> : status === 'available' ? <>
+          <div className="update-copy"><strong>{t('Version {version} is available').replace('{version}', version ?? '')}</strong>{update?.releaseNotes && <p>{update.releaseNotes}</p>}</div>
+        </> : status === 'downloaded' ? <>
+          <div className="update-copy"><strong>{t('Update ready to install')}</strong>{Boolean(update?.busyTasks) && <p>{t('Finish {count} active tasks before restarting.').replace('{count}', String(update?.busyTasks))}</p>}</div>
+        </> : status === 'installing' ? <span>{t('Installing update and restarting…')}</span>
+          : status === 'checking' ? <span>{t('Connecting to the Douchat update service…')}</span>
+            : status === 'up-to-date' ? <span>{t('You are using the latest version.')}</span>
+              : status === 'disabled' ? <span>{t('Update checks are available in packaged builds.')}</span>
+                : <span>{t('Check for updates to compare this version with the latest release.')}</span>}
+        {error && <p className="settings-error">{t('Update failed:')} {t(error)}</p>}
+      </div>
+    </section>
+    <p className="settings-note about-note">{t('Updates are downloaded from signed Douchat releases. The app waits for active agent tasks before restarting.')}</p>
+  </>
 }
 
 /** One account, one identity: edits are saved to the service and the returned
@@ -209,6 +275,6 @@ function ProfileTab({ user, signingOut, signOutError, onSignOut, onUpdateProfile
       <div><strong>{t('Signed in to Douchat')}</strong><span>{user.email}</span></div>
       <button className="sign-out-button" disabled={signingOut} onClick={onSignOut}><LogOut size={15} />{t(signingOut ? 'Signing out…' : 'Sign out')}</button>
     </section>
-    {signOutError && <p className="settings-error" role="alert">{signOutError}</p>}
+    {signOutError && <p className="settings-error" role="alert">{t(signOutError)}</p>}
   </>
 }

@@ -2,12 +2,23 @@
   "name": "douchat",
   "version": "0.1.0",
   "private": true,
+  "author": "ThinkAny",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thinkany-ai/douchat.git"
+  },
   "description": "A desktop workspace where AI agents work and talk together.",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "prepare:dev-host": "node scripts/prepare-electron-dev-host.mjs",
+    "dev": "npm run prepare:dev-host && electron-vite dev",
     "build": "electron-vite build",
+    "package": "npm run build && electron-builder --dir --publish never",
+    "package:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --universal --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "package:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "package:linux": "npm run build && electron-builder --linux AppImage deb --x64 --publish never",
+    "release:mac": "npm run build && electron-builder --mac dmg zip --universal --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run"
@@ -17,19 +28,29 @@
     "@earendil-works/pi-ai": "^0.84.2",
     "@sinclair/typebox": "^0.34.41",
     "@streamdown/cjk": "^1.0.3",
+    "@streamdown/mermaid": "^1.0.2",
+    "dompurify": "^3.4.15",
     "dotenv": "^17.2.1",
+    "electron-updater": "^6.8.9",
+    "imapflow": "^2.0.5",
     "lucide-react": "^0.468.0",
+    "mailparser": "^3.9.28",
+    "nodemailer": "^10.0.10",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "streamdown": "^2.6.0"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^24.3.0",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.1",
     "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "jsdom": "^27.3.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.2",
     "vitest": "^3.2.4"
@@ -37,11 +58,92 @@
   "build": {
     "appId": "ai.thinkany.douchat",
     "productName": "Douchat",
+    "asar": true,
+    "directories": {
+      "output": "release/${version}"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "resources/icons/*.png"
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "protocols": [
       {
         "name": "Douchat sign-in",
-        "schemes": ["douchat"]
+        "schemes": [
+          "douchat"
+        ]
       }
-    ]
+    ],
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://cdn.douchat.ai",
+        "channel": "latest"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "resources/icons/douchat.icns",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。"
+      },
+      "hardenedRuntime": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "notarize": true,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Douchat ${version}"
+    },
+    "win": {
+      "icon": "resources/icons/douchat.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true
+    },
+    "linux": {
+      "icon": "resources/icons/douchat.png",
+      "category": "Utility",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
   }
 }

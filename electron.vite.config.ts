@@ -17,6 +17,15 @@ export default defineConfig({
     }
   },
   renderer: {
-    plugins: [react()]
+    plugins: [react()],
+    // Keep clear of Termany's release PTY port (5174) and Vite's 5173 fallback chain.
+    server: {
+      port: 5275,
+      strictPort: true
+    },
+    preview: {
+      port: 5274,
+      strictPort: true
+    }
   }
 })

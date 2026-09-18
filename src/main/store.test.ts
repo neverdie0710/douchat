@@ -44,6 +44,91 @@ describe('DouchatStore', () => {
     expect(store.conversations.find((conversation) => conversation.id === 'crew')?.agentIds).toEqual(['dobi', 'lin'])
   })
 
+  it('reopens an existing direct chat or recreates it after deletion', () => {
+    const store = createStore()
+    const originalTopic = store.activeTopicId('direct-dobi')
+    store.updateConversation('direct-dobi', { hidden: true })
+
+    const reopened = store.ensureDirectConversation('dobi')
+    expect(reopened.created).toBe(false)
+    expect(reopened.conversation.hidden).toBeUndefined()
+    expect(reopened.conversation.activeTopicId).toBe(originalTopic)
+
+    store.deleteConversation('direct-lin')
+    const recreated = store.ensureDirectConversation('lin')
+    expect(recreated.created).toBe(true)
+    expect(recreated.conversation).toMatchObject({ id: 'direct-lin', type: 'direct', agentIds: ['lin'] })
+    expect(recreated.conversation.topics).toHaveLength(1)
+    expect(() => store.ensureDirectConversation('missing')).toThrow('Contact not found')
+  })
+
+  it('backfills private source content in existing reply records', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-private-source-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const store = new DouchatStore(file)
+    store.addMessage({
+      conversationId: 'direct-dobi',
+      topicId: store.activeTopicId('direct-dobi'),
+      authorId: 'dobi',
+      authorName: 'Dobi',
+      text: 'I sent Lin the details.',
+      kind: 'message',
+      deliveries: [{ id: 'legacy-delivery', recipientId: 'lin', recipientName: 'Lin', content: '今晚七点半，老地方见。' }]
+    })
+    store.addMessage({
+      conversationId: 'direct-lin',
+      topicId: store.activeTopicId('direct-lin'),
+      authorId: 'lin',
+      authorName: 'Lin',
+      text: '好，我会准时到。',
+      kind: 'message',
+      source: { kind: 'bot', id: 'dobi', name: 'Dobi' }
+    })
+    store.close()
+
+    const restored = new DouchatStore(file)
+    expect(restored.topicMessages('direct-lin', restored.activeTopicId('direct-lin')).at(-1)?.source?.content)
+      .toBe('今晚七点半，老地方见。')
+    expect(restored.topicMessages('direct-dobi', restored.activeTopicId('direct-dobi')).at(-1)?.deliveries?.[0].replies?.[0])
+      .toMatchObject({ senderId: 'lin', content: '好，我会准时到。' })
+    restored.close()
+  })
+
+  it('creates one Dr. Dou Cloud contact per newly signed-in account', () => {
+    const store = createStore()
+    const binding = { provider: 'gateway', model: 'default' }
+
+    const first = store.ensureDefaultCloudContact('user-1', binding)
+    expect(first.created).toBe(true)
+    expect(first.agent).toMatchObject({
+      name: 'Dr. Dou',
+      role: '豆博士',
+      provider: 'gateway',
+      model: 'default'
+    })
+    expect(first.conversation).toMatchObject({ type: 'direct', agentIds: [first.agent?.id] })
+    expect(store.defaultConversationId).toBe(first.conversation?.id)
+
+    const repeated = store.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'changed' })
+    expect(repeated.created).toBe(false)
+    expect(repeated.agent?.id).toBe(first.agent?.id)
+    expect(store.agents.filter((agent) => agent.name === 'Dr. Dou')).toHaveLength(1)
+
+    const second = store.ensureDefaultCloudContact('user-2', binding)
+    expect(second.created).toBe(true)
+    expect(second.agent?.id).not.toBe(first.agent?.id)
+    expect(store.defaultConversationId).toBe(second.conversation?.id)
+    expect(store.agents.filter((agent) => agent.name === 'Dr. Dou')).toHaveLength(2)
+
+    store.deleteAgent(first.agent!.id)
+    const deleted = store.ensureDefaultCloudContact('user-1', binding)
+    expect(deleted.created).toBe(false)
+    expect(deleted.agent).toBeUndefined()
+    expect(store.defaultConversationId).toBeUndefined()
+    expect(store.agents.filter((agent) => agent.name === 'Dr. Dou')).toHaveLength(1)
+  })
+
   it('gives a new bot its own private chat without joining existing groups', () => {
     const store = createStore()
     const agent = store.createAgent({
@@ -320,6 +405,23 @@ describe('DouchatStore', () => {
     expect(restored.routines[0]).toMatchObject({ name: 'Morning brief', nextRunAt: 2_000, enabled: true })
     expect(restored.runs[0]).toMatchObject({ routineId: routine.id, status: 'succeeded' })
     expect(restored.runEvents[0]).toMatchObject({ runId: run.id, label: 'Finished' })
+  })
+
+  it('persists connector metadata without credentials', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-connectors-'))
+    temporaryDirectories.push(directory)
+    const filePath = join(directory, 'douchat.db')
+    const store = new DouchatStore(filePath)
+    store.setConnectors([{
+      id: 'email-work', kind: 'email', name: 'Work email', email: 'team@example.com', username: 'team@example.com',
+      imapHost: 'imap.example.com', imapPort: 993, imapSecure: true,
+      smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true,
+      agentIds: ['dobi'], status: 'connected', updatedAt: 123
+    }])
+
+    const restored = new DouchatStore(filePath).connectors
+    expect(restored).toEqual([expect.objectContaining({ id: 'email-work', email: 'team@example.com', agentIds: ['dobi'] })])
+    expect(JSON.stringify(restored)).not.toContain('password')
   })
 })
 
