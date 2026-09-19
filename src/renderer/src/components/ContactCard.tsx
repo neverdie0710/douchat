@@ -122,7 +122,7 @@ export function ContactCard({
             <section className="contact-profile-section">
               <h2>{t('More information')}</h2>
               <Field label={t('Shared groups')} value={String(sharedGroupCount)} />
-              <Field label={t('Source')} value={t(agent.localAgentId ? 'Local proxy' : 'Cloud model')} />
+              <Field label={t('Source')} value={t(agent.localAgentId ? 'Local agent' : 'Cloud model')} />
               <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />
             </section>
 

@@ -55,8 +55,14 @@ export function speechRecognitionLanguage(documentLanguage: string): string {
 }
 
 /** Returns a translation key so the component can localise the browser error. */
-export function speechRecognitionErrorMessage(error: string): string {
-  if (error === 'not-allowed' || error === 'service-not-allowed') {
+export function speechRecognitionErrorMessage(error: string, microphoneConfirmed = false): string {
+  if (
+    error === 'service-not-allowed'
+    || (microphoneConfirmed && (error === 'not-allowed' || error === 'network'))
+  ) {
+    return 'Voice recognition service is unavailable in this version of Douchat.'
+  }
+  if (error === 'not-allowed') {
     return 'Microphone access is off. Allow Douchat in System Settings, then restart the app.'
   }
   if (error === 'audio-capture') return 'No microphone was found.'

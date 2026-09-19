@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DouchatStore } from './store'
 
@@ -9,7 +10,7 @@ const temporaryDirectories: string[] = []
 function createStore(): DouchatStore {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-test-'))
   temporaryDirectories.push(directory)
-  return new DouchatStore(join(directory, 'douchat.db'))
+  return new DouchatStore(join(directory, 'douchat.db'), { seedDemo: true })
 }
 
 afterEach(() => {
@@ -23,17 +24,17 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-menu-'))
     temporaryDirectories.push(directory)
     const file = join(directory, 'douchat.db')
-    const store = new DouchatStore(file)
+    const store = new DouchatStore(file, { seedDemo: true })
     store.setConversationPinned('direct-dobi', true)
     store.updateConversation('direct-dobi', { muted: true, hidden: true, manuallyUnread: true })
-    const restored = new DouchatStore(file)
+    const restored = new DouchatStore(file, { seedDemo: true })
     expect(restored.conversation('direct-dobi')).toMatchObject({ pinned: true, muted: true, hidden: true, manuallyUnread: true, unread: 1 })
     restored.addUnread('direct-dobi', 1)
     expect(restored.conversation('direct-dobi')).toMatchObject({ hidden: false, unread: 2, muted: true })
     restored.markConversationRead('direct-dobi')
     expect(restored.conversation('direct-dobi')).toMatchObject({ manuallyUnread: false, unread: 0 })
     restored.deleteConversation('direct-dobi')
-    expect(new DouchatStore(file).conversation('direct-dobi')).toBeUndefined()
+    expect(new DouchatStore(file, { seedDemo: true }).conversation('direct-dobi')).toBeUndefined()
   })
 
   it('starts with a crew and private threads', () => {
@@ -42,6 +43,66 @@ describe('DouchatStore', () => {
     expect(store.agents.map((agent) => agent.name)).toEqual(['Dobi', 'Lin'])
     expect(store.conversations.filter((conversation) => conversation.type === 'direct')).toHaveLength(2)
     expect(store.conversations.find((conversation) => conversation.id === 'crew')?.agentIds).toEqual(['dobi', 'lin'])
+  })
+
+  it('starts production profiles empty and removes an untouched legacy demo', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-empty-'))
+    temporaryDirectories.push(directory)
+    const empty = new DouchatStore(join(directory, 'empty.db'))
+    expect(empty.agents).toEqual([])
+    expect(empty.conversations).toEqual([])
+    empty.close()
+
+    const legacyFile = join(directory, 'legacy.db')
+    new DouchatStore(legacyFile, { seedDemo: true }).close()
+    const migrated = new DouchatStore(legacyFile)
+    expect(migrated.agents).toEqual([])
+    expect(migrated.conversations).toEqual([])
+  })
+
+  it('backfills a stable illustrated avatar seed for existing cloud contacts', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-avatar-migration-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'legacy.db')
+    const original = new DouchatStore(file, { seedDemo: true })
+    original.close()
+
+    // Model the on-disk shape written by releases before avatarSeed existed.
+    const database = new DatabaseSync(file)
+    const rows = database.prepare('SELECT id, data FROM agents').all() as Array<{ id: string; data: string }>
+    for (const row of rows) {
+      const agent = JSON.parse(row.data) as { avatarSeed?: string }
+      delete agent.avatarSeed
+      database.prepare('UPDATE agents SET data = ? WHERE id = ?').run(JSON.stringify(agent), row.id)
+    }
+    database.close()
+
+    const migrated = new DouchatStore(file, { seedDemo: true })
+    const seeds = migrated.agents.map((agent) => agent.avatarSeed)
+    expect(seeds.every((seed) => /^[0-9a-f-]{36}$/i.test(seed ?? ''))).toBe(true)
+    migrated.close()
+
+    expect(new DouchatStore(file, { seedDemo: true }).agents.map((agent) => agent.avatarSeed)).toEqual(seeds)
+  })
+
+  it('preserves legacy demo contacts after the user has chatted with them', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-used-demo-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'legacy.db')
+    const legacy = new DouchatStore(file, { seedDemo: true })
+    legacy.addMessage({
+      conversationId: 'direct-dobi',
+      topicId: legacy.activeTopicId('direct-dobi'),
+      authorId: 'user',
+      authorName: 'You',
+      text: 'Keep this conversation',
+      kind: 'message'
+    })
+    legacy.close()
+
+    const migrated = new DouchatStore(file)
+    expect(migrated.agent('dobi')).toBeDefined()
+    expect(migrated.conversation('direct-dobi')).toBeDefined()
   })
 
   it('reopens an existing direct chat or recreates it after deletion', () => {
@@ -66,7 +127,7 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-private-source-'))
     temporaryDirectories.push(directory)
     const file = join(directory, 'douchat.db')
-    const store = new DouchatStore(file)
+    const store = new DouchatStore(file, { seedDemo: true })
     store.addMessage({
       conversationId: 'direct-dobi',
       topicId: store.activeTopicId('direct-dobi'),
@@ -87,7 +148,7 @@ describe('DouchatStore', () => {
     })
     store.close()
 
-    const restored = new DouchatStore(file)
+    const restored = new DouchatStore(file, { seedDemo: true })
     expect(restored.topicMessages('direct-lin', restored.activeTopicId('direct-lin')).at(-1)?.source?.content)
       .toBe('今晚七点半，老地方见。')
     expect(restored.topicMessages('direct-dobi', restored.activeTopicId('direct-dobi')).at(-1)?.deliveries?.[0].replies?.[0])
@@ -144,6 +205,8 @@ describe('DouchatStore', () => {
     const direct = store.conversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
     )
+    expect(agent.avatarSeed).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(store.agent(agent.id)?.avatarSeed).toBe(agent.avatarSeed)
     expect(direct?.topics).toHaveLength(1)
   })
 
@@ -151,11 +214,13 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-local-store-'))
     temporaryDirectories.push(directory)
     const file = join(directory, 'douchat.db')
-    const store = new DouchatStore(file)
+    const store = new DouchatStore(file, { seedDemo: true })
     const input = { name: 'Research', role: 'Researcher', instructions: 'Find evidence', color: '#14B8A6', provider: 'local', model: 'default', localAgentId: 'codex' }
     const first = store.createAgent(input)
     const second = store.createAgent({ ...input, name: 'Builder' })
-    const restored = new DouchatStore(file)
+    const restored = new DouchatStore(file, { seedDemo: true })
+    expect(first.avatarSeed).toBeUndefined()
+    expect(second.avatarSeed).toBeUndefined()
     expect(restored.agent(first.id)?.localAgentId).toBe('codex')
     expect(restored.agent(second.id)?.localAgentId).toBe('codex')
     expect(restored.activeTopicId(`direct-${first.id}`)).not.toBe(restored.activeTopicId(`direct-${second.id}`))
@@ -322,7 +387,7 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-test-'))
     temporaryDirectories.push(directory)
     const filePath = join(directory, 'douchat.db')
-    const store = new DouchatStore(filePath)
+    const store = new DouchatStore(filePath, { seedDemo: true })
     store.addMessage({
       conversationId: 'crew',
       topicId: store.activeTopicId('crew'),
@@ -332,7 +397,7 @@ describe('DouchatStore', () => {
       kind: 'message'
     })
 
-    const restored = new DouchatStore(filePath)
+    const restored = new DouchatStore(filePath, { seedDemo: true })
     expect(restored.messages.at(-1)?.text).toBe('Build the first version.')
   })
 
@@ -340,12 +405,12 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-test-'))
     temporaryDirectories.push(directory)
     const filePath = join(directory, 'douchat.db')
-    const store = new DouchatStore(filePath)
+    const store = new DouchatStore(filePath, { seedDemo: true })
     const picture = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
 
     expect(store.userAvatar).toBe('')
     store.setUserAvatar(picture)
-    expect(new DouchatStore(filePath).userAvatar).toBe(picture)
+    expect(new DouchatStore(filePath, { seedDemo: true }).userAvatar).toBe(picture)
 
     // A remote URL would let the state file pull an image at render time, and
     // an oversized payload would slow every load; both are refused outright.
@@ -354,31 +419,31 @@ describe('DouchatStore', () => {
     expect(store.userAvatar).toBe(picture)
 
     store.setUserAvatar('')
-    expect(new DouchatStore(filePath).userAvatar).toBe('')
+    expect(new DouchatStore(filePath, { seedDemo: true }).userAvatar).toBe('')
   })
 
   it('persists a contact picture, clears it, and refuses remote images', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-contact-avatar-'))
     temporaryDirectories.push(directory)
     const filePath = join(directory, 'douchat.db')
-    const store = new DouchatStore(filePath)
+    const store = new DouchatStore(filePath, { seedDemo: true })
     const picture = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
 
     store.updateAgent('dobi', { avatar: picture })
-    expect(new DouchatStore(filePath).agent('dobi')?.avatar).toBe(picture)
+    expect(new DouchatStore(filePath, { seedDemo: true }).agent('dobi')?.avatar).toBe(picture)
 
     store.updateAgent('dobi', { avatar: 'https://example.com/contact.png' })
     expect(store.agent('dobi')?.avatar).toBe(picture)
 
     store.updateAgent('dobi', { avatar: '' })
-    expect(new DouchatStore(filePath).agent('dobi')?.avatar).toBe('')
+    expect(new DouchatStore(filePath, { seedDemo: true }).agent('dobi')?.avatar).toBe('')
   })
 
   it('persists routines and their run history', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-test-'))
     temporaryDirectories.push(directory)
     const filePath = join(directory, 'douchat.db')
-    const store = new DouchatStore(filePath)
+    const store = new DouchatStore(filePath, { seedDemo: true })
     const routine = store.createRoutine(
       {
         name: 'Morning brief',
@@ -401,7 +466,7 @@ describe('DouchatStore', () => {
     store.updateRun(run.id, { status: 'succeeded', finishedAt: 3_000 })
     store.addRunEvent({ runId: run.id, type: 'status', label: 'Finished', status: 'succeeded' })
 
-    const restored = new DouchatStore(filePath)
+    const restored = new DouchatStore(filePath, { seedDemo: true })
     expect(restored.routines[0]).toMatchObject({ name: 'Morning brief', nextRunAt: 2_000, enabled: true })
     expect(restored.runs[0]).toMatchObject({ routineId: routine.id, status: 'succeeded' })
     expect(restored.runEvents[0]).toMatchObject({ runId: run.id, label: 'Finished' })
@@ -411,7 +476,7 @@ describe('DouchatStore', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-connectors-'))
     temporaryDirectories.push(directory)
     const filePath = join(directory, 'douchat.db')
-    const store = new DouchatStore(filePath)
+    const store = new DouchatStore(filePath, { seedDemo: true })
     store.setConnectors([{
       id: 'email-work', kind: 'email', name: 'Work email', email: 'team@example.com', username: 'team@example.com',
       imapHost: 'imap.example.com', imapPort: 993, imapSecure: true,
@@ -419,7 +484,7 @@ describe('DouchatStore', () => {
       agentIds: ['dobi'], status: 'connected', updatedAt: 123
     }])
 
-    const restored = new DouchatStore(filePath).connectors
+    const restored = new DouchatStore(filePath, { seedDemo: true }).connectors
     expect(restored).toEqual([expect.objectContaining({ id: 'email-work', email: 'team@example.com', agentIds: ['dobi'] })])
     expect(JSON.stringify(restored)).not.toContain('password')
   })

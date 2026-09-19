@@ -12,6 +12,7 @@ const entitlements = join(projectRoot, 'resources', 'entitlements.mac.plist')
 const developmentBundleId = 'ai.thinkany.douchat.dev'
 const launchServicesRegister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 const microphoneUsageDescription = 'Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。'
+const speechRecognitionUsageDescription = 'Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。'
 const helperBundles = [
   { directory: 'Electron Helper.app', bundleId: `${developmentBundleId}.helper`, name: 'Douchat Helper' },
   { directory: 'Electron Helper (Renderer).app', bundleId: `${developmentBundleId}.helper.Renderer`, name: 'Douchat Helper (Renderer)' },
@@ -38,16 +39,37 @@ function signingIdentity() {
 }
 
 function plistValue(key, plist = infoPlist) {
-  return execFileSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', plist], { encoding: 'utf8' }).trim()
+  return execFileSync('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', plist], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore']
+  }).trim()
 }
 
 function setPlistString(key, value, plist = infoPlist) {
-  execFileSync('/usr/bin/plutil', ['-replace', key, '-string', value, plist], { stdio: 'inherit' })
+  let operation = '-replace'
+  try {
+    plistValue(key, plist)
+  } catch {
+    operation = '-insert'
+  }
+  execFileSync('/usr/bin/plutil', [operation, key, '-string', value, plist], { stdio: 'inherit' })
 }
 
-function hasPreparedBundleIdentifiers() {
-  if (plistValue('CFBundleIdentifier') !== developmentBundleId) return false
-  return helperBundles.every((helper) => plistValue('CFBundleIdentifier', helper.infoPlist) === helper.bundleId)
+function hasPreparedBundleMetadata() {
+  try {
+    if (
+      plistValue('CFBundleIdentifier') !== developmentBundleId
+      || plistValue('NSMicrophoneUsageDescription') !== microphoneUsageDescription
+      || plistValue('NSSpeechRecognitionUsageDescription') !== speechRecognitionUsageDescription
+    ) return false
+    return helperBundles.every((helper) => (
+      plistValue('CFBundleIdentifier', helper.infoPlist) === helper.bundleId
+      && plistValue('NSMicrophoneUsageDescription', helper.infoPlist) === microphoneUsageDescription
+      && plistValue('NSSpeechRecognitionUsageDescription', helper.infoPlist) === speechRecognitionUsageDescription
+    ))
+  } catch {
+    return false
+  }
 }
 
 let signatureValid = true
@@ -73,7 +95,7 @@ try {
 
 const identity = signingIdentity()
 if (
-  hasPreparedBundleIdentifiers()
+  hasPreparedBundleMetadata()
   && signatureValid
   && (identity === '-' || signatureHasTeam)
 ) {
@@ -85,10 +107,12 @@ setPlistString('CFBundleIdentifier', developmentBundleId)
 setPlistString('CFBundleDisplayName', 'Douchat')
 setPlistString('CFBundleName', 'Douchat')
 setPlistString('NSMicrophoneUsageDescription', microphoneUsageDescription)
+setPlistString('NSSpeechRecognitionUsageDescription', speechRecognitionUsageDescription)
 for (const helper of helperBundles) {
   setPlistString('CFBundleIdentifier', helper.bundleId, helper.infoPlist)
   setPlistString('CFBundleName', helper.name, helper.infoPlist)
   setPlistString('NSMicrophoneUsageDescription', microphoneUsageDescription, helper.infoPlist)
+  setPlistString('NSSpeechRecognitionUsageDescription', speechRecognitionUsageDescription, helper.infoPlist)
 }
 
 // The Electron signer walks dylibs, frameworks, helpers and the outer app in

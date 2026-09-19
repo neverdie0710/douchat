@@ -33,6 +33,7 @@ const RUN_EVENT_LIMIT = 600
 const ACCOUNT_DEFAULT_CONTACTS_META = 'accountDefaultContacts:v1'
 const CURRENT_ACCOUNT_META = 'currentAccountId'
 const CONNECTORS_META = 'connectors:v1'
+const LEGACY_DEMO_REMOVED_META = 'legacyDemoRemoved:v1'
 const ATTACHMENT_ID = /^[0-9a-f-]{36}$/i
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 const IMAGE_EXTENSION: Record<MessageAttachment['mimeType'], string> = {
@@ -56,6 +57,11 @@ export interface DefaultCloudContactResult {
   agent?: AgentConfig
   conversation?: Conversation
   created: boolean
+}
+
+interface DouchatStoreOptions {
+  /** Retained only for orchestration fixtures that need the original demo crew. */
+  seedDemo?: boolean
 }
 
 /**
@@ -171,7 +177,7 @@ export class DouchatStore {
   private readonly statements = new Map<string, StatementSync>()
   private readonly attachmentDirectory: string
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: DouchatStoreOptions = {}) {
     mkdirSync(dirname(filePath), { recursive: true })
     this.attachmentDirectory = join(dirname(filePath), 'attachments')
     mkdirSync(this.attachmentDirectory, { recursive: true })
@@ -182,7 +188,9 @@ export class DouchatStore {
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('PRAGMA foreign_keys = ON')
     this.db.exec(SCHEMA)
-    this.seed()
+    this.seed(Boolean(options.seedDemo))
+    if (!options.seedDemo) this.removeUnusedLegacyDemo()
+    this.backfillAgentAvatarSeeds()
     this.backfillMessageSourceContent()
     this.backfillDeliveryReplies()
   }
@@ -411,11 +419,17 @@ export class DouchatStore {
     })
   }
 
-  /** The starting crew, written once. An empty workspace is a deliberate
-   * state — deleting every bot must not summon Dobi and Lin back. */
-  private seed(): void {
+  /** Initialize profile metadata once. Production profiles intentionally start
+   * empty; the optional demo crew exists only for focused orchestration tests. */
+  private seed(includeDemo: boolean): void {
     if (this.meta('seeded') === '1') return
     this.tx(() => {
+      if (!includeDemo) {
+        this.setMeta('seeded', '1')
+        this.setMeta('userName', 'You')
+        this.setMeta(LEGACY_DEMO_REMOVED_META, '1')
+        return
+      }
       const agents = defaultAgents()
       const now = Date.now()
       const groupTopic = newTopic('', now)
@@ -485,6 +499,108 @@ export class DouchatStore {
 
       this.setMeta('seeded', '1')
       this.setMeta('userName', 'You')
+    })
+  }
+
+  /** Remove the old Dobi/Lin starter workspace only when it is still pristine.
+   * Any user message, renamed contact, new group membership or automation makes
+   * the migration leave it alone, so existing work is never discarded. */
+  private removeUnusedLegacyDemo(): void {
+    if (this.meta(LEGACY_DEMO_REMOVED_META) === '1') return
+    const legacyAgentIds = new Set(['dobi', 'lin'])
+    const legacyConversationIds = new Set(['crew', 'direct-dobi', 'direct-lin'])
+    const expectedAgents = new Map(defaultAgents().map((agent) => [agent.id, agent]))
+    const legacyAgents = this.agents.filter((agent) => legacyAgentIds.has(agent.id))
+    const agentsArePristine = legacyAgents.length === 2 && legacyAgents.every((agent) => {
+      const expected = expectedAgents.get(agent.id)
+      return Boolean(
+        expected
+        && agent.name === expected.name
+        && agent.role === expected.role
+        && agent.instructions === expected.instructions
+        && agent.labels === expected.labels
+        && agent.color === expected.color
+        && agent.provider === expected.provider
+        && agent.model === expected.model
+        && !agent.avatar
+        && !agent.localAgentId
+      )
+    })
+    const involvedConversations = this.conversations.filter((conversation) =>
+      conversation.agentIds.some((agentId) => legacyAgentIds.has(agentId))
+    )
+    const conversationsArePristine = involvedConversations.every((conversation) => {
+      if (
+        !legacyConversationIds.has(conversation.id)
+        || conversation.pinned
+        || conversation.muted
+        || conversation.hidden
+        || conversation.manuallyUnread
+        || conversation.topics.length !== 1
+        || Boolean(conversation.topics[0]?.title)
+      ) return false
+      if (conversation.id === 'crew') {
+        return conversation.type === 'group'
+          && conversation.name === 'Dobi, Lin'
+          && conversation.description === 'The default crew: shape a goal together and hand the work to the right bot.'
+          && conversation.leadAgentId === 'dobi'
+          && conversation.agentIds.join(',') === 'dobi,lin'
+      }
+      const agentId = conversation.id === 'direct-dobi' ? 'dobi' : 'lin'
+      const expectedName = agentId === 'dobi' ? 'Dobi' : 'Lin'
+      return conversation.type === 'direct'
+        && conversation.name === expectedName
+        && conversation.agentIds.length === 1
+        && conversation.agentIds[0] === agentId
+    })
+    const starterTexts = new Set([
+      'Drop a goal here. I’ll shape the plan and pull in the right bot.',
+      'I’m ready to turn it into something you can ship.'
+    ])
+    const messagesArePristine = this.messages
+      .filter((message) => legacyConversationIds.has(message.conversationId))
+      .every((message) =>
+        message.conversationId === 'crew'
+        && legacyAgentIds.has(message.authorId)
+        && starterTexts.has(message.text)
+    )
+    const hasRelatedPrivateMessages = this.privateMessages.some((message) =>
+      legacyAgentIds.has(message.sender.id)
+      || legacyAgentIds.has(message.recipient.id)
+      || legacyConversationIds.has(message.conversationId)
+    )
+    const hasRelatedAutomation = this.routines.some((routine) =>
+      legacyAgentIds.has(routine.agentId) || legacyConversationIds.has(routine.conversationId)
+    ) || this.runs.some((run) =>
+      legacyAgentIds.has(run.agentId) || legacyConversationIds.has(run.conversationId)
+    )
+
+    if (!agentsArePristine || !conversationsArePristine || !messagesArePristine || hasRelatedPrivateMessages || hasRelatedAutomation) return
+    this.tx(() => {
+      for (const conversationId of legacyConversationIds) {
+        this.write('DELETE FROM conversations WHERE id = ?', conversationId)
+      }
+      for (const agentId of legacyAgentIds) this.write('DELETE FROM agents WHERE id = ?', agentId)
+      this.setMeta(LEGACY_DEMO_REMOVED_META, '1')
+    })
+  }
+
+  /** Assign each cloud contact one random, durable illustrated identity. This
+   * also migrates contacts created before generated avatars were introduced.
+   * Local agents keep their product logos and Dr. Dou keeps the built-in art. */
+  private backfillAgentAvatarSeeds(): void {
+    const contacts = this.agents.filter((agent) =>
+      !agent.avatarSeed
+      && !agent.localAgentId
+      && agent.provider !== 'local'
+      && !agent.id.startsWith('dr-dou-')
+    )
+    if (!contacts.length) return
+    this.tx(() => {
+      for (const agent of contacts) {
+        agent.avatarSeed = randomUUID()
+        this.putAgent(agent)
+      }
     })
   }
 
@@ -660,7 +776,13 @@ export class DouchatStore {
   createAgent(input: ResolvedCreateAgentInput): AgentConfig {
     const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${randomUUID().slice(0, 6)}`
     const now = Date.now()
-    const agent: AgentConfig = { ...input, avatar: validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : '', id, createdAt: now }
+    const agent: AgentConfig = {
+      ...input,
+      avatar: validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : '',
+      avatarSeed: !input.localAgentId && input.provider !== 'local' ? randomUUID() : undefined,
+      id,
+      createdAt: now
+    }
     const topic = newTopic('', now)
     return this.tx(() => {
       this.putAgent(agent)

@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -97,7 +97,8 @@
       "category": "public.app-category.productivity",
       "icon": "resources/icons/douchat.icns",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。"
+        "NSMicrophoneUsageDescription": "Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。",
+        "NSSpeechRecognitionUsageDescription": "Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。"
       },
       "hardenedRuntime": true,
       "entitlements": "resources/entitlements.mac.plist",

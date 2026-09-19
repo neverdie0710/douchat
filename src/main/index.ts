@@ -114,7 +114,12 @@ function broadcastAuth(state: DesktopAuthState): void {
     broadcast(runtime.snapshot())
   }
   const signedIn = state.status === 'signed-in'
-  if (runtime && signedIn !== cloudSessionActive) {
+  const shouldConnect = runtime && (
+    signedIn
+      ? !cloudSessionActive || runtime.snapshot().runtime.mode !== 'live'
+      : cloudSessionActive
+  )
+  if (runtime && shouldConnect) {
     cloudSessionActive = signedIn
     void runtime.connect().then(async () => {
       // Wait for the account's Cloud model before asking Dr. Dou to open the

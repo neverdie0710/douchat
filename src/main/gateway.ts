@@ -62,7 +62,10 @@ function chatModels(payload: unknown, baseUrl: string, assumeImageInput = false)
   return data.flatMap((entry: GatewayModelEntry) => {
     const id = typeof entry.id === 'string' ? entry.id.trim() : ''
     const capabilities = Array.isArray(entry.capabilities) ? entry.capabilities : []
-    const chat = entry.model_type === 'chat' || capabilities.includes('chat.completions')
+    const declaresModelKind = typeof entry.model_type === 'string' || capabilities.length > 0
+    // A standard OpenAI-compatible catalog commonly exposes only `id`. When a
+    // richer catalog declares a kind, continue excluding its image/audio/etc.
+    const chat = entry.model_type === 'chat' || capabilities.includes('chat.completions') || !declaresModelKind
     if (!id || !chat) return []
     const name = typeof entry.display_name === 'string' && entry.display_name.trim() ? entry.display_name.trim() : id
     const supportsImages = assumeImageInput

@@ -38,6 +38,23 @@ describe('local contact routing', () => {
     const messages = store.topicMessages(conversationId, store.activeTopicId(conversationId))
     expect(messages.some((message) => message.error?.includes('Sign in') || message.text.includes('Sign in'))).toBe(true)
   })
+  it('persists an image-only Codex reply without turning it into an error', async () => {
+    const { store, runtime, conversationId } = setup()
+    vi.mocked(runLocalAgent).mockResolvedValue({
+      text: '',
+      images: [{
+        name: 'cat.png',
+        mimeType: 'image/png',
+        data: Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10])
+      }]
+    })
+    await runtime.sendMessage(conversationId, 'Draw a cat')
+    const reply = store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)
+    expect(reply?.text).toBe('')
+    expect(reply?.attachments).toHaveLength(1)
+    expect(reply?.attachments?.[0]).toMatchObject({ name: 'cat.png', mimeType: 'image/png' })
+    expect(reply?.error).toBeUndefined()
+  })
   it('forwards Stop to the running local process', async () => {
     const { runtime, conversationId } = setup()
     let started!: () => void

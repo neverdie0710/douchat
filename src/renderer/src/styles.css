@@ -284,6 +284,16 @@ select:focus-visible {
   box-shadow: none;
 }
 
+.agent-avatar.generated-agent-avatar {
+  background: transparent;
+}
+
+.agent-avatar.generated-agent-avatar > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .avatar-eyes {
   display: flex;
   gap: calc(var(--avatar-size) * 0.11);
@@ -2516,32 +2526,31 @@ select:focus-visible {
 @media (max-width: 1100px) { .local-agent-row { flex-wrap: wrap; } }
 .settings-content .secondary-button { border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 12px; font-size: calc(12px * var(--font-scale, 0.92)); cursor: pointer; }
 .settings-content .secondary-button:hover:not(:disabled) { border-color: var(--accent-300); background: var(--accent-050); }
-.about-card { max-width: 720px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 1px 2px rgba(20, 28, 42, .03); }
-.about-version-row { display: flex; min-height: 112px; align-items: center; justify-content: space-between; gap: 28px; padding: 24px 26px; }
-.about-product { display: flex; min-width: 0; align-items: center; gap: 16px; }
-.about-product img { width: 60px; height: 60px; flex: 0 0 60px; border-radius: 15px; box-shadow: 0 6px 22px rgba(20, 31, 51, .1); }
-.about-product > div { display: grid; gap: 4px; }
-.about-product strong { font-size: calc(20px * var(--font-scale, 0.92)); }
-.about-product span, .update-panel > span { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); }
+.about-card { max-width: 720px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.about-row { display: flex; min-height: 94px; align-items: center; justify-content: space-between; gap: 28px; padding: 20px 0; }
+.about-row + .about-row { border-top: 1px solid var(--line); }
+.about-row-copy { display: grid; min-width: 0; flex: 1; gap: 5px; }
+.about-row-copy > strong { color: var(--ink); font-size: calc(15px * var(--font-scale, 0.92)); font-weight: 650; }
+.about-row-copy > span, .about-update-status > span, .update-copy > span { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); }
 .about-action { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; }
 .about-action :is(.primary-button, .secondary-button) { min-height: 38px; }
 .about-action .primary-button { padding: 8px 14px; border-radius: 8px; }
 .update-check-button { min-width: 112px; }
 .about-action .update-check-button:disabled { opacity: .68; }
-.update-panel { display: grid; min-height: 58px; align-content: center; justify-items: start; gap: 10px; margin: 0; padding: 16px 26px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--canvas) 68%, transparent); }
-.update-panel-disabled { background: color-mix(in srgb, var(--canvas) 86%, transparent); }
-.update-panel .primary-button { min-height: 36px; padding: 8px 14px; border-radius: 8px; }
+.about-update-status { display: grid; max-width: 480px; gap: 8px; }
+.about-update-status:empty { display: none; }
 .update-copy { display: grid; gap: 7px; }
-.update-copy strong { font-size: calc(14px * var(--font-scale, 0.92)); }
 .update-copy p { max-height: 132px; margin: 0; overflow: auto; color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); line-height: 1.55; white-space: pre-line; }
 .update-progress { width: min(100%, 420px); height: 7px; overflow: hidden; border-radius: 99px; background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .update-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-500); transition: width 160ms ease; }
+.about-website-button { color: var(--ink); text-decoration: none; }
+.about-website-button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
 .about-note { margin-top: 18px; }
 .spin { animation: settings-spin 850ms linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 640px) {
-  .about-version-row { align-items: flex-start; flex-direction: column; gap: 20px; }
+  .about-row { align-items: flex-start; flex-direction: column; gap: 16px; }
   .about-action, .about-action :is(.primary-button, .secondary-button) { width: 100%; }
 }
 

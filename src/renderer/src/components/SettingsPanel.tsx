@@ -1,10 +1,9 @@
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t } from '../preferences'
-import { SlidersHorizontal, Bot, Camera, CircleUserRound, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, Camera, CircleUserRound, ExternalLink, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState } from '../../../shared/types'
-import douchatLogo from '../../../../resources/icons/douchat.png'
 import { readAvatarFile } from '../avatarFile'
 import { UserAvatar } from './common'
 
@@ -26,7 +25,6 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState('')
   const installed = agents.filter((agent) => agent.installed)
-  const missing = agents.filter((agent) => !agent.installed)
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -60,7 +58,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
       <div className="settings-tabs" role="tablist" aria-label={t('Settings')}>
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
-        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local proxies')}</span></button>
+        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
     </aside>
@@ -80,15 +78,14 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
       </> : tab === 'agents'  ? <>
-        <header className="settings-heading local-proxy-heading"><div><h1>{t('Local proxies')}</h1><p>{t('View the local proxies available on this computer.')}</p></div>
+        <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
-        <section aria-label={t('Installed proxies')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
+        <section aria-label={t('Installed agents')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
           {installed.map(row)}
-          {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local proxies found. Install one in your terminal, then detect again.')}</p>}
+          {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local agents found. Install one in your terminal, then detect again.')}</p>}
         </section>
-        {missing.length > 0 && <section aria-label={t('Not installed proxies')}><h2>{t('Not installed')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
       </> : <AboutTab />}
     </main>
     </section>
@@ -137,10 +134,23 @@ function AboutTab(): ReactElement {
   return <>
     <header className="settings-heading"><div><h1>{t('About')}</h1><p>{t('Version information and software updates.')}</p></div></header>
     <section className="about-card">
-      <div className="about-version-row">
-        <div className="about-product">
-          <img src={douchatLogo} alt="" />
-          <div><strong>Douchat</strong><span>{t('Version')} {update?.currentVersion ?? '…'}</span></div>
+      <div className="about-row about-version-row">
+        <div className="about-row-copy">
+          <strong>{t('Version information')}</strong>
+          <span>{update?.currentVersion ?? '…'}</span>
+          <div className="about-update-status" aria-live="polite">
+            {status === 'downloading' ? <>
+              <div className="update-progress"><i style={{ width: `${update?.percent ?? 0}%` }} /></div>
+              <span>{t('Downloading the verified update from Douchat…')}</span>
+            </> : status === 'available' ? <div className="update-copy"><span>{t('Version {version} is available').replace('{version}', version ?? '')}</span>{update?.releaseNotes && <p>{update.releaseNotes}</p>}</div>
+              : status === 'downloaded' ? <div className="update-copy"><span>{t('Update ready to install')}</span>{Boolean(update?.busyTasks) && <p>{t('Finish {count} active tasks before restarting.').replace('{count}', String(update?.busyTasks))}</p>}</div>
+                : status === 'installing' ? <span>{t('Installing update and restarting…')}</span>
+                  : status === 'checking' ? <span>{t('Connecting to the Douchat update service…')}</span>
+                    : status === 'up-to-date' ? <span>{t('You are using the latest version.')}</span>
+                      : status === 'disabled' ? <span>{t('Update checks are available in packaged builds.')}</span>
+                        : null}
+            {error && <p className="settings-error">{t('Update failed:')} {t(error)}</p>}
+          </div>
         </div>
         <div className="about-action">
           {status === 'available'
@@ -154,20 +164,16 @@ function AboutTab(): ReactElement {
                   : checkButton}
         </div>
       </div>
-      <div className={`update-panel update-panel-${status}`} aria-live="polite">
-        {status === 'downloading' ? <>
-          <div className="update-progress"><i style={{ width: `${update?.percent ?? 0}%` }} /></div>
-          <span>{t('Downloading the verified update from Douchat…')}</span>
-        </> : status === 'available' ? <>
-          <div className="update-copy"><strong>{t('Version {version} is available').replace('{version}', version ?? '')}</strong>{update?.releaseNotes && <p>{update.releaseNotes}</p>}</div>
-        </> : status === 'downloaded' ? <>
-          <div className="update-copy"><strong>{t('Update ready to install')}</strong>{Boolean(update?.busyTasks) && <p>{t('Finish {count} active tasks before restarting.').replace('{count}', String(update?.busyTasks))}</p>}</div>
-        </> : status === 'installing' ? <span>{t('Installing update and restarting…')}</span>
-          : status === 'checking' ? <span>{t('Connecting to the Douchat update service…')}</span>
-            : status === 'up-to-date' ? <span>{t('You are using the latest version.')}</span>
-              : status === 'disabled' ? <span>{t('Update checks are available in packaged builds.')}</span>
-                : <span>{t('Check for updates to compare this version with the latest release.')}</span>}
-        {error && <p className="settings-error">{t('Update failed:')} {t(error)}</p>}
+      <div className="about-row">
+        <div className="about-row-copy">
+          <strong>{t('Douchat website')}</strong>
+          <span>douchat.ai</span>
+        </div>
+        <div className="about-action">
+          <a className="secondary-button about-website-button" href="https://douchat.ai" target="_blank" rel="noreferrer">
+            {t('Open website')}<ExternalLink size={14} />
+          </a>
+        </div>
       </div>
     </section>
     <p className="settings-note about-note">{t('Updates are downloaded from signed Douchat releases. The app waits for active agent tasks before restarting.')}</p>

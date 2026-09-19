@@ -3,6 +3,7 @@ import { useRef } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
+import { GeneratedAgentAvatar } from '../generatedAvatar'
 import { t } from '../preferences'
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarWidth } from '../sidebarWidth'
 
@@ -32,16 +33,17 @@ export function AgentAvatar({ agent, size = 36 }: { agent: AgentConfig; size?: n
   const logo = agent.localAgentId ? agentIcons[agent.localAgentId] : undefined
   const builtInPicture = isDrDou(agent) ? agentIcons['dr-dou-human'] : undefined
   const picture = agent.avatar || logo || builtInPicture
+  const generated = !picture && Boolean(agent.avatarSeed)
   const displayName = agentDisplayName(agent)
   return (
     <span
-      className={`agent-avatar${logo && !agent.avatar ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}`}
+      className={`agent-avatar${logo && !agent.avatar ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}${generated ? ' generated-agent-avatar' : ''}`}
       data-agent={agent.localAgentId}
       style={{ '--agent-color': agent.color, '--avatar-size': `${size}px` } as CSSProperties}
       aria-label={displayName}
       title={displayName}
     >
-      {picture ? <img src={picture} alt="" /> : <span className="avatar-eyes">
+      {picture ? <img src={picture} alt="" /> : generated ? <GeneratedAgentAvatar seed={agent.avatarSeed!} /> : <span className="avatar-eyes">
         <i />
         <i />
       </span>}

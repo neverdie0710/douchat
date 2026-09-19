@@ -19,6 +19,8 @@ export interface AgentConfig {
   name: string
   /** Optional user-selected picture, stored locally as a compact data URL. */
   avatar?: string
+  /** Stable random seed for the built-in illustrated human avatar fallback. */
+  avatarSeed?: string
   role: string
   instructions: string
   color: string

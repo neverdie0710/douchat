@@ -152,7 +152,7 @@ describe('create agent terminology', () => {
     container.remove()
   })
 
-  it('separates the created agent from its cloud or local proxy', async () => {
+  it('separates the created agent from its cloud or local agent', async () => {
     await act(async () => root.render(
       <BotModal
         localAgents={[]}
@@ -167,19 +167,19 @@ describe('create agent terminology', () => {
     expect(container.textContent).toContain('Agent name')
     expect(container.textContent).toContain('Runs with')
     expect(container.textContent).toContain('Use cloud model')
-    expect(container.textContent).toContain('Use local proxy')
+    expect(container.textContent).toContain('Use local agent')
     expect(container.textContent).not.toContain('Create contact')
     expect(container.textContent).not.toContain('Local agent')
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Use local proxy'))!
+      .find((button) => button.textContent?.includes('Use local agent'))!
     await act(async () => local.click())
 
-    expect(container.textContent).toContain('Local proxy')
-    expect(container.textContent).toContain('No available local proxies')
+    expect(container.textContent).toContain('Local agent')
+    expect(container.textContent).toContain('No available local agents')
   })
 
-  it('offers every detected local proxy', async () => {
+  it('offers every detected local agent', async () => {
     const localAgents: LocalAgent[] = [
       { id: 'claude', name: 'Claude Code', command: 'claude', path: '/bin/claude', installed: true, chatSupported: true },
       { id: 'openclaw', name: 'OpenClaw', command: 'openclaw', path: '/bin/openclaw', installed: true, chatSupported: true },
@@ -199,7 +199,7 @@ describe('create agent terminology', () => {
     ))
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Use local proxy'))!
+      .find((button) => button.textContent?.includes('Use local agent'))!
     await act(async () => local.click())
     await act(async () => container.querySelector<HTMLButtonElement>('.agent-select-trigger')!.click())
 

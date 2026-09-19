@@ -194,6 +194,7 @@ export class DouchatRuntime {
   private connectionError = ''
   private gateway?: GatewayConfig
   private connectionGeneration = 0
+  private cloudReconnect?: Promise<void>
 
   constructor(
     private readonly store: DouchatStore,
@@ -430,7 +431,15 @@ export class DouchatRuntime {
   private async canRunLive(agent: AgentConfig): Promise<boolean> {
     if (agent.localAgentId) return true
     // One configured endpoint answers for every bot, whatever a bot has saved.
-    if (isGatewayConfig(this.gatewayConfig())) return this.modelOptions.length > 0
+    if (isGatewayConfig(this.gatewayConfig())) {
+      if (!this.modelOptions.length) {
+        this.cloudReconnect ??= this.connect().finally(() => {
+          this.cloudReconnect = undefined
+        })
+        await this.cloudReconnect
+      }
+      return this.modelOptions.length > 0
+    }
     const cached = this.liveAuth.get(agent.provider)
     if (cached !== undefined) return cached
     let live = false

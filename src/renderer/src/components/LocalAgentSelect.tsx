@@ -29,10 +29,10 @@ export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAge
       options[(index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length]?.focus()
     }
   }}>
-    <button ref={trigger} type="button" className="agent-select-trigger" aria-label={t('Local proxy')} aria-haspopup="listbox" aria-expanded={open} disabled={!agents.length} onClick={() => setOpen(!open)}>
-      {selected && icon(selected)}<span>{selected?.name || t('Select a local proxy')}</span><ChevronDown size={16} />
+    <button ref={trigger} type="button" className="agent-select-trigger" aria-label={t('Local agent')} aria-haspopup="listbox" aria-expanded={open} disabled={!agents.length} onClick={() => setOpen(!open)}>
+      {selected && icon(selected)}<span>{selected?.name || t('Select a local agent')}</span><ChevronDown size={16} />
     </button>
-    {open && <div className="agent-select-options" role="listbox" aria-label={t('Local proxy')}>
+    {open && <div className="agent-select-options" role="listbox" aria-label={t('Local agent')}>
       {agents.map((agent) => <button type="button" role="option" aria-selected={agent.id === value} key={agent.id} onClick={() => { onChange(agent.id); setOpen(false); trigger.current?.focus() }}>
         {icon(agent)}<span>{agent.name}</span>{agent.id === value && <Check size={16} />}
       </button>)}

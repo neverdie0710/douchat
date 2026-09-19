@@ -71,7 +71,7 @@ function WorkspaceApp(): ReactElement {
     setScanning(true)
     setScanError('')
     try { setLocalAgents(await window.douchat.detectLocalAgents()) }
-    catch (error) { setScanError(error instanceof Error ? error.message : 'Could not detect local proxies. Try Detect again.') }
+    catch (error) { setScanError(error instanceof Error ? error.message : 'Could not detect local agents. Try Detect again.') }
     finally { setScanning(false) }
   }
   useEffect(() => {

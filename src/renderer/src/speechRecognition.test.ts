@@ -22,6 +22,9 @@ describe('speech recognition helpers', () => {
 
   it('turns browser failures into useful translation keys', () => {
     expect(speechRecognitionErrorMessage('not-allowed')).toContain('System Settings')
+    expect(speechRecognitionErrorMessage('not-allowed', true)).toContain('recognition service')
+    expect(speechRecognitionErrorMessage('service-not-allowed')).toContain('recognition service')
+    expect(speechRecognitionErrorMessage('network', true)).toContain('recognition service')
     expect(speechRecognitionErrorMessage('no-speech')).toContain('No speech')
     expect(speechRecognitionErrorMessage('network')).toContain('network')
     expect(speechRecognitionErrorMessage('unknown')).toContain('unexpectedly')

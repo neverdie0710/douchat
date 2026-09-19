@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codexThreadId, localAgentArgs, localAgentEnvironment, localAgentText } from './localAgentRuntime'
+import { codexThreadId, localAgentArgs, localAgentEnvironment, localAgentReply, localAgentText } from './localAgentRuntime'
 describe('local agent output', () => {
   it('trusts only the Gemini child workspace without mutating the parent environment', () => {
     const env = { PATH: '/bin' }
@@ -42,6 +42,13 @@ describe('local agent output', () => {
       '{"type":"item.completed"}'
     ].join('\n'))).toBe('01a0af4f-0611-78f0-971f-52b8749140a0')
     expect(codexThreadId('{"type":"thread.started","thread_id":"../../escape"}')).toBeUndefined()
+  })
+  it('accepts an image-only Codex reply and rejects a truly empty reply', () => {
+    const image = { name: 'cat.png', mimeType: 'image/png' as const, data: Uint8Array.from([137, 80, 78, 71]) }
+    expect(localAgentReply('Codex', '', [image])).toEqual({ text: '', images: [image] })
+    expect(() => localAgentReply('Codex', '', [])).toThrow(
+      'Codex finished without a text or image response. Check its local login and configuration.'
+    )
   })
   it('passes prompts as data and does not bypass CLI permissions', () => {
     const prompt = '$(touch /tmp/should-not-exist); --force'

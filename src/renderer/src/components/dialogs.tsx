@@ -119,15 +119,15 @@ export function BotModal({
             </button>
             <button type="button" role="radio" aria-checked={agentSource === 'local'} className={agentSource === 'local' ? 'selected' : ''} onClick={() => setAgentSource('local')}>
               <span className="agent-source-icon"><Laptop size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Use local proxy')}</strong><small>{t('AI tools on this computer')}</small></span>
+              <span className="agent-source-copy"><strong>{t('Use local agent')}</strong><small>{t('AI tools on this computer')}</small></span>
               <span className="agent-source-radio" aria-hidden="true"><i /></span>
             </button>
           </div>
         </div>
-        {agentSource === 'local' && <div className="field-row"><span>{t('Local proxy')}</span>
+        {agentSource === 'local' && <div className="field-row"><span>{t('Local agent')}</span>
           <LocalAgentSelect agents={localAgents.filter((item) => item.installed)} value={localAgentId} onChange={setLocalAgentId} />
         </div>}
-        {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available local proxies')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
+        {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available local agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>

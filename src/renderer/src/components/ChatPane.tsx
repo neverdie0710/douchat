@@ -416,9 +416,9 @@ export function MessageGroupRow({
   )
 }
 
-/** A failure shows its headline; the raw dump it was summarised from stays one
- *  click away rather than filling the thread. */
-function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
+/** A failure uses one calm, predictable label; the actionable/raw detail stays
+ *  one click away rather than filling the thread. */
+export function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -441,7 +441,7 @@ function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
     <div className={`system-message is-error ${open ? 'is-open' : ''}`}>
       <div className="system-line">
         <TriangleAlert size={13} />
-        <span>{t(summary.title)}</span>
+        <span>{t('Something went wrong')}</span>
         <button
           className="system-toggle"
           onClick={() => setOpen((value) => !value)}
@@ -764,29 +764,31 @@ export function ChatPane({
     try {
       const access = await window.douchat.requestMicrophoneAccess()
       if (voiceAttemptRef.current !== attempt) return
-      if (access !== 'granted') {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          setVoiceError(t('Voice input is unavailable in this version of Douchat.'))
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setVoiceError(t('Voice input is unavailable in this version of Douchat.'))
+        setVoiceNeedsSettings(false)
+        setVoiceState('idle')
+        return
+      }
+      try {
+        // The OS status can be stale after the user changes System Settings.
+        // A real capture is authoritative and also separates microphone access
+        // from the independent browser speech-recognition service.
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        stream.getTracks().forEach((track) => track.stop())
+      } catch {
+        if (voiceAttemptRef.current !== attempt) return
+        if (access === 'granted') {
+          setVoiceError(t('Microphone permission changed. Restart Douchat and try again.'))
           setVoiceNeedsSettings(false)
-          setVoiceState('idle')
-          return
-        }
-        try {
-          // Electron's native status API can report `denied` before macOS has
-          // created a TCC entry for a development build. A real audio capture
-          // request is the authoritative first-use prompt. Stop the temporary
-          // stream immediately; SpeechRecognition opens its own input stream.
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-          stream.getTracks().forEach((track) => track.stop())
-        } catch {
-          if (voiceAttemptRef.current !== attempt) return
+        } else {
           setVoiceError(tr('Microphone access is off. Allow {name} in System Settings, then restart the app.', {
             name: window.douchat.microphonePermissionOwner
           }))
           setVoiceNeedsSettings(true)
-          setVoiceState('idle')
-          return
         }
+        setVoiceState('idle')
+        return
       }
       if (voiceAttemptRef.current !== attempt) return
 
@@ -812,13 +814,10 @@ export function ChatPane({
       }
       recognition.onerror = (event) => {
         if (event.error !== 'aborted') {
-          const permissionDenied = event.error === 'not-allowed' || event.error === 'service-not-allowed'
-          setVoiceError(permissionDenied
-            ? tr('Microphone access is off. Allow {name} in System Settings, then restart the app.', {
-                name: window.douchat.microphonePermissionOwner
-              })
-            : t(speechRecognitionErrorMessage(event.error)))
-          setVoiceNeedsSettings(permissionDenied)
+          // getUserMedia succeeded immediately before recognition started, so
+          // these errors come from the recognition service, not microphone TCC.
+          setVoiceError(t(speechRecognitionErrorMessage(event.error, true)))
+          setVoiceNeedsSettings(false)
         }
       }
       recognition.onend = () => {
@@ -1022,7 +1021,7 @@ export function ChatPane({
       <div className="composer-wrap">
         {offline && (
           <div className="offline-banner">
-            <span>{t('Choose a local proxy or connect a model endpoint to start chatting.')}</span>
+            <span>{t('Choose a local agent or connect a model endpoint to start chatting.')}</span>
             <button onClick={onConnect}>{t('Choose agent')}</button>
           </div>
         )}

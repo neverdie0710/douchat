@@ -60,6 +60,13 @@ export interface LocalAgentReply {
   images: LocalAgentImage[]
 }
 
+export function localAgentReply(agentName: string, text: string, images: LocalAgentImage[]): LocalAgentReply {
+  if (!text && !images.length) {
+    throw new Error(`${agentName} finished without a text or image response. Check its local login and configuration.`)
+  }
+  return { text, images }
+}
+
 /** Codex JSONL starts with the id whose imagegen output directory it owns. */
 export function codexThreadId(stdout: string): string | undefined {
   for (const line of stdout.split('\n')) {
@@ -175,10 +182,9 @@ export async function runLocalAgent(
       child.stdin.on('error', () => { /* Process exit is reported by close. */ })
       child.stdin.end(['codex', 'openclaw'].includes(agent.id) ? effectivePrompt : undefined)
     })
-    const text = agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
-    if (!text) throw new Error(`${agent.name} finished without a text response. Check its local login and configuration.`)
     const images = agent.id === 'codex' ? await generatedImages(codexThreadId(stdout), env) : []
-    return { text, images }
+    const text = agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
+    return localAgentReply(agent.name, text, images)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

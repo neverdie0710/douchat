@@ -34,6 +34,7 @@ import {
   MessageDeliveries,
   MessageGroupRow,
   MessageSourceCard,
+  SystemMessage,
   visibleConversationMessages
 } from './ChatPane'
 
@@ -225,6 +226,33 @@ describe('private delivery disclosure', () => {
     expect(container.querySelectorAll('.bubble-reply-segment')).toHaveLength(3)
     expect(container.textContent).toContain('第一段回复')
     expect(container.textContent).toContain('第三段回复')
+  })
+
+  it('keeps the specific system error behind a generic disclosure title', async () => {
+    const detail = '429: {"message":"Douchat credit balance is insufficient"}'
+    const message: ChatMessage = {
+      id: 'error-1',
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      authorId: 'system',
+      authorName: 'Douchat',
+      text: 'The provider is rate limiting this key · HTTP 429',
+      detail,
+      kind: 'system',
+      createdAt: 30
+    }
+
+    await act(async () => root.render(<SystemMessage message={message} />))
+
+    const toggle = container.querySelector<HTMLButtonElement>('.system-toggle')
+    expect(container.textContent).toContain('Something went wrong')
+    expect(container.textContent).not.toContain('rate limiting')
+    expect(container.textContent).not.toContain('credit balance')
+
+    await act(async () => toggle?.click())
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(container.textContent).toContain(detail)
   })
 })
 

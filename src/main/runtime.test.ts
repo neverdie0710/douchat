@@ -74,7 +74,7 @@ function stubModel(runtime: DouchatRuntime): void {
 function createRuntime(): { store: DouchatStore; runtime: DouchatRuntime } {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-'))
   directories.push(directory)
-  const store = new DouchatStore(join(directory, 'state.json'))
+  const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
   const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
   stubModel(runtime)
   return { store, runtime }
@@ -89,7 +89,7 @@ describe('DouchatRuntime', () => {
   it('loads Cloud models with the desktop token and removes them on sign-out', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-cloud-'))
     directories.push(directory)
-    const store = new DouchatStore(join(directory, 'state.json'))
+    const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
     let token: string | undefined = 'dch_current'
     const request = vi.fn(async () => Response.json({
       object: 'list',
@@ -120,6 +120,30 @@ describe('DouchatRuntime', () => {
     expect(runtime.defaultCloudAgentModel()).toEqual({ provider: 'gateway', model: 'default' })
     expect(runtime.snapshot().endpoint).toMatchObject({ source: 'account', hasApiKey: false })
     expect(request).toHaveBeenCalledOnce()
+  })
+
+  it('retries Cloud model discovery when a signed-in chat is still offline', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-retry-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({ object: 'list', data: [] }))
+      .mockResolvedValueOnce(Response.json({ object: 'list', data: [{ id: 'cloud-default', object: 'model' }] }))
+    vi.stubGlobal('fetch', request)
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined, {
+      baseUrl: 'http://localhost:3004/v1',
+      resolveAccessToken: () => 'dch_current'
+    })
+
+    await runtime.connect()
+    expect(runtime.snapshot().runtime.mode).toBe('offline')
+
+    const reconnectable = runtime as unknown as {
+      canRunLive: (agent: NonNullable<ReturnType<DouchatStore['agent']>>) => Promise<boolean>
+    }
+    expect(await reconnectable.canRunLive(store.agent('dobi')!)).toBe(true)
+    expect(runtime.snapshot().runtime.mode).toBe('live')
+    expect(request).toHaveBeenCalledTimes(2)
   })
 
   it('runs a group turn with the lead first and splits replies into bubbles', async () => {

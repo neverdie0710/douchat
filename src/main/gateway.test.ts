@@ -58,6 +58,18 @@ describe('Douchat Cloud gateway', () => {
     expect(models[0].input).toEqual(['text', 'image'])
   })
 
+  it('accepts a standard OpenAI model catalog without Douchat metadata', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      object: 'list',
+      data: [{ id: 'gpt-compatible', object: 'model', owned_by: 'gateway' }]
+    })))
+
+    const models = await fetchGatewayModels({ baseUrl: 'http://localhost:3004/v1', apiKey: 'test' })
+
+    expect(models).toHaveLength(1)
+    expect(models[0]).toMatchObject({ id: 'gpt-compatible', provider: 'gateway', input: ['text'] })
+  })
+
   it('invalidates the desktop session when the model API returns 401', async () => {
     const onUnauthorized = vi.fn(async () => undefined)
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({
