@@ -175,6 +175,65 @@ jobs:
         shell: bash
         run: security delete-keychain "$RUNNER_TEMP/douchat-signing.keychain-db" || true
 
+      - name: Verify packaged artifacts
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          release_dir="release/$version"
+
+          require_file() {
+            if [ ! -s "$1" ]; then
+              echo "Required release artifact is missing or empty: $1" >&2
+              exit 1
+            fi
+          }
+
+          verify_manifest() {
+            local manifest="$1"
+            require_file "$manifest"
+            grep -F "version: $version" "$manifest" >/dev/null
+            while IFS= read -r referenced; do
+              require_file "$release_dir/$referenced"
+            done < <(sed -nE 's/^[[:space:]]*- url: (.+)$/\1/p' "$manifest")
+          }
+
+          case "$TARGET_PLATFORM" in
+            macos)
+              for arch in x64 arm64; do
+                require_file "$release_dir/Douchat-$version-mac-$arch.dmg"
+                require_file "$release_dir/Douchat-$version-mac-$arch.dmg.blockmap"
+                require_file "$release_dir/Douchat-$version-mac-$arch.zip"
+                require_file "$release_dir/Douchat-$version-mac-$arch.zip.blockmap"
+              done
+              verify_manifest "$release_dir/latest-mac.yml"
+              ;;
+            windows-x64)
+              installer="$release_dir/Douchat-$version-win-x64.exe"
+              require_file "$installer"
+              require_file "$installer.blockmap"
+              verify_manifest "$release_dir/latest.yml"
+              7z t "$installer" >/dev/null
+              ;;
+            linux-x64)
+              appimage="$release_dir/Douchat-$version-linux-x86_64.AppImage"
+              deb="$release_dir/Douchat-$version-linux-amd64.deb"
+              require_file "$appimage"
+              require_file "$deb"
+              verify_manifest "$release_dir/latest-linux.yml"
+              dpkg-deb --info "$deb" >/dev/null
+              extract_dir=$(mktemp -d)
+              (
+                cd "$extract_dir"
+                "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+              )
+              require_file "$extract_dir/squashfs-root/resources/app-update.yml"
+              find "$extract_dir" -depth -delete
+              ;;
+          esac
+
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -182,13 +241,13 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: |
-            release/**/*.dmg
-            release/**/*.zip
-            release/**/*.exe
-            release/**/*.AppImage
-            release/**/*.deb
-            release/**/*.yml
-            release/**/*.blockmap
+            release/*/*.dmg
+            release/*/*.zip
+            release/*/*.exe
+            release/*/*.AppImage
+            release/*/*.deb
+            release/*/latest*.yml
+            release/*/*.blockmap
 
   create-draft:
     if: github.event_name == 'push'
@@ -214,7 +273,7 @@ jobs:
           assets=()
           while IFS= read -r -d '' artifact; do
             assets+=("$artifact")
-          done < <(find dist -type f \( \
+          done < <(find dist -mindepth 2 -maxdepth 2 -type f \( \
             -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' -o \
             -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o \
             -name 'latest*.yml' \
