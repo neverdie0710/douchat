@@ -8,6 +8,7 @@
     "url": "https://github.com/thinkany-ai/douchat.git"
   },
   "description": "A desktop workspace where AI agents work and talk together.",
+  "desktopName": "Douchat.desktop",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
@@ -143,6 +144,8 @@
     "linux": {
       "icon": "resources/icons/douchat.png",
       "category": "Utility",
+      "maintainer": "ThinkAny <idoubi@users.noreply.github.com>",
+      "syncDesktopName": true,
       "target": [
         {
           "target": "AppImage",
