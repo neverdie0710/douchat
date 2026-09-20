@@ -3,7 +3,15 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { dirname, join } from 'node:path'
 import { safeStorage, shell } from 'electron'
-import type { DesktopAuthState, DesktopAuthUser, UpdateDesktopProfileInput } from '../shared/types'
+import type {
+  BuiltInAgentCapability,
+  BuiltInAgentDefinition,
+  BuiltInAgentManifest,
+  DesktopAuthState,
+  DesktopAuthUser,
+  UpdateDesktopProfileInput,
+  UsageSummary
+} from '../shared/types'
 import { createDesktopLoginUrl, DESKTOP_AUTH_CLIENT_ID, parseDesktopAuthCallback } from './authProtocol'
 
 interface StoredCredential {
@@ -179,6 +187,67 @@ export class DesktopAuth {
     return this.setState({ status: 'signed-in', user: this.requireUser(payload.data.user) })
   }
 
+  async getUsageSummary(): Promise<UsageSummary> {
+    if (!this.accessToken) throw new Error('Sign in to view usage and billing.')
+    let response: Response
+    try {
+      response = await fetch(new URL('/api/desktop-auth/usage', this.webAppUrl), {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${this.accessToken}` }
+      })
+    } catch {
+      throw new Error('Could not load usage and billing. Check your connection and try again.')
+    }
+    if (response.status === 401 || response.status === 403) {
+      await this.clearCredential()
+      this.setState({ status: 'signed-out' })
+      throw new Error('Your session has expired. Sign in again.')
+    }
+    const payload = await response.json().catch(() => null) as ApiEnvelope<Partial<UsageSummary>> | null
+    const credits = Number(payload?.data?.credits)
+    if (!response.ok || !payload?.data || !Number.isFinite(credits) || credits < 0) {
+      throw new Error(payload?.message || `Usage service returned ${response.status}. Try again.`)
+    }
+    return {
+      planName: typeof payload.data.planName === 'string' && payload.data.planName.trim()
+        ? payload.data.planName.trim()
+        : 'Free',
+      status: typeof payload.data.status === 'string' && payload.data.status.trim()
+        ? payload.data.status.trim()
+        : 'free',
+      credits
+    }
+  }
+
+  async getBuiltInAgentManifest(): Promise<BuiltInAgentManifest> {
+    if (!this.accessToken) throw new Error('Sign in to load built-in agents.')
+    let response: Response
+    try {
+      response = await fetch(new URL('/api/desktop-auth/built-in-agents', this.webAppUrl), {
+        headers: { Accept: 'application/json', Authorization: `Bearer ${this.accessToken}` }
+      })
+    } catch {
+      throw new Error('Could not refresh built-in agents. The cached copy will remain available.')
+    }
+    if (response.status === 401 || response.status === 403) {
+      await this.clearCredential()
+      this.setState({ status: 'signed-out' })
+      throw new Error('Your session has expired. Sign in again.')
+    }
+    const payload = await response.json().catch(() => null) as ApiEnvelope<unknown> | null
+    if (!response.ok || !payload?.data) {
+      throw new Error(payload?.message || `Built-in agent service returned ${response.status}.`)
+    }
+    return this.requireBuiltInManifest(payload.data)
+  }
+
+  async openBillingPortal(): Promise<void> {
+    await shell.openExternal(new URL('/settings/billing', this.webAppUrl).toString())
+  }
+
+  async openSubscriptionPlans(): Promise<void> {
+    await shell.openExternal(new URL('/pricing', this.webAppUrl).toString())
+  }
+
   async handleCallback(input: string): Promise<DesktopAuthState> {
     const flow = await this.readPendingFlow()
     if (!flow) return this.setState({ status: 'error', error: 'This login request has expired. Start again.' })
@@ -299,6 +368,53 @@ export class DesktopAuth {
       email: user.email,
       image: this.normalizedImage(user.image)
     }
+  }
+
+  private requireBuiltInManifest(value: unknown): BuiltInAgentManifest {
+    if (!value || typeof value !== 'object') throw new Error('Built-in agent service returned invalid data.')
+    const candidate = value as { version?: unknown; agents?: unknown }
+    if (!Number.isInteger(candidate.version) || Number(candidate.version) < 1 || !Array.isArray(candidate.agents)) {
+      throw new Error('Built-in agent service returned invalid data.')
+    }
+    const agents = candidate.agents.slice(0, 20).map((item): BuiltInAgentDefinition => {
+      if (!item || typeof item !== 'object') throw new Error('Built-in agent service returned invalid data.')
+      const agent = item as Record<string, unknown>
+      const text = (key: string, max: number): string => {
+        const result = typeof agent[key] === 'string' ? agent[key].trim() : ''
+        if (!result || result.length > max) throw new Error('Built-in agent service returned invalid data.')
+        return result
+      }
+      const identifier = (key: string, max: number): string => {
+        const result = text(key, max)
+        if (!/^[A-Za-z0-9:_-]+$/.test(result)) throw new Error('Built-in agent service returned invalid data.')
+        return result
+      }
+      const systemRole = agent.systemRole === 'admin' ? 'admin' : undefined
+      const capabilities = Array.isArray(agent.capabilities)
+        ? agent.capabilities.filter((entry): entry is BuiltInAgentCapability => entry === 'manage_agents')
+        : []
+      const templateVersion = Number(agent.templateVersion)
+      if (!systemRole || !Number.isInteger(templateVersion) || templateVersion < 1) {
+        throw new Error('Built-in agent service returned invalid data.')
+      }
+      return {
+        id: identifier('id', 160),
+        systemKey: identifier('systemKey', 80),
+        systemRole,
+        capabilities,
+        templateVersion,
+        name: text('name', 100),
+        role: text('role', 100),
+        instructions: text('instructions', 12_000),
+        labels: typeof agent.labels === 'string' ? agent.labels.trim().slice(0, 1_000) : '',
+        color: text('color', 32),
+        modelRoute: identifier('modelRoute', 100)
+      }
+    })
+    if (!agents.some((agent) => agent.systemKey === 'dr-dou' && agent.systemRole === 'admin')) {
+      throw new Error('Built-in agent service did not return the system administrator.')
+    }
+    return { version: Number(candidate.version), agents }
   }
 
   private normalizedImage(value: string | undefined): string | undefined {

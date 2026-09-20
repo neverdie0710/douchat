@@ -1,8 +1,8 @@
 import { LocalAgentSelect } from './LocalAgentSelect'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
-import { CalendarClock, Camera, Check, ChevronRight, Cloud, Laptop, PlugZap, Search, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Cloud, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -19,6 +19,13 @@ import type {
   UpdateAgentInput
 } from '../../../shared/types'
 import { AgentAvatar, ConversationAvatar, agentDisplayName, colors, conversationDisplayName } from './common'
+
+const avatarEmojis = [
+  '😀', '😄', '😊', '😌', '😎', '🤓', '🥳', '😂', '😍', '🤔', '🫡', '🤖',
+  '👩', '👨', '👧', '👦', '👩‍💻', '🧑‍🚀', '🧙', '🥷', '👩‍🎨', '👨‍🔬', '🧑‍🏫', '🕵️',
+  '🐱', '🐶', '🦊', '🐼', '🐸', '🦄', '🐯', '🦁', '🐵', '🐧', '🐨', '🐰',
+  '🌟', '🌈', '🔥', '💡', '🎨', '🎵', '🧠', '💻', '🚀', '🌙', '☀️', '👻'
+]
 
 export function BotModal({
   agent,
@@ -43,20 +50,36 @@ export function BotModal({
   const [error, setError] = useState('')
   const [name, setName] = useState(agent?.name ?? localAgents.find((item) => item.id === initialLocalAgentId)?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
+  const [avatarEmoji, setAvatarEmoji] = useState(agent?.avatarEmoji ?? '')
   const [role] = useState(agent?.role ?? 'Assistant')
-  const [instructions, setInstructions] = useState(
-    agent?.instructions ??
-      'Be a helpful assistant. Respond clearly and follow the user’s instructions.'
-  )
+  const [instructions, setInstructions] = useState(agent?.instructions ?? '')
   const [labels, setLabels] = useState(agent?.labels ?? '')
   const [color] = useState(agent?.color ?? colors[2])
   const [saving, setSaving] = useState(false)
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false)
   const avatarFile = useRef<HTMLInputElement>(null)
+  const emojiPicker = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!emojiPickerOpen) return
+    const close = (event: PointerEvent): void => {
+      if (!emojiPicker.current?.contains(event.target as Node)) setEmojiPickerOpen(false)
+    }
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setEmojiPickerOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', escape)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', escape)
+    }
+  }, [emojiPickerOpen])
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (!name.trim()) return
-    if (!agent && (!role.trim() || !instructions.trim())) return
+    if (!agent && !role.trim()) return
     if (!agent && agentSource === 'local' && !localAgent?.installed) return
     setSaving(true)
     setError('')
@@ -65,6 +88,7 @@ export function BotModal({
         await onUpdate(agent.id, {
           name: name.trim(),
           avatar,
+          avatarEmoji,
           instructions: instructions.trim(),
           labels: labels.trim()
         })
@@ -95,6 +119,7 @@ export function BotModal({
     setError('')
     try {
       setAvatar(await readAvatarFile(file))
+      setAvatarEmoji('')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t('This picture could not be used.'))
     }
@@ -145,16 +170,70 @@ export function BotModal({
           <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')} disabled={saving}><X size={18} /></button>
         </div>
 
-        <div className="edit-contact-avatar-field">
+        <div className="edit-contact-avatar-field" ref={emojiPicker}>
           <span>{t('Avatar')}</span>
           <div className="edit-contact-avatar-row">
             <button type="button" className="edit-contact-avatar" onClick={() => avatarFile.current?.click()} aria-label={t('Choose picture')}>
-              <AgentAvatar agent={{ ...agent, avatar }} size={76} />
+              <AgentAvatar agent={{ ...agent, avatar, avatarEmoji }} size={76} />
               <span><Camera size={17} strokeWidth={1.8} /></span>
             </button>
-            <div>
+            <div className="edit-contact-avatar-actions">
               <button type="button" className="edit-contact-picture-action" onClick={() => avatarFile.current?.click()}>{t('Choose picture')}</button>
-              {avatar && <button type="button" className="edit-contact-picture-action muted" onClick={() => setAvatar('')}>{t('Remove')}</button>}
+              <div className="edit-contact-emoji-picker">
+                <button
+                  type="button"
+                  className={`edit-contact-emoji-trigger${avatarEmoji ? ' has-value' : ''}`}
+                  aria-haspopup="dialog"
+                  aria-expanded={emojiPickerOpen}
+                  aria-label={t('Choose emoji')}
+                  onClick={() => setEmojiPickerOpen((open) => !open)}
+                >
+                  <span className="edit-contact-emoji-trigger-icon">{avatarEmoji || <Smile size={17} strokeWidth={1.8} />}</span>
+                  <ChevronDown size={14} strokeWidth={1.8} />
+                </button>
+                {emojiPickerOpen && (
+                  <div className="edit-contact-emoji-card" role="dialog" aria-label={t('Choose emoji')}>
+                    <div className="edit-contact-emoji-card-heading">
+                      <strong>{t('Choose emoji')}</strong>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAvatarEmoji('')
+                          setEmojiPickerOpen(false)
+                        }}
+                      >{t('Use default avatar')}</button>
+                    </div>
+                    <div className="edit-contact-emoji-grid" role="listbox" aria-label={t('Choose emoji')}>
+                      {avatarEmoji && !avatarEmojis.includes(avatarEmoji) && (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected="true"
+                          className="selected"
+                          data-emoji={avatarEmoji}
+                          onClick={() => setEmojiPickerOpen(false)}
+                        >{avatarEmoji}</button>
+                      )}
+                      {avatarEmojis.map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          role="option"
+                          aria-selected={avatarEmoji === emoji}
+                          className={avatarEmoji === emoji ? 'selected' : ''}
+                          data-emoji={emoji}
+                          onClick={() => {
+                            setAvatarEmoji(emoji)
+                            setAvatar('')
+                            setEmojiPickerOpen(false)
+                          }}
+                        >{emoji}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {(avatar || avatarEmoji) && <button type="button" className="edit-contact-picture-action muted" onClick={() => { setAvatar(''); setAvatarEmoji('') }}>{t('Remove')}</button>}
             </div>
             <input ref={avatarFile} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => void chooseAvatar(event)} />
           </div>

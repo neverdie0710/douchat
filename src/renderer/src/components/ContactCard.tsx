@@ -3,21 +3,7 @@ import { MessageSquare, MoreHorizontal, Star, Users } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import type { ContactSelection } from './ContactList'
-import { AgentAvatar, ConversationAvatar, agentDisplayName } from './common'
-
-const localAgentNames: Record<string, string> = {
-  claude: 'Claude Code',
-  codex: 'Codex',
-  gemini: 'Gemini',
-  grok: 'Grok Build',
-  openclaw: 'OpenClaw',
-  fastclaw: 'FastClaw',
-  hermes: 'Hermes',
-  opencode: 'OpenCode',
-  cursor: 'Cursor',
-  kimi: 'Kimi',
-  omp: 'OMP'
-}
+import { AgentAvatar, ConversationAvatar, agentDisplayName, agentSourceLabel } from './common'
 
 function Field({ label, value }: { label: string; value: string }): ReactElement {
   return (
@@ -32,6 +18,7 @@ export function ContactCard({
   snapshot,
   selection,
   onMessage,
+  onStartDirect,
   onEditBot,
   onDeleteBot,
   onTogglePin
@@ -39,6 +26,7 @@ export function ContactCard({
   snapshot: AppSnapshot
   selection?: ContactSelection
   onMessage: (conversationId: string) => void
+  onStartDirect: (agentId: string) => void
   onEditBot: (agent: AgentConfig) => void
   onDeleteBot: (agent: AgentConfig) => void
   onTogglePin: (conversation: Conversation) => void
@@ -82,9 +70,7 @@ export function ContactCard({
 
   if (agent) {
     const displayName = agentDisplayName(agent)
-    const baseAgentName = agent.localAgentId
-      ? localAgentNames[agent.localAgentId] ?? agent.localAgentId
-      : t('Douchat Cloud')
+    const sourceLabel = agentSourceLabel(agent)
     const direct = snapshot.conversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
     )
@@ -101,14 +87,16 @@ export function ContactCard({
                 <div className="contact-profile-name"><h1>{displayName}</h1>
                   {direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}
                 </div>
-                <p>{baseAgentName}</p>
+                <p>{sourceLabel}</p>
               </div>
               <div className="profile-menu-anchor" ref={profileMenuRef}>
                 <button className="profile-edit" onClick={() => setProfileMenuOpen((open) => !open)} aria-label={t('Agent menu')} aria-haspopup="menu" aria-expanded={profileMenuOpen} title={t('Agent menu')}><MoreHorizontal size={21} /></button>
                 {profileMenuOpen && <div className="dropdown-menu profile-actions-menu" role="menu">
                   <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
-                  <div className="dropdown-separator" />
-                  <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>
+                  {agent.systemRole !== 'admin' && <>
+                    <div className="dropdown-separator" />
+                    <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>
+                  </>}
                 </div>}
               </div>
             </section>
@@ -122,11 +110,11 @@ export function ContactCard({
             <section className="contact-profile-section">
               <h2>{t('More information')}</h2>
               <Field label={t('Shared groups')} value={String(sharedGroupCount)} />
-              <Field label={t('Source')} value={t(agent.localAgentId ? 'Local agent' : 'Cloud model')} />
+              <Field label={t('Source')} value={sourceLabel} />
               <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />
             </section>
 
-            {direct && <div className="contact-profile-actions"><button onClick={() => onMessage(direct.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button></div>}
+            <div className="contact-profile-actions"><button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button></div>
           </div>
         </div>
       </main>

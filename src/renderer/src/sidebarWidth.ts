@@ -12,7 +12,7 @@ export const SIDEBAR_MAX = 360
 export const SIDEBAR_DEFAULT = 244
 
 function read(): number {
-  const saved = Number(localStorage.getItem(key))
+  const saved = Number(globalThis.localStorage?.getItem(key))
   return saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX ? saved : SIDEBAR_DEFAULT
 }
 
@@ -27,7 +27,7 @@ export function setSidebarWidth(width: number): void {
   const next = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(width)))
   if (next === current) return
   current = next
-  localStorage.setItem(key, String(current))
+  globalThis.localStorage?.setItem(key, String(current))
   apply()
   listeners.forEach((notify) => notify())
 }

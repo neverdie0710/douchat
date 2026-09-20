@@ -17,8 +17,20 @@ export interface AgentConfig {
 
   id: string
   name: string
+  /** First-party account authority. User-created agents never receive this. */
+  systemRole?: 'admin'
+  /** Stable identity and policy supplied by the Douchat service. */
+  systemKey?: string
+  cloudAgentId?: string
+  templateVersion?: number
+  modelRoute?: string
+  capabilities?: BuiltInAgentCapability[]
+  /** User-owned presentation/personality fields layered over cloud defaults. */
+  userOverrides?: BuiltInAgentUserOverrides
   /** Optional user-selected picture, stored locally as a compact data URL. */
   avatar?: string
+  /** Optional single-grapheme emoji avatar; mutually exclusive with avatar. */
+  avatarEmoji?: string
   /** Stable random seed for the built-in illustrated human avatar fallback. */
   avatarSeed?: string
   role: string
@@ -29,6 +41,35 @@ export interface AgentConfig {
   /** Free-form labels that colour a bot's greeting and personality. */
   labels?: string
   createdAt: number
+}
+
+export type BuiltInAgentCapability = 'manage_agents'
+
+export interface BuiltInAgentUserOverrides {
+  name?: string
+  avatar?: string
+  avatarEmoji?: string
+  instructions?: string
+  labels?: string
+}
+
+export interface BuiltInAgentDefinition {
+  id: string
+  systemKey: string
+  systemRole: 'admin'
+  capabilities: BuiltInAgentCapability[]
+  templateVersion: number
+  name: string
+  role: string
+  instructions: string
+  labels?: string
+  color: string
+  modelRoute: string
+}
+
+export interface BuiltInAgentManifest {
+  version: number
+  agents: BuiltInAgentDefinition[]
 }
 
 export interface Topic {
@@ -170,9 +211,21 @@ export interface ChatMessage {
   deliveries?: MessageDelivery[]
   /** Files produced by this model turn and copied into Douchat storage. */
   attachments?: MessageAttachment[]
+  /** Human-readable receipts for tools that performed this reply's work. */
+  actions?: MessageAction[]
   error?: string
   /** The raw failure a system message was summarised from, kept for details. */
   detail?: string
+}
+
+export interface MessageAction {
+  /** The provider's tool-call id; unique within the model turn. */
+  id: string
+  /** Stable internal tool name. The renderer turns this into product copy. */
+  tool: string
+  status: 'running' | 'succeeded' | 'failed'
+  /** A safe display target such as a filename, never the full argument payload. */
+  target?: string
 }
 
 export interface PrivateMessage {
@@ -227,6 +280,8 @@ export interface ConversationActivityState {
   agentIds: string[]
   label: string
   startedAt: number
+  /** The concrete tool action currently visible to the human. */
+  action?: MessageAction
   /** A failed lead handed the conversation to this member. */
   takeover?: { unavailableName: string; replacementName: string }
   limited?: boolean
@@ -323,7 +378,7 @@ export interface AppSnapshot {
   endpoint: EndpointSettings
   models: ModelOption[]
   connectors: EmailConnectorAccount[]
-  /** The signed-in account's onboarding chat, when it still exists. */
+  /** The signed-in account's system-admin chat, when it currently exists. */
   defaultConversationId?: string
   userName: string
   /** The picture the user chose, already downscaled, as a data URL. */
@@ -335,6 +390,7 @@ export interface CreateAgentInput {
 
   name: string
   avatar?: string
+  avatarEmoji?: string
   role: string
   instructions: string
   color: string
@@ -350,6 +406,7 @@ export interface UpdateAgentInput {
 
   name?: string
   avatar?: string
+  avatarEmoji?: string
   role?: string
   instructions?: string
   color?: string
@@ -385,6 +442,12 @@ export interface DesktopAuthUser {
 export interface UpdateDesktopProfileInput {
   name?: string
   image?: string
+}
+
+export interface UsageSummary {
+  planName: string
+  status: string
+  credits: number
 }
 
 export type DesktopAuthState =
@@ -425,12 +488,16 @@ export interface DouchatApi {
   windowAction: (action: 'close' | 'minimize' | 'fullscreen') => void
   requestMicrophoneAccess: () => Promise<'granted' | 'denied' | 'unsupported'>
   openMicrophoneSettings: () => Promise<void>
+  setInterfaceLanguage: (language: string) => Promise<void>
   getAuthState: () => Promise<DesktopAuthState>
   startLogin: () => Promise<DesktopAuthState>
   retryAuth: () => Promise<DesktopAuthState>
   signOut: () => Promise<DesktopAuthState>
   refreshProfile: () => Promise<DesktopAuthState>
   updateProfile: (input: UpdateDesktopProfileInput) => Promise<DesktopAuthState>
+  getUsageSummary: () => Promise<UsageSummary>
+  openSubscriptionPlans: () => Promise<void>
+  openBillingPortal: () => Promise<void>
   getUpdateState: () => Promise<UpdateState>
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<UpdateState>
@@ -438,6 +505,8 @@ export interface DouchatApi {
   searchMessages: (conversationId: string, query: string) => Promise<ChatMessage[]>
   getMessagePage: (conversationId: string, topicId: string, before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
   getAttachmentData: (attachmentId: string) => Promise<string>
+  /** Reopen a file reference saved in chat history after main-process validation. */
+  openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>

@@ -1,13 +1,13 @@
 import { agentIcons } from '../agentIcons'
-import { setPreferences, usePreferences, t } from '../preferences'
-import { SlidersHorizontal, Bot, Camera, CircleUserRound, ExternalLink, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
+import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
+import { SlidersHorizontal, Bot, Camera, CircleUserRound, Coins, CreditCard, ExternalLink, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
-import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState } from '../../../shared/types'
+import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
 import { UserAvatar } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'agents' | 'about'
+export type SettingsTab = 'profile' | 'general' | 'usage' | 'agents' | 'about'
 
 export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClose, onSignOut, onUpdateProfile, onDetect }: {
   user: DesktopAuthUser
@@ -58,6 +58,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
       <div className="settings-tabs" role="tablist" aria-label={t('Settings')}>
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
+        <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Usage & Billing')}</span></button>
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -69,7 +70,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
       ) : tab === 'general' ? <>
         <header className="settings-heading"><div><h1>{t('General')}</h1><p>{t('Choose your language and appearance.')}</p></div></header>
         <div className="general-settings">
-          <label><span>{t('Language')}</span><select value={preferences.language} onChange={(event) => setPreferences({ language: event.target.value as 'en' | 'zh-CN' })}><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+          <label><span>{t('Language')}</span><select value={preferences.language} onChange={(event) => setPreferences({ language: event.target.value as LanguagePreference })}><option value="system">{t('Follow system')}</option><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
           <label><span>{t('Appearance')}</span><select value={preferences.appearance} onChange={(event) => setPreferences({ appearance: event.target.value as 'system' | 'light' | 'dark' })}><option value="system">{t('System')}</option><option value="light">{t('Light')}</option><option value="dark">{t('Dark')}</option></select></label>
           <label className="font-size-setting"><span>{t('Font size')}</span><div className="font-size-control">
             <input type="range" min="0" max="4" step="1" value={preferences.fontSize} aria-label={t('Font size')} aria-valuetext={`${[85, 92, 100, 110, 120][preferences.fontSize]}%`} onChange={(event) => setPreferences({ fontSize: Number(event.target.value) })} />
@@ -77,7 +78,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
           </div></label>
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
-      </> : tab === 'agents'  ? <>
+      </> : tab === 'usage' ? <UsageTab /> : tab === 'agents'  ? <>
         <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
@@ -90,6 +91,101 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
     </main>
     </section>
   </div>
+}
+
+function usageStatusLabel(status: string): string {
+  if (status === 'active') return t('Active')
+  if (status === 'trialing') return t('Trial')
+  if (status === 'pending_cancel') return t('Ends after this billing period')
+  if (status === 'free') return t('Free plan')
+  return status || t('Free plan')
+}
+
+export function UsageTab(): ReactElement {
+  const [summary, setSummary] = useState<UsageSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [opening, setOpening] = useState<'plan' | 'billing' | null>(null)
+
+  const load = async (): Promise<void> => {
+    setLoading(true)
+    setError('')
+    try { setSummary(await window.douchat.getUsageSummary()) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { void load() }, [])
+
+  const openBilling = async (): Promise<void> => {
+    setOpening('billing')
+    setError('')
+    try { await window.douchat.openBillingPortal() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setOpening(null) }
+  }
+
+  const freePlan = Boolean(summary && (
+    summary.status === 'free' || summary.planName.trim().toLowerCase() === 'free'
+  ))
+  const openPlan = async (): Promise<void> => {
+    if (!summary) return
+    setOpening('plan')
+    setError('')
+    try {
+      if (freePlan) await window.douchat.openSubscriptionPlans()
+      else await window.douchat.openBillingPortal()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setOpening(null) }
+  }
+
+  const credits = summary ? new Intl.NumberFormat(document.documentElement.lang || undefined).format(summary.credits) : '—'
+  return <>
+    <header className="settings-heading usage-heading">
+      <div><h1>{t('Usage & Billing')}</h1><p>{t('Your plan, balance, and billing in one place.')}</p></div>
+      <button className="secondary-button usage-refresh" type="button" disabled={loading} onClick={() => void load()}>
+        <RefreshCw className={loading ? 'spin' : ''} size={15} />{t('Refresh')}
+      </button>
+    </header>
+    <section className="usage-card" aria-label={t('Usage & Billing')} aria-busy={loading}>
+      <div className="usage-credit-row" aria-live="polite">
+        <div className="usage-credit-copy">
+          <span>{t('Credits remaining')}</span>
+          <strong>{loading && !summary ? '—' : credits}</strong>
+          <small>{t('Cloud agent replies use Douchat credits. Local agents do not.')}</small>
+        </div>
+        <span className="usage-credit-icon" aria-hidden="true"><Coins size={23} /></span>
+      </div>
+      <div className="usage-detail-row usage-plan-row">
+        <div className="usage-detail-copy">
+          <span>{t('Current plan')}</span>
+          <strong>{loading && !summary ? '—' : summary?.planName || t('Free')}</strong>
+          {summary && <small>{usageStatusLabel(summary.status)}</small>}
+        </div>
+        <button
+          className={`${freePlan ? 'primary-button' : 'secondary-button'} usage-plan-button`}
+          type="button"
+          disabled={!summary || opening !== null}
+          onClick={() => void openPlan()}
+        >
+          {t(opening === 'plan' ? 'Opening…' : freePlan ? 'Upgrade plan' : 'Manage plan')}
+          <ExternalLink size={14} />
+        </button>
+      </div>
+      <div className="usage-detail-row usage-billing-row">
+        <span className="usage-row-icon" aria-hidden="true"><CreditCard size={18} /></span>
+        <div className="usage-detail-copy">
+          <span>{t('Billing')}</span>
+          <strong>{t('Invoices and payment methods')}</strong>
+          <small>{t('Billing is managed securely on douchat.ai.')}</small>
+        </div>
+        <button className="secondary-button usage-manage-button" type="button" disabled={opening !== null} onClick={() => void openBilling()}>
+          {t(opening === 'billing' ? 'Opening…' : 'Manage billing')}<ExternalLink size={14} />
+        </button>
+      </div>
+      {error && <div className="usage-error" role="alert"><span>{t(error)}</span><button type="button" onClick={() => void load()}>{t('Try again')}</button></div>}
+    </section>
+  </>
 }
 
 function AboutTab(): ReactElement {

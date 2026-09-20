@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, powerMonitor, session, shell, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -105,6 +105,7 @@ function broadcast(snapshot: AppSnapshot): void {
 
 function broadcastAuth(state: DesktopAuthState): void {
   let welcomeConversationId: string | undefined
+  let builtInRefresh: Promise<string | undefined> = Promise.resolve(undefined)
   if (state.status === 'signed-in' && store && runtime) {
     // The service account is the identity authority. Keep only the name as a
     // local runtime cache so agent prompts use the same identity when offline.
@@ -112,6 +113,25 @@ function broadcastAuth(state: DesktopAuthState): void {
     const welcome = store.ensureDefaultCloudContact(state.user.id, runtime.defaultCloudAgentModel())
     welcomeConversationId = welcome.conversation?.id ?? store.defaultConversationId
     broadcast(runtime.snapshot())
+    builtInRefresh = auth.getBuiltInAgentManifest()
+      .then((manifest) => {
+        const current = auth.getState()
+        if (current.status !== 'signed-in' || current.user.id !== state.user.id) return undefined
+        const synced = store.ensureDefaultCloudContact(
+          state.user.id,
+          runtime.defaultCloudAgentModel(),
+          manifest
+        )
+        if (synced.agent) runtime.disposeAgent(synced.agent.id)
+        broadcast(runtime.snapshot())
+        return synced.conversation?.id ?? store.defaultConversationId
+      })
+      .catch((error) => {
+        // The cached manifest and embedded definition keep the administrator
+        // usable offline. A refresh failure is therefore diagnostic only.
+        console.warn('[douchat] built-in agent refresh failed:', error instanceof Error ? error.message : error)
+        return welcomeConversationId
+      })
   }
   const signedIn = state.status === 'signed-in'
   const shouldConnect = runtime && (
@@ -121,20 +141,22 @@ function broadcastAuth(state: DesktopAuthState): void {
   )
   if (runtime && shouldConnect) {
     cloudSessionActive = signedIn
-    void runtime.connect().then(async () => {
+    void Promise.all([runtime.connect(), builtInRefresh]).then(async ([, refreshedConversationId]) => {
       // Wait for the account's Cloud model before asking Dr. Dou to open the
       // welcome chat. greet() is otherwise idempotent once a message exists.
       const current = auth?.getState()
       if (
-        welcomeConversationId
+        (refreshedConversationId ?? welcomeConversationId)
         && state.status === 'signed-in'
         && current?.status === 'signed-in'
         && current.user.id === state.user.id
       ) {
-        await runtime.greet(welcomeConversationId)
+        await runtime.greet((refreshedConversationId ?? welcomeConversationId)!)
       }
       broadcast(runtime.snapshot())
     })
+  } else {
+    void builtInRefresh
   }
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:auth-state', state)
 }
@@ -303,17 +325,37 @@ app.whenReady().then(() => {
     else if (action === 'minimize') mainWindow.minimize()
     else if (action === 'fullscreen') mainWindow.setFullScreen(!mainWindow.isFullScreen())
   })
+  ipcMain.handle('douchat:set-interface-language', (_event, language: unknown) => {
+    runtime.setInterfaceLanguage(typeof language === 'string' ? language : '')
+  })
   store = DouchatStore.atUserData(app.getPath('userData'))
   emailConnectors = new EmailConnectorManager(store, app.getPath('userData'))
   computer = new LocalComputerProvider(
     () => runtime && broadcast(runtime.snapshot()),
-    [app.getPath('downloads'), app.getPath('desktop'), app.getPath('documents')]
+    [app.getPath('downloads'), app.getPath('desktop'), app.getPath('documents')],
+    (path) => shell.openPath(path)
   )
   runtime = new DouchatRuntime(store, computer, broadcast, {
     baseUrl: chatApiBaseUrl(webAppUrl),
     resolveAccessToken: () => auth?.getAccessToken(),
-    onUnauthorized: async () => { await auth?.invalidateSession() }
+    onUnauthorized: async () => { await auth?.invalidateSession() },
+    avatarFromImage: (image) => {
+      const source = nativeImage.createFromBuffer(Buffer.from(image.data, 'base64'))
+      const size = source.getSize()
+      if (source.isEmpty() || !size.width || !size.height) throw new Error('The attached image could not be read.')
+      const edge = Math.min(size.width, size.height)
+      return source
+        .crop({
+          x: Math.floor((size.width - edge) / 2),
+          y: Math.floor((size.height - edge) / 2),
+          width: edge,
+          height: edge
+        })
+        .resize({ width: 256, height: 256, quality: 'best' })
+        .toDataURL()
+    }
   }, emailConnectors)
+  runtime.setInterfaceLanguage(app.getLocale())
   scheduler = new RoutineScheduler(store, runtime, () => broadcast(runtime.snapshot()))
   const updateDriver = app.isPackaged
     ? electronUpdater.autoUpdater as unknown as UpdateDriver
@@ -359,6 +401,9 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:sign-out', () => auth.signOut())
   ipcMain.handle('douchat:refresh-profile', () => auth.refreshProfile())
   ipcMain.handle('douchat:update-profile', (_event, input: UpdateDesktopProfileInput) => auth.updateProfile(input))
+  ipcMain.handle('douchat:get-usage-summary', () => auth.getUsageSummary())
+  ipcMain.handle('douchat:open-subscription-plans', () => auth.openSubscriptionPlans())
+  ipcMain.handle('douchat:open-billing-portal', () => auth.openBillingPortal())
   ipcMain.handle('douchat:get-update-state', () => updater.state())
   ipcMain.handle('douchat:check-for-updates', () => updater.checkForUpdates())
   ipcMain.handle('douchat:install-update', () => updater.installUpdate())
@@ -366,6 +411,10 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:search-messages', (_event, id: string, query: string) => store.searchMessages(id, query))
   ipcMain.handle('douchat:message-page', (_event, conversationId: string, topicId: string, before?: string) => store.messagePage(conversationId, topicId, before))
   ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
+  ipcMain.handle('douchat:open-local-file', async (event, path: string) => {
+    if (!isDouchatRenderer(event.sender) || typeof path !== 'string') throw new Error('Invalid file request')
+    await computer.openLocalFile(path)
+  })
   ipcMain.handle('douchat:get-snapshot', () => runtime.snapshot())
   const push = (): AppSnapshot => {
     const snapshot = runtime.snapshot()
@@ -396,6 +445,9 @@ app.whenReady().then(() => {
     return push()
   })
   ipcMain.handle('douchat:delete-agent', (_event, agentId: string) => {
+    if (store.agent(agentId)?.systemRole === 'admin') {
+      throw new Error('The system administrator cannot be deleted')
+    }
     runtime.disposeAgent(agentId)
     store.deleteAgent(agentId)
     return push()

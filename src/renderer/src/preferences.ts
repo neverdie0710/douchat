@@ -1,19 +1,30 @@
 import { useSyncExternalStore } from 'react'
+import { supportedInterfaceLanguage, type InterfaceLanguage } from '../../shared/language'
 
-export type Preferences = { language: 'en' | 'zh-CN'; appearance: 'system' | 'light' | 'dark'; fontSize: number }
+export type LanguagePreference = 'system' | InterfaceLanguage
+export type Preferences = { language: LanguagePreference; appearance: 'system' | 'light' | 'dark'; fontSize: number }
 const key = 'douchat.general'
+function systemLanguage(): InterfaceLanguage {
+  const locale = typeof navigator === 'undefined'
+    ? 'en'
+    : navigator.languages?.[0] || navigator.language
+  return supportedInterfaceLanguage(locale)
+}
+export function resolveInterfaceLanguage(language: LanguagePreference): InterfaceLanguage {
+  return language === 'system' ? systemLanguage() : language
+}
 function read(): Preferences {
   try {
     const saved = JSON.parse(localStorage.getItem(key) || '{}')
-    return { language: saved.language === 'zh-CN' ? 'zh-CN' : 'en', appearance: ['light', 'dark'].includes(saved.appearance) ? saved.appearance : 'system', fontSize: Number.isInteger(saved.fontSize) && saved.fontSize >= 0 && saved.fontSize <= 4 ? saved.fontSize : 1 }
-  } catch { return { language: 'en', appearance: 'system', fontSize: 1 } }
+    return { language: saved.language === 'zh-CN' || saved.language === 'en' ? saved.language : 'system', appearance: ['light', 'dark'].includes(saved.appearance) ? saved.appearance : 'system', fontSize: Number.isInteger(saved.fontSize) && saved.fontSize >= 0 && saved.fontSize <= 4 ? saved.fontSize : 1 }
+  } catch { return { language: 'system', appearance: 'system', fontSize: 1 } }
 }
 let current = read()
 const listeners = new Set<() => void>()
 const media = matchMedia('(prefers-color-scheme: dark)')
 function apply(): void {
   document.documentElement.dataset.theme = current.appearance === 'system' ? (media.matches ? 'dark' : 'light') : current.appearance
-  document.documentElement.lang = current.language
+  document.documentElement.lang = resolveInterfaceLanguage(current.language)
   document.documentElement.style.setProperty('--font-scale', String([0.85, 0.92, 1, 1.1, 1.2][current.fontSize]))
 }
 export function setPreferences(patch: Partial<Preferences>): void {
@@ -27,12 +38,16 @@ window.addEventListener('storage', (event) => {
   current = read(); apply(); listeners.forEach((notify) => notify())
 })
 media.addEventListener('change', apply)
+window.addEventListener('languagechange', () => {
+  apply()
+  if (current.language === 'system') listeners.forEach((notify) => notify())
+})
 apply()
 export function usePreferences(): Preferences {
   return useSyncExternalStore((notify) => { listeners.add(notify); return () => { listeners.delete(notify) } }, () => current)
 }
 export function t(text: string): string {
-  if (current.language !== 'zh-CN') return text
+  if (resolveInterfaceLanguage(current.language) !== 'zh-CN') return text
   const exact = translations[text]
   if (exact) return exact
 
@@ -70,14 +85,27 @@ export function tr(text: string, values: Record<string, string | number>): strin
   )
 }
 const translations: Record<string, string> = {
-  'Dr. Dou': '豆博士', 'Douchat assistant': 'Douchat 云端助手',
+  'Dr. Dou': '豆博士', 'Douchat assistant': 'Douchat 云端助手', 'System administrator': '系统管理员', 'Built-in': '内置',
   'Could not reach the login service. Check your connection and try again.': '无法连接登录服务，请检查网络后重试。', 'This login request has expired. Start again.': '本次登录请求已过期，请重新开始。', 'The login request expired or was already used. Start again.': '本次登录请求已过期或已经使用，请重新开始。', 'Authorization code is invalid, expired, or already used': '授权码无效、已过期或已经使用，请重新开始。', 'Login callback could not be verified': '无法验证登录回调，请重新开始。', 'Login callback did not include a valid authorization code': '登录回调中没有有效的授权码。', 'Login service returned an invalid session.': '登录服务返回了无效会话。', 'Login service returned an invalid user.': '登录服务返回了无效用户信息。', 'Secure credential storage is unavailable on this computer.': '此电脑无法使用安全凭证存储。', 'Douchat Cloud Chat is not enabled or its upstream model is not configured.': 'Douchat Cloud Chat 尚未启用，或上游模型尚未配置。',
   'Meet Douchat': '遇见 Douchat', 'Your smartest collaboration partner.': '你最聪明的协作伙伴。', 'Continue in browser': '在浏览器中继续', 'Open login page again': '重新打开登录页', 'Secure browser login': '安全的浏览器登录', 'Waiting for browser login…': '正在等待浏览器登录…', 'Finish signing in in your browser. Douchat will return automatically.': '请在浏览器中完成登录，成功后将自动返回 Douchat。', 'Your password stays in the browser. Douchat only receives a one-time authorization code.': '密码始终保留在浏览器中，Douchat 只接收一次性授权码。', 'Login could not be completed': '登录未完成', 'Encrypted session storage on this device': '登录凭证已在此设备上加密保存', 'Checking your login…': '正在检查登录状态…',
   'Search group members': '搜索群成员', 'Remove group members': '移出群成员', 'Select members to remove': '从左侧选择要移出的群成员', 'Keep at least one member': '群聊至少保留一位成员',
   'Group members': '群聊成员', 'Create group': '创建群聊', 'Add group members': '添加群成员', 'Already added': '已加入', 'Selected agents': '已选智能体', 'Selected': '已选择', 'Select agents to add': '从左侧选择要添加的智能体', 'No matching agents': '没有匹配的智能体',
   'Existing groups': '已有群聊', 'Open group': '进入群聊', 'Open chat': '进入聊天', 'No matching groups': '没有匹配的群聊', 'Select one agent to chat, several to create a group, or open an existing group.': '选择一个智能体开始聊天，选择多个智能体创建群聊，或直接进入已有群聊。',
-  'Agent': '智能体', 'Edit agent': '编辑智能体', 'Agent menu': '智能体菜单', 'Delete agent': '删除智能体', 'Avatar': '头像', 'Nickname': '昵称', 'Description': '描述', 'Add a description': '添加更多描述信息', 'Search or create labels': '搜索或创建标签…', 'Done': '完成', 'This picture could not be used.': '无法使用这张图片。', 'Role': '角色', 'Agent details': '智能体资料', 'Instructions': '行为指令', 'Labels': '标签', 'More information': '更多信息', 'Shared groups': '共同群聊', 'Source': '来源', 'Cloud model': '云端模型', 'Local agent': '本地智能体', 'Model endpoint': '模型服务', 'Added on': '添加时间',
-  'Typing': '正在输入', 'Coordinating the group': '正在协调群聊', 'Preparing a greeting': '正在准备问候', 'Delivering a message': '正在传递消息', 'Preparing a reply': '正在回复',
+  'Agent': '智能体', 'Edit agent': '编辑智能体', 'Agent menu': '智能体菜单', 'Delete agent': '删除智能体', 'Avatar': '头像', 'Choose emoji': '选择表情', 'Use default avatar': '使用默认头像', 'Nickname': '昵称', 'Description': '描述', 'Add a description': '添加更多描述信息', 'Search or create labels': '搜索或创建标签…', 'Done': '完成', 'This picture could not be used.': '无法使用这张图片。', 'Role': '角色', 'Agent details': '智能体资料', 'Instructions': '行为指令', 'Labels': '标签', 'More information': '更多信息', 'Shared groups': '共同群聊', 'Source': '来源', 'Cloud': '云端', 'Local': '本地', 'Cloud model': '云端模型', 'Local agent': '本地智能体', 'Model endpoint': '模型服务', 'Added on': '添加时间',
+  'Typing': '正在输入', 'Coordinating the group': '正在协调群聊', 'Preparing a greeting': '正在准备问候', 'Delivering a message': '正在传递消息', 'Preparing a reply': '正在回复', 'Thinking about the next step': '正在思考下一步', 'Preparing the result': '正在整理结果', 'Trying another approach': '正在尝试其他方法',
+  'Actions performed': '执行的操作', 'the selected item': '所选项目', '{count} actions': '{count} 项操作', '{count} actions could not be completed': '{count} 项操作未完成',
+  'Open local file': '打开本地文件', 'This file is no longer available at its saved location.': '文件已不在原来的位置。',
+  'Opening {name} with the system default app': '正在用系统默认应用打开 {name}', 'Opened {name} with the system default app': '已用系统默认应用打开 {name}', 'Could not open {name} with the system default app': '未能用系统默认应用打开 {name}',
+  'Checking files in {name}': '正在查看 {name} 中的文件', 'Checked files in {name}': '已查看 {name} 中的文件', 'Could not check files in {name}': '未能查看 {name} 中的文件',
+  'Creating folder {name}': '正在创建文件夹 {name}', 'Created folder {name}': '已创建文件夹 {name}', 'Could not create folder {name}': '未能创建文件夹 {name}',
+  'Moving {name}': '正在移动 {name}', 'Moved {name}': '已移动 {name}', 'Could not move {name}': '未能移动 {name}',
+  'Opening {name}': '正在打开 {name}', 'Opened {name}': '已打开 {name}', 'Could not open {name}': '未能打开 {name}',
+  'Contacting {name}': '正在联系 {name}', 'Contacted {name}': '已联系 {name}', 'Could not contact {name}': '未能联系 {name}',
+  'Creating agent {name}': '正在创建智能体 {name}', 'Created agent {name}': '已创建智能体 {name}', 'Could not create agent {name}': '未能创建智能体 {name}',
+  'Updating agent {name}': '正在修改智能体 {name}', 'Updated agent {name}': '已修改智能体 {name}', 'Could not update agent {name}': '未能修改智能体 {name}',
+  'Working in the browser': '正在浏览器中操作', 'Completed a browser action': '已完成浏览器操作', 'Browser action failed': '浏览器操作失败',
+  'Checking connected email': '正在查看已连接的邮箱', 'Checked connected email': '已查看已连接的邮箱', 'Could not check connected email': '未能查看已连接的邮箱',
+  'Using a connected tool': '正在使用已连接工具', 'Completed a tool action': '已完成工具操作', 'Tool action failed': '工具操作失败',
   'Search chat history': '查找聊天内容', 'Clear chat history': '清空聊天记录', 'Clear all messages in this chat? This cannot be undone.': '确定清空当前聊天记录？此操作无法撤销。', 'No matching messages': '暂无匹配消息', 'Showing latest 100 matches': '显示最近 100 条匹配消息', 'Could not load messages': '加载消息失败，请重试', 'Could not save changes': '保存失败，请重试',
   'Loading…': '加载中…', 'Load earlier messages': '加载更早的消息', 'Retry loading earlier messages': '加载失败，点击重试',
 'Pin to top': '置顶',
@@ -92,6 +120,8 @@ const translations: Record<string, string> = {
   'Start chat': '发起聊天', 'No chats yet': '暂无聊天',
   'Create agent': '创建智能体', 'Agent name': '智能体名称', 'Enter agent name': '输入智能体名称', 'Runs with': '运行方式', 'Use cloud model': '使用云端模型', 'Use local agent': '使用本地智能体', 'Douchat cloud model': 'Douchat 云端模型', 'AI tools on this computer': '本机 AI 工具', 'Select a local agent': '选择本地智能体', 'No available local agents': '暂无可用的本地智能体', 'Douchat Cloud': 'Douchat 云端', 'Saving…': '保存中…', 'Close': '关闭',
   'Settings': '设置', 'Profile': '个人资料', 'Account': '账号', 'General': '通用', 'Agents': '智能体', 'Models': '模型', 'About': '关于', 'Update available': '有可用更新',
+  'Usage & Billing': '用量与账单', 'Your plan, balance, and billing in one place.': '查看套餐、剩余额度和账单。', 'Current plan': '当前套餐', 'Credits remaining': '剩余额度', 'Upgrade plan': '升级套餐', 'Manage plan': '管理套餐', 'Manage billing': '查看账单', 'Billing': '账单', 'Invoices and payment methods': '账单与支付方式', 'Billing is managed securely on douchat.ai.': '在 douchat.ai 安全管理账单和支付方式。', 'Active': '使用中', 'Trial': '试用中', 'Ends after this billing period': '将在本计费周期后结束', 'Free plan': '免费套餐', 'Free': '免费版',
+  'Cloud agent replies use Douchat credits. Local agents do not.': '云端智能体回复会消耗额度，本地智能体不会消耗。', 'Sign in to view usage and billing.': '登录后可查看用量与账单。', 'Could not load usage and billing. Check your connection and try again.': '无法加载用量与账单，请检查网络后重试。', 'Your session has expired. Sign in again.': '登录状态已过期，请重新登录。', 'Try again': '重试',
   'Connectors': '连接器', 'Connect accounts and let selected agents use their data and actions.': '连接外部账户，并让指定智能体使用其中的数据和操作。',
   'Connected accounts': '已连接账户', '{count} agents enabled': '已授权 {count} 个智能体', 'No agents enabled': '未授权智能体', 'Connected': '已连接',
   'Available connectors': '可用连接器', 'Built in': '内置', 'Connect': '连接',
@@ -113,7 +143,7 @@ const translations: Record<string, string> = {
   'Version information and software updates.': '查看版本信息并管理软件更新。', 'Version': '版本', 'Version information': '版本信息', 'Douchat website': 'Douchat 官网', 'Open website': '访问官网', 'Checking for updates…': '正在检查更新…', 'Check for updates': '检查更新', 'You are up to date · Check again': '已是最新版本 · 再次检查', 'You are using the latest version.': '当前已是最新版本。', 'Update checks are available in packaged builds.': '当前为开发版；安装正式版后可检查更新。',
   'Downloading update…': '正在下载更新…', 'Downloading the verified update from Douchat…': '正在从 Douchat 正式发布渠道下载已验证的更新…', 'Connecting to the Douchat update service…': '正在连接 Douchat 更新服务…', 'Check for updates to compare this version with the latest release.': '检查更新以对比当前版本与最新正式版。', 'Version {version} is available': '发现新版本 {version}', 'Update to v{version} and restart': '更新到 v{version} 并重启', 'Update ready to install': '更新已准备好安装', 'Finish {count} active tasks before restarting.': '请先等待 {count} 个运行中的任务结束。', 'Restart to finish update': '重启并完成更新', 'Installing update and restarting…': '正在安装更新并重启…', 'Update failed:': '更新失败：', 'Updates are downloaded from signed Douchat releases. The app waits for active agent tasks before restarting.': '更新仅从 Douchat 正式发布渠道下载。若有智能体任务正在运行，应用会等待任务结束后再重启。',
   'Font size': '字体大小', 'Small': '小', 'Standard': '标准', 'Large': '大', 'Font preview': '字号预览', 'Messages and interface text update immediately.': '消息和界面文字将即时调整。',
-  'Language': '语言', 'Appearance': '外观', 'Light': '浅色', 'Dark': '深色', 'System': '跟随系统',
+  'Language': '语言', 'Appearance': '外观', 'Light': '浅色', 'Dark': '深色', 'System': '跟随系统', 'Follow system': '跟随系统',
   'Choose your language and appearance.': '设置界面语言和外观。',
   'Local agents': '本地智能体', 'View the local agents available on this computer.': '查看这台电脑上可用的本地智能体。',
   'Installed': '已安装', 'Refresh': '刷新', 'Scanning…': '扫描中…', 'Detect': '检测', 'Detecting…': '检测中…',
@@ -163,7 +193,7 @@ const translations: Record<string, string> = {
   'The lead member opens the conversation, dispatches work and consolidates the result. Mention a member with @ to address them directly.': '主智能体负责开启对话、分配工作并汇总结果。输入 @ 可直接指定成员。',
   'Open the group chat': '进入群聊', 'Manage members': '管理成员', 'What this group is for': '群聊用途', 'topics': '个话题', 'members': '位成员',
   'Edit group': '编辑群聊', 'Lead member': '主智能体', 'Add a member': '添加成员',
-  'Opening Douchat…': '正在打开 Douchat…', 'Close chat details': '关闭聊天详情', '{name} — open your profile': '{name} — 打开个人资料',
+  'Opening Douchat…': '正在打开 Douchat…', 'Close chat details': '关闭聊天详情', '{name} — open your profile': '{name} — 打开个人资料', '{name} — view profile': '{name} — 查看资料',
   'Close window': '关闭窗口', 'Minimize window': '最小化窗口', 'Toggle full screen': '切换全屏', 'Window controls': '窗口控制', 'Sections': '功能导航',
   'Message could not be sent': '消息发送失败', 'Agent could not be deleted': '无法删除智能体', 'Chat could not be deleted': '无法删除聊天', 'Chat could not be opened': '无法打开聊天', 'Chat could not be pinned': '无法更改置顶状态', 'Chat could not be updated': '无法更新聊天', 'Window could not be opened': '无法打开独立窗口',
   '{name} joined the workspace': '{name} 已加入工作区', '{name} updated': '已更新 {name}', 'Delete {name}? Their chat and group memberships are removed.': '确定删除 {name}？其私聊和群聊成员关系也会被移除。', '{name} was removed': '已移除 {name}', '{name} is ready': '{name} 已创建', 'Group updated': '群聊已更新',

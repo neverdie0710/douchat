@@ -9,12 +9,14 @@ import type {
   Conversation,
   ConversationActivityState,
   MessageAttachment,
+  MessageAction,
   MessageDelivery,
   MessageImageInput,
   MessageSource,
   Topic
 } from '../../../shared/types'
 import { MessageMarkdown } from './MessageMarkdown'
+import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
 import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
@@ -29,6 +31,12 @@ const MAX_PASTED_IMAGES = 4
 const MAX_PASTED_IMAGE_BYTES = 8 * 1024 * 1024
 const MAX_PASTED_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 const PASTED_IMAGE_TYPES = new Set<MessageAttachment['mimeType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+// Keep action receipts persisted for diagnostics, but do not surface them in
+// completed chat messages until the product has a quieter presentation for them.
+const SHOW_MESSAGE_ACTION_RECEIPTS = false
+// Voice transcription remains implemented so it can be restored without a
+// migration, but its entry point is intentionally hidden for this release.
+const SHOW_VOICE_INPUT = false
 
 interface PendingImage {
   id: string
@@ -85,6 +93,172 @@ function MessageAttachments({ attachments }: { attachments?: MessageAttachment[]
   return (
     <div className={`message-attachments count-${Math.min(attachments.length, 4)}`}>
       {attachments.map((attachment) => <MessageImage key={attachment.id} attachment={attachment} />)}
+    </div>
+  )
+}
+
+export function messageActionLabel(action: MessageAction): string {
+  const target = action.target || t('the selected item')
+  const labels: Record<MessageAction['status'], string> = action.tool === 'computer_open_file'
+    ? {
+        running: tr('Opening {name} with the system default app', { name: target }),
+        succeeded: tr('Opened {name} with the system default app', { name: target }),
+        failed: tr('Could not open {name} with the system default app', { name: target })
+      }
+    : action.tool === 'computer_list_files'
+      ? {
+          running: tr('Checking files in {name}', { name: target }),
+          succeeded: tr('Checked files in {name}', { name: target }),
+          failed: tr('Could not check files in {name}', { name: target })
+        }
+      : action.tool === 'computer_make_directory'
+        ? {
+            running: tr('Creating folder {name}', { name: target }),
+            succeeded: tr('Created folder {name}', { name: target }),
+            failed: tr('Could not create folder {name}', { name: target })
+          }
+        : action.tool === 'computer_move_file'
+          ? {
+              running: tr('Moving {name}', { name: target }),
+              succeeded: tr('Moved {name}', { name: target }),
+              failed: tr('Could not move {name}', { name: target })
+            }
+          : action.tool === 'computer_open'
+            ? {
+                running: tr('Opening {name}', { name: target }),
+                succeeded: tr('Opened {name}', { name: target }),
+                failed: tr('Could not open {name}', { name: target })
+              }
+            : action.tool === 'message_agent'
+              ? {
+                  running: tr('Contacting {name}', { name: target }),
+                  succeeded: tr('Contacted {name}', { name: target }),
+                  failed: tr('Could not contact {name}', { name: target })
+                }
+              : action.tool === 'create_agent'
+                ? {
+                    running: tr('Creating agent {name}', { name: target }),
+                    succeeded: tr('Created agent {name}', { name: target }),
+                    failed: tr('Could not create agent {name}', { name: target })
+                  }
+                : action.tool === 'update_agent'
+                  ? {
+                      running: tr('Updating agent {name}', { name: target }),
+                      succeeded: tr('Updated agent {name}', { name: target }),
+                      failed: tr('Could not update agent {name}', { name: target })
+                    }
+              : ['computer_snapshot', 'computer_click', 'computer_type', 'computer_scroll'].includes(action.tool)
+                ? {
+                    running: t('Working in the browser'),
+                    succeeded: t('Completed a browser action'),
+                    failed: t('Browser action failed')
+                  }
+                : action.tool.startsWith('email_')
+                  ? {
+                      running: t('Checking connected email'),
+                      succeeded: t('Checked connected email'),
+                      failed: t('Could not check connected email')
+                    }
+                  : {
+                      running: t('Using a connected tool'),
+                      succeeded: t('Completed a tool action'),
+                      failed: t('Tool action failed')
+                    }
+  return labels[action.status]
+}
+
+export function MessageActions({ actions }: { actions?: MessageAction[] }): ReactElement | null {
+  const [open, setOpen] = useState(false)
+  if (!actions?.length) return null
+  const successful = actions.filter((action) => action.status === 'succeeded')
+  const primary = successful.at(-1) ?? actions.at(-1)!
+  const collapsible = actions.length > 1
+  const summary = successful.length
+    ? messageActionLabel(primary)
+    : tr('{count} actions could not be completed', { count: actions.length })
+  const icon = primary.status === 'running'
+    ? <LoaderCircle size={13} />
+    : primary.status === 'failed'
+      ? <TriangleAlert size={13} />
+      : <Check size={13} />
+
+  if (!collapsible) {
+    return (
+      <div className="message-actions" aria-label={t('Actions performed')}>
+        <div className={`message-action is-${primary.status}`} role="status">
+          <span className="message-action-icon" aria-hidden="true">{icon}</span>
+          <span>{summary}</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`message-actions ${open ? 'is-open' : ''}`} aria-label={t('Actions performed')}>
+      <button
+        type="button"
+        className={`message-actions-toggle is-${primary.status}`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="message-action-icon" aria-hidden="true">{icon}</span>
+        <span className="message-actions-summary">{summary}</span>
+        <span className="message-actions-count">{tr('{count} actions', { count: actions.length })}</span>
+        <ChevronDown className="message-actions-chevron" size={13} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="message-actions-details">
+          {actions.map((action) => (
+            <div className={`message-action is-${action.status}`} key={action.id} role="status">
+              <span className="message-action-icon" aria-hidden="true">
+                {action.status === 'running'
+                  ? <LoaderCircle size={13} />
+                  : action.status === 'failed'
+                    ? <TriangleAlert size={13} />
+                    : <Check size={13} />}
+              </span>
+              <span>{messageActionLabel(action)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function activityDetailLabel(activity: ConversationActivityState): string {
+  if (activity.action?.status === 'running') return messageActionLabel(activity.action)
+  if (activity.action?.status === 'failed') return t('Trying another approach')
+  if (activity.action?.status === 'succeeded') return t('Preparing the result')
+  if (activity.phase === 'planning') return t('Coordinating the group')
+  if (activity.phase === 'greeting') return t('Preparing a greeting')
+  if (activity.phase === 'delivering') return t('Delivering a message')
+  return t('Thinking about the next step')
+}
+
+export function ChatActivity({
+  activity,
+  agents
+}: {
+  activity: ConversationActivityState
+  agents: AgentConfig[]
+}): ReactElement {
+  const activeAgents = activity.agentIds
+    .map((id) => agents.find((agent) => agent.id === id))
+    .filter((agent): agent is AgentConfig => Boolean(agent))
+  const detail = activityDetailLabel(activity)
+
+  return (
+    <div className="typing-row">
+      {activeAgents.map((agent) => <AgentAvatar key={agent.id} agent={agent} size={36} />)}
+      <div className="typing-content" role="status" aria-live="polite">
+        <span className="typing-label">{activeAgents.map(agentDisplayName).join('、') || activity.label}</span>
+        <span className="typing-bubble typing-activity">
+          <span>{t('Preparing a reply')}</span>
+          <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+        </span>
+        <span className="typing-activity-detail" key={detail}>{detail}</span>
+      </div>
     </div>
   )
 }
@@ -336,7 +510,8 @@ export function MessageGroupRow({
   relatedMessages,
   userName,
   userAvatar,
-  showAuthor
+  showAuthor,
+  onOpenAgentProfile
 }: {
   messages: ChatMessage[]
   agent?: AgentConfig
@@ -345,6 +520,7 @@ export function MessageGroupRow({
   userName: string
   userAvatar: string
   showAuthor: boolean
+  onOpenAgentProfile?: (agentId: string, anchor: ProfileAnchor) => void
 }): ReactElement {
   const first = messages[0]
   const mergePrivateReply = Boolean(
@@ -361,7 +537,20 @@ export function MessageGroupRow({
   return (
     <div className="message-row agent-message-row">
       <div className="message-avatar-slot">
-        {agent ? <AgentAvatar agent={agent} size={36} /> : <EmptyAvatar size={36} />}
+        {agent && onOpenAgentProfile ? (
+          <button
+            type="button"
+            className="message-avatar-button"
+            aria-label={tr('{name} — view profile', { name: agentDisplayName(agent) })}
+            title={agentDisplayName(agent)}
+            onClick={(event) => onOpenAgentProfile(
+              agent.id,
+              (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect()
+            )}
+          >
+            <AgentAvatar agent={agent} size={36} />
+          </button>
+        ) : agent ? <AgentAvatar agent={agent} size={36} /> : <EmptyAvatar size={36} />}
       </div>
       <div className="message-body">
         {(showAuthor || first.source) && (
@@ -374,6 +563,7 @@ export function MessageGroupRow({
           const hasError = bubbleMessages.some((message) => Boolean(message.error))
           const hasAttachments = bubbleMessages.some((message) => Boolean(message.attachments?.length))
           const hasText = bubbleMessages.some((message) => Boolean(message.text))
+          const actions = bubbleMessages.flatMap((message) => message.actions ?? [])
           return (
             <div key={bubble.id} className={`message-bubble agent-bubble ${hasError ? 'has-error' : ''} ${hasAttachments ? 'has-attachments' : ''} ${!hasText && hasAttachments ? 'image-only' : ''}`}>
               {bubble.source ? (
@@ -408,6 +598,7 @@ export function MessageGroupRow({
                   ) : null}
                 </div>
               ) : null)}
+              {SHOW_MESSAGE_ACTION_RECEIPTS ? <MessageActions actions={actions} /> : null}
             </div>
           )
         })}
@@ -469,14 +660,16 @@ export function SystemMessage({ message }: { message: ChatMessage }): ReactEleme
   )
 }
 
-function MessageRow({
+export function MessageRow({
   messages,
   agent,
   agents,
   relatedMessages,
   userName,
   userAvatar,
-  showAuthor
+  showAuthor,
+  onOpenAgentProfile,
+  onOpenUserProfile
 }: {
   messages: ChatMessage[]
   agent?: AgentConfig
@@ -485,6 +678,8 @@ function MessageRow({
   userName: string
   userAvatar: string
   showAuthor: boolean
+  onOpenAgentProfile?: (agentId: string, anchor: ProfileAnchor) => void
+  onOpenUserProfile?: () => void
 }): ReactElement {
   const message = messages[0]
   if (message.kind === 'handoff') {
@@ -508,12 +703,29 @@ function MessageRow({
           {message.text && <span>{message.text}</span>}
           <MessageAttachments attachments={message.attachments} />
         </div>
-        <UserAvatar
-          src={userAvatar}
-          name={userName}
-          size={36}
-          className="user-chat-avatar"
-        />
+        {onOpenUserProfile ? (
+          <button
+            type="button"
+            className="message-avatar-button user-profile-avatar-button"
+            onClick={onOpenUserProfile}
+            aria-label={tr('{name} — open your profile', { name: userName })}
+            title={userName}
+          >
+            <UserAvatar
+              src={userAvatar}
+              name={userName}
+              size={36}
+              className="user-chat-avatar"
+            />
+          </button>
+        ) : (
+          <UserAvatar
+            src={userAvatar}
+            name={userName}
+            size={36}
+            className="user-chat-avatar"
+          />
+        )}
       </div>
     )
   }
@@ -526,6 +738,7 @@ function MessageRow({
       userName={userName}
       userAvatar={userAvatar}
       showAuthor={showAuthor}
+      onOpenAgentProfile={onOpenAgentProfile}
     />
   )
 }
@@ -576,6 +789,8 @@ export function ChatPane({
   onConnect,
   inspectorOpen,
   onToggleInspector,
+  onOpenAgentProfile,
+  onOpenUserProfile,
   onSend,
   onStop
 }: {
@@ -592,6 +807,8 @@ export function ChatPane({
   onConnect: () => void
   inspectorOpen: boolean
   onToggleInspector: () => void
+  onOpenAgentProfile: (agentId: string, anchor: ProfileAnchor) => void
+  onOpenUserProfile: () => void
   onSend: (text: string, images?: MessageImageInput[]) => Promise<void>
   onStop: () => void
 }): ReactElement {
@@ -929,15 +1146,6 @@ export function ChatPane({
     }
   }
 
-  const activityLabel = (): string => {
-    if (!activity) return ''
-    if (activity.phase === 'planning') return t('Coordinating the group')
-    if (activity.phase === 'greeting') return t('Preparing a greeting')
-    if (activity.phase === 'delivering') return t('Delivering a message')
-    return t('Preparing a reply')
-  }
-
-
   if (!conversation) return (
     <main className="workspace empty-conversation" aria-label={t('No conversation selected')}>
       <img className="empty-conversation-mark" src={douchatLogo} alt="Douchat" draggable={false} />
@@ -989,24 +1197,13 @@ export function ChatPane({
                   userName={userName}
                   userAvatar={userAvatar}
                   showAuthor={conversation?.type === 'group'}
+                  onOpenAgentProfile={onOpenAgentProfile}
+                  onOpenUserProfile={onOpenUserProfile}
                 />
               </div>
             )
           })}
-          {activity && (
-            <div className="typing-row">
-              {activity.agentIds
-                .map((id) => agents.find((agent) => agent.id === id))
-                .filter((agent): agent is AgentConfig => Boolean(agent))
-                .map((agent) => (
-                  <AgentAvatar key={agent.id} agent={agent} size={36} />
-                ))}
-              <div className="typing-content" role="status">
-                <span className="typing-label">{activity.agentIds.map((id) => agents.find((agent) => agent.id === id)).filter((agent): agent is AgentConfig => Boolean(agent)).map(agentDisplayName).join('、') || activity.label}</span>
-                <span className="typing-bubble typing-activity"><span>{activityLabel()}</span><span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></span>
-              </div>
-            </div>
-          )}
+          {activity ? <ChatActivity activity={activity} agents={agents} /> : null}
           {activity?.takeover && (
             <div className="system-message">
               {tr('{name} is unavailable — {replacement} is standing in.', {
@@ -1078,7 +1275,7 @@ export function ChatPane({
             readOnly={voiceState !== 'idle'}
           />
           {attachmentError && <div className="composer-attachment-error" role="alert">{attachmentError}</div>}
-          {voiceError && (
+          {SHOW_VOICE_INPUT && voiceError && (
             <div className="composer-voice-error" role="alert">
               <span>{voiceError}</span>
               {voiceNeedsSettings && (
@@ -1091,19 +1288,19 @@ export function ChatPane({
           <div className="composer-bottom">
             <div className="composer-tools">
               <button type="button" className="emoji-toggle" disabled={voiceState !== 'idle'} onClick={() => setEmojiOpen((open) => !open)} aria-label={t('Emoji')} aria-expanded={emojiOpen}><Smile size={18} strokeWidth={2.1} /></button>
-              <button
-                type="button"
-                className={`voice-toggle is-${voiceState}`}
-                onClick={toggleVoiceInput}
-                aria-label={t(voiceState === 'idle' ? 'Start voice input' : 'Stop voice input')}
-                aria-pressed={voiceState !== 'idle'}
-                title={t(voiceState === 'idle' ? 'Voice input' : 'Stop voice input')}
-              >
-                {voiceState === 'starting' || voiceState === 'processing'
-                  ? <LoaderCircle className="voice-spinner" size={17} />
-                  : <Mic size={18} strokeWidth={2.1} />}
-              </button>
-              {voiceState !== 'idle' && (
+              {SHOW_VOICE_INPUT && <button
+                  type="button"
+                  className={`voice-toggle is-${voiceState}`}
+                  onClick={toggleVoiceInput}
+                  aria-label={t(voiceState === 'idle' ? 'Start voice input' : 'Stop voice input')}
+                  aria-pressed={voiceState !== 'idle'}
+                  title={t(voiceState === 'idle' ? 'Voice input' : 'Stop voice input')}
+                >
+                  {voiceState === 'starting' || voiceState === 'processing'
+                    ? <LoaderCircle className="voice-spinner" size={17} />
+                    : <Mic size={18} strokeWidth={2.1} />}
+                </button>}
+              {SHOW_VOICE_INPUT && voiceState !== 'idle' && (
                 <span className="voice-status" role="status">
                   {t(voiceState === 'listening' ? 'Listening…' : voiceState === 'starting' ? 'Starting microphone…' : 'Finishing voice input…')}
                 </span>

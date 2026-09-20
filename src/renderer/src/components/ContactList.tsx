@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import { contactSections, matchesContactQuery } from '../../../shared/bot/contacts'
-import { AgentAvatar, ConversationAvatar, SidebarResizer, agentDisplayName, agentDisplayRole } from './common'
+import { AgentAvatar, ConversationAvatar, SidebarResizer, agentDisplayName, agentSourceLabel } from './common'
 
 export type ContactSelection = { kind: 'bot'; id: string } | { kind: 'group'; id: string }
 
@@ -18,6 +18,7 @@ export function ContactList({
   onSelect: (selection: ContactSelection) => void
 }): ReactElement {
   const [query, setQuery] = useState('')
+  const [builtInOpen, setBuiltInOpen] = useState(true)
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [botsOpen, setBotsOpen] = useState(true)
 
@@ -39,10 +40,13 @@ export function ContactList({
     [snapshot.conversations]
   )
 
-  const bots = useMemo(
+  const matchingAgents = useMemo(
     () => snapshot.agents.filter((agent) => matchesContactQuery(`${agent.name} ${agentDisplayName(agent)}`, query)),
     [snapshot.agents, query, document.documentElement.lang]
   )
+  const hasBuiltIn = snapshot.agents.some((agent) => agent.systemRole === 'admin')
+  const builtIn = matchingAgents.filter((agent) => agent.systemRole === 'admin')
+  const bots = matchingAgents.filter((agent) => agent.systemRole !== 'admin')
   const starred = bots.filter((agent) => pinnedBotIds.has(agent.id))
   const sections = useMemo(() => contactSections(bots.filter((agent) => !pinnedBotIds.has(agent.id))), [bots, pinnedBotIds])
 
@@ -55,7 +59,7 @@ export function ContactList({
       <AgentAvatar agent={agent} size={34} />
       <span className="contact-row-copy">
         <strong>{agentDisplayName(agent)}</strong>
-        <small>{agentDisplayRole(agent)}{agent.localAgentId ? ` · ${agent.localAgentId}` : ''}</small>
+        <small>{agentSourceLabel(agent)}</small>
       </span>
       <span className={`contact-state ${snapshot.agentStatuses[agent.id] ?? 'idle'}`} />
     </button>
@@ -91,6 +95,19 @@ export function ContactList({
       </div>
 
       <div className="contact-list">
+        {hasBuiltIn && <>
+          <button className="contact-folder" onClick={() => setBuiltInOpen((open) => !open)} aria-expanded={builtInOpen}>
+            <ChevronRight size={15} className={builtInOpen ? 'open' : ''} />
+            <span>{t('Built-in')}</span>
+            <em>{builtIn.length}</em>
+          </button>
+          {builtInOpen && builtIn.length > 0 && (
+            <div className="contact-folder-body contact-built-in">
+              {builtIn.map(botRow)}
+            </div>
+          )}
+        </>}
+
         <button className="contact-folder" onClick={() => setGroupsOpen((open) => !open)} aria-expanded={groupsOpen}>
           <ChevronRight size={15} className={groupsOpen ? 'open' : ''} />
           <span>{t('Group chats')}</span>

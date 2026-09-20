@@ -3,7 +3,7 @@
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
+import type { AgentConfig, ChatMessage, Conversation, ConversationActivityState } from '../../../shared/types'
 
 vi.mock('../preferences', () => ({
   t: (text: string) => text,
@@ -32,7 +32,10 @@ import {
   groupConversationMessages,
   groupDeliveryReplies,
   MessageDeliveries,
+  MessageActions,
+  ChatActivity,
   MessageGroupRow,
+  MessageRow,
   MessageSourceCard,
   SystemMessage,
   visibleConversationMessages
@@ -226,6 +229,172 @@ describe('private delivery disclosure', () => {
     expect(container.querySelectorAll('.bubble-reply-segment')).toHaveLength(3)
     expect(container.textContent).toContain('第一段回复')
     expect(container.textContent).toContain('第三段回复')
+  })
+
+  it('shows a plain-language receipt for a completed local-file tool action', async () => {
+    await act(async () => root.render(
+      <MessageActions actions={[
+        { id: 'tool-1', tool: 'computer_open_file', status: 'succeeded', target: 'qin-emperor.mp4' }
+      ]} />
+    ))
+
+    expect(container.querySelector('.message-action.is-succeeded')).not.toBeNull()
+    expect(container.textContent).toContain('Opened qin-emperor.mp4 with the system default app')
+    expect(container.textContent).not.toContain('computer_open_file')
+  })
+
+  it('collapses multiple tool attempts behind the final successful action', async () => {
+    await act(async () => root.render(
+      <MessageActions actions={[
+        { id: 'tool-1', tool: 'computer_list_files', status: 'failed', target: 'Downloads' },
+        { id: 'tool-2', tool: 'computer_list_files', status: 'succeeded', target: 'Videos' },
+        { id: 'tool-3', tool: 'computer_open_file', status: 'succeeded', target: 'qin-emperor.mp4' }
+      ]} />
+    ))
+
+    const toggle = container.querySelector<HTMLButtonElement>('.message-actions-toggle')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).toContain('Opened qin-emperor.mp4 with the system default app')
+    expect(container.textContent).toContain('3 actions')
+    expect(container.textContent).not.toContain('Could not check files in Downloads')
+
+    await act(async () => toggle?.click())
+
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true')
+    expect(container.textContent).toContain('Could not check files in Downloads')
+    expect(container.textContent).toContain('Checked files in Videos')
+  })
+
+  it('keeps completed tool action receipts hidden from chat messages', async () => {
+    const message: ChatMessage = {
+      id: 'tool-receipt-hidden',
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      authorId: 'agent-1',
+      authorName: '拽姐',
+      text: '已经打开了。',
+      kind: 'message',
+      createdAt: 20,
+      actions: [
+        { id: 'tool-1', tool: 'computer_open', status: 'succeeded', target: 'douchat.ai' },
+        { id: 'tool-2', tool: 'computer_open', status: 'failed' }
+      ]
+    }
+
+    await act(async () => root.render(
+      <MessageGroupRow
+        messages={[message]}
+        agent={agents[0]}
+        agents={agents}
+        relatedMessages={[message]}
+        userName="You"
+        userAvatar=""
+        showAuthor={false}
+      />
+    ))
+
+    expect(container.textContent).toContain('已经打开了。')
+    expect(container.querySelector('.message-actions')).toBeNull()
+    expect(container.textContent).not.toContain('Opened douchat.ai')
+  })
+
+  it('opens the shared agent profile from an agent message avatar', async () => {
+    const openProfile = vi.fn()
+    await act(async () => root.render(
+      <MessageGroupRow
+        messages={[incomingReply]}
+        agent={agents[0]}
+        agents={agents}
+        relatedMessages={[incomingReply]}
+        userName="You"
+        userAvatar=""
+        showAuthor={false}
+        onOpenAgentProfile={openProfile}
+      />
+    ))
+
+    const avatar = container.querySelector<HTMLButtonElement>('.message-avatar-button')
+    expect(avatar?.getAttribute('aria-label')).toBe('拽姐 — view profile')
+    await act(async () => avatar?.click())
+    expect(openProfile).toHaveBeenCalledTimes(1)
+    expect(openProfile.mock.calls[0][0]).toBe('agent-1')
+    expect(openProfile.mock.calls[0][1]).toMatchObject({ left: 0, right: 0, top: 0 })
+  })
+
+  it('opens profile editing from the user message avatar', async () => {
+    const openUserProfile = vi.fn()
+    const userMessage: ChatMessage = {
+      id: 'user-profile-message',
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      authorId: 'user',
+      authorName: 'You',
+      text: 'Hello',
+      kind: 'message',
+      createdAt: 20
+    }
+    await act(async () => root.render(
+      <MessageRow
+        messages={[userMessage]}
+        agents={agents}
+        relatedMessages={[userMessage]}
+        userName="You"
+        userAvatar=""
+        showAuthor={false}
+        onOpenUserProfile={openUserProfile}
+      />
+    ))
+
+    const avatar = container.querySelector<HTMLButtonElement>('.user-profile-avatar-button')
+    expect(avatar?.getAttribute('aria-label')).toBe('You — open your profile')
+    await act(async () => avatar?.click())
+    expect(openUserProfile).toHaveBeenCalledOnce()
+  })
+
+  it('keeps one reply loader while the current action changes underneath it', async () => {
+    const activity: ConversationActivityState = {
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      phase: 'replying',
+      agentIds: ['agent-1'],
+      label: '拽姐',
+      startedAt: 1,
+      action: { id: 'tool-1', tool: 'computer_list_files', status: 'running', target: 'Other' }
+    }
+
+    await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
+
+    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
+    expect(container.querySelector('.typing-activity-detail')?.textContent).toContain('Checking files in Other')
+
+    await act(async () => root.render(
+      <ChatActivity
+        activity={{
+          ...activity,
+          action: { id: 'tool-2', tool: 'computer_open_file', status: 'running', target: 'agreement.docx' }
+        }}
+        agents={agents}
+      />
+    ))
+
+    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
+    expect(container.querySelector('.typing-activity-detail')?.textContent)
+      .toContain('Opening agreement.docx with the system default app')
+
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, action: undefined }} agents={agents} />))
+    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
+    expect(container.querySelector('.typing-activity-detail')?.textContent).toBe('Thinking about the next step')
+
+    await act(async () => root.render(
+      <ChatActivity
+        activity={{
+          ...activity,
+          action: { id: 'tool-3', tool: 'computer_open_file', status: 'succeeded', target: 'agreement.docx' }
+        }}
+        agents={agents}
+      />
+    ))
+    expect(container.querySelector('.typing-activity-detail')?.textContent).toBe('Preparing the result')
   })
 
   it('keeps the specific system error behind a generic disclosure title', async () => {

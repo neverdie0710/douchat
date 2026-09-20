@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { AgentConfig, BuiltInAgentManifest, ResolvedCreateAgentInput, UpdateAgentInput } from '../shared/types'
 import { DouchatStore } from './store'
 
 const temporaryDirectories: string[] = []
@@ -164,11 +165,16 @@ describe('DouchatStore', () => {
     expect(first.created).toBe(true)
     expect(first.agent).toMatchObject({
       name: 'Dr. Dou',
+      systemRole: 'admin',
+      systemKey: 'dr-dou',
+      capabilities: ['manage_agents'],
       role: '豆博士',
       provider: 'gateway',
       model: 'default'
     })
+    expect(first.agent?.id).toMatch(/^system-admin-[0-9a-f-]{36}$/i)
     expect(first.conversation).toMatchObject({ type: 'direct', agentIds: [first.agent?.id] })
+    expect(store.systemAdminAgentId).toBe(first.agent?.id)
     expect(store.defaultConversationId).toBe(first.conversation?.id)
 
     const repeated = store.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'changed' })
@@ -179,15 +185,195 @@ describe('DouchatStore', () => {
     const second = store.ensureDefaultCloudContact('user-2', binding)
     expect(second.created).toBe(true)
     expect(second.agent?.id).not.toBe(first.agent?.id)
+    expect(second.agent?.systemRole).toBe('admin')
+    expect(store.systemAdminAgentId).toBe(second.agent?.id)
     expect(store.defaultConversationId).toBe(second.conversation?.id)
     expect(store.agents.filter((agent) => agent.name === 'Dr. Dou')).toHaveLength(2)
 
-    store.deleteAgent(first.agent!.id)
-    const deleted = store.ensureDefaultCloudContact('user-1', binding)
-    expect(deleted.created).toBe(false)
-    expect(deleted.agent).toBeUndefined()
+    expect(() => store.deleteAgent(second.agent!.id)).toThrow('system administrator cannot be deleted')
+    expect(store.agent(second.agent!.id)).toBeDefined()
+
+    store.deleteConversation(second.conversation!.id)
     expect(store.defaultConversationId).toBeUndefined()
-    expect(store.agents.filter((agent) => agent.name === 'Dr. Dou')).toHaveLength(1)
+    expect(store.systemAdminAgentId).toBe(second.agent?.id)
+    expect(store.agent(second.agent!.id)).toBeDefined()
+
+    const withoutChat = store.ensureDefaultCloudContact('user-2', binding)
+    expect(withoutChat.created).toBe(false)
+    expect(withoutChat.agent?.id).toBe(second.agent?.id)
+    expect(withoutChat.conversation).toBeUndefined()
+
+    const reopened = store.ensureDirectConversation(second.agent!.id)
+    expect(reopened.created).toBe(true)
+    expect(store.defaultConversationId).toBe(reopened.conversation.id)
+  })
+
+  it('syncs cloud-owned built-in fields while preserving local user overrides and history ids', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-built-in-sync-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const store = new DouchatStore(file)
+    const binding = { provider: 'gateway', model: 'douchat-default' }
+    const fallback = store.ensureDefaultCloudContact('user-1', binding)
+    const localId = fallback.agent!.id
+    const conversationId = fallback.conversation!.id
+    const manifest: BuiltInAgentManifest = {
+      version: 7,
+      agents: [{
+        id: 'system-admin-cloud-stable',
+        systemKey: 'dr-dou',
+        systemRole: 'admin',
+        capabilities: ['manage_agents'],
+        templateVersion: 3,
+        name: 'Dr. Dou Cloud',
+        role: 'Cloud administrator',
+        instructions: 'Cloud prompt version three.',
+        labels: 'cloud, built-in',
+        color: '#123456',
+        modelRoute: 'primary'
+      }]
+    }
+
+    const synced = store.ensureDefaultCloudContact('user-1', binding, manifest)
+    expect(synced.agent?.id).toBe(localId)
+    expect(synced.conversation?.id).toBe(conversationId)
+    expect(synced.agent).toMatchObject({
+      cloudAgentId: 'system-admin-cloud-stable',
+      systemKey: 'dr-dou',
+      templateVersion: 3,
+      capabilities: ['manage_agents'],
+      name: 'Dr. Dou Cloud',
+      role: 'Cloud administrator',
+      instructions: 'Cloud prompt version three.',
+      color: '#123456',
+      modelRoute: 'primary',
+      model: 'primary'
+    })
+    expect(synced.conversation?.name).toBe('Dr. Dou Cloud')
+
+    store.updateAgent(localId, {
+      name: '我的豆博士',
+      instructions: 'Use my custom description.',
+      avatarEmoji: '🫘'
+    })
+    const upgraded: BuiltInAgentManifest = {
+      ...manifest,
+      version: 8,
+      agents: [{
+        ...manifest.agents[0],
+        templateVersion: 4,
+        name: 'Renamed by cloud',
+        instructions: 'Cloud prompt version four.',
+        role: 'Updated cloud role'
+      }]
+    }
+    const preserved = store.ensureDefaultCloudContact('user-1', binding, upgraded)
+    expect(preserved.agent).toMatchObject({
+      id: localId,
+      name: '我的豆博士',
+      instructions: 'Use my custom description.',
+      avatarEmoji: '🫘',
+      role: 'Updated cloud role',
+      templateVersion: 4,
+      userOverrides: {
+        name: '我的豆博士',
+        instructions: 'Use my custom description.',
+        avatarEmoji: '🫘',
+        avatar: ''
+      }
+    })
+    store.close()
+
+    const restored = new DouchatStore(file)
+    const cached = restored.ensureDefaultCloudContact('user-1', binding)
+    expect(cached.agent).toMatchObject({
+      id: localId,
+      cloudAgentId: 'system-admin-cloud-stable',
+      name: '我的豆博士',
+      role: 'Updated cloud role',
+      templateVersion: 4
+    })
+    restored.close()
+  })
+
+  it('restores a system administrator deleted by an older release', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-admin-recovery-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const binding = { provider: 'gateway', model: 'default' }
+    const originalStore = new DouchatStore(file)
+    const original = originalStore.ensureDefaultCloudContact('user-1', binding)
+    const originalId = original.agent!.id
+    originalStore.close()
+
+    // Older builds allowed the contact and its chat to be removed while the
+    // account onboarding record remained in metadata.
+    const database = new DatabaseSync(file)
+    database.prepare('DELETE FROM conversations WHERE id = ?').run(original.conversation!.id)
+    database.prepare('DELETE FROM agents WHERE id = ?').run(originalId)
+    database.close()
+
+    const recoveredStore = new DouchatStore(file)
+    const recovered = recoveredStore.ensureDefaultCloudContact('user-1', binding)
+    expect(recovered.created).toBe(true)
+    expect(recovered.agent).toMatchObject({ name: 'Dr. Dou', systemRole: 'admin' })
+    expect(recovered.agent?.id).not.toBe(originalId)
+    expect(recoveredStore.systemAdminAgentId).toBe(recovered.agent?.id)
+    expect(recoveredStore.defaultConversationId).toBe(recovered.conversation?.id)
+  })
+
+  it('marks an existing legacy Dr. Dou as the system administrator', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-admin-migration-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const binding = { provider: 'gateway', model: 'default' }
+    const originalStore = new DouchatStore(file)
+    const original = originalStore.ensureDefaultCloudContact('user-1', binding)
+    originalStore.close()
+
+    const database = new DatabaseSync(file)
+    const row = database.prepare('SELECT data FROM agents WHERE id = ?').get(original.agent!.id) as { data: string }
+    const legacy = JSON.parse(row.data) as AgentConfig
+    delete legacy.systemRole
+    database.prepare('UPDATE agents SET data = ? WHERE id = ?').run(JSON.stringify(legacy), legacy.id)
+    database.close()
+
+    const migratedStore = new DouchatStore(file)
+    expect(migratedStore.agent(original.agent!.id)?.systemRole).toBe('admin')
+    expect(migratedStore.systemAdminAgentId).toBe(original.agent?.id)
+    const migrated = migratedStore.ensureDefaultCloudContact('user-1', binding)
+    expect(migrated.created).toBe(false)
+    expect(migrated.agent?.id).toBe(original.agent?.id)
+    expect(migrated.agent?.systemRole).toBe('admin')
+    expect(migratedStore.systemAdminAgentId).toBe(original.agent?.id)
+  })
+
+  it('does not let ordinary create or update payloads grant or clear the system role', () => {
+    const store = createStore()
+    const forged = store.createAgent({
+      name: 'Forged admin',
+      role: 'Assistant',
+      instructions: '',
+      color: '#7C6CF2',
+      provider: 'gateway',
+      model: 'default',
+      systemRole: 'admin',
+      capabilities: ['manage_agents']
+    } as ResolvedCreateAgentInput & { systemRole: 'admin'; capabilities: ['manage_agents'] })
+    expect(forged.systemRole).toBeUndefined()
+    expect(forged.capabilities).toBeUndefined()
+
+    const admin = store.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'default' }).agent!
+    store.updateAgent(admin.id, {
+      name: 'Renamed admin',
+      systemRole: undefined,
+      capabilities: []
+    } as UpdateAgentInput & { systemRole?: undefined; capabilities: [] })
+    expect(store.agent(admin.id)).toMatchObject({
+      name: 'Renamed admin',
+      systemRole: 'admin',
+      capabilities: ['manage_agents']
+    })
   })
 
   it('gives a new bot its own private chat without joining existing groups', () => {

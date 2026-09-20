@@ -8,7 +8,7 @@ vi.mock('../preferences', () => ({
     text
   )
 }))
-import { MessageMarkdown, messageMarkdownControls, messageMarkdownPlugins } from './MessageMarkdown'
+import { MessageMarkdown, localFilePathFromHref, messageMarkdownControls, messageMarkdownPlugins } from './MessageMarkdown'
 import { CodeArtifact } from './CodeArtifact'
 const render = (text: string): string => renderToStaticMarkup(<MessageMarkdown text={text} />)
 
@@ -51,5 +51,14 @@ describe('message Markdown', () => {
     expect(html).not.toContain('href="javascript:')
     expect(html).not.toContain('<script')
     expect(html).not.toContain('<iframe')
+  })
+  it('renders verified local-file references as reopen controls', () => {
+    const href = 'douchat-file:///Users/idoubi/Documents/技术顾问合作协议.docx'
+    const html = render(`[技术顾问合作协议.docx](<${href}>)`)
+    expect(html).toContain('message-local-file')
+    expect(html).toContain('技术顾问合作协议.docx')
+    expect(html).toContain('/Users/idoubi/Documents/技术顾问合作协议.docx')
+    expect(localFilePathFromHref('douchat-file:///C:/Users/Alice/Documents/agreement.docx', 'win32'))
+      .toBe('C:/Users/Alice/Documents/agreement.docx')
   })
 })

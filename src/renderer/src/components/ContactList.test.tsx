@@ -16,7 +16,7 @@ vi.mock('./common', () => ({
   ),
   SidebarResizer: () => <span data-sidebar-resizer />,
   agentDisplayName: (agent: AgentConfig) => agent.name,
-  agentDisplayRole: (agent: AgentConfig) => agent.role
+  agentSourceLabel: (agent: AgentConfig) => agent.localAgentId ? `Local · Codex` : 'Cloud'
 }))
 
 import { ContactList } from './ContactList'
@@ -25,15 +25,23 @@ const agent: AgentConfig = {
   id: 'alpha', name: 'Alpha', role: 'Assistant', instructions: '', color: '#14B8A6', provider: '', model: '', createdAt: 1
 }
 
+const localAgent: AgentConfig = {
+  id: 'codex', name: 'Codex', localAgentId: 'codex', role: 'Assistant', instructions: '', color: '#7C6CF2', provider: 'local', model: 'codex', createdAt: 2
+}
+
+const builtInAgent: AgentConfig = {
+  id: 'system-admin-1', name: 'Dr. Dou', systemRole: 'admin', role: '豆博士', instructions: '', color: '#14B8A6', provider: 'gateway', model: 'default', createdAt: 0
+}
+
 const group: Conversation = {
   id: 'group-team', type: 'group', name: 'Team room', agentIds: ['alpha'], topics: [], activeTopicId: '', unread: 0,
   readAt: 0, createdAt: 1, updatedAt: 1
 }
 
 const snapshot = {
-  agents: [agent],
+  agents: [agent, localAgent, builtInAgent],
   conversations: [group],
-  agentStatuses: { alpha: 'idle' }
+  agentStatuses: { alpha: 'idle', codex: 'idle', 'system-admin-1': 'idle' }
 } as unknown as AppSnapshot
 
 describe('contact list', () => {
@@ -63,8 +71,16 @@ describe('contact list', () => {
     expect(container.querySelector('input[placeholder="Search contacts"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="Create contact"]')).toBeNull()
     expect(container.querySelector('.contacts-manage')).toBeNull()
+    const folders = [...container.querySelectorAll<HTMLButtonElement>('.contact-folder')]
+    expect(folders.map((button) => button.textContent)).toEqual(['Built-in1', 'Group chats1', 'Agents2'])
+    expect(container.querySelector('.contact-built-in')?.textContent).toContain('Dr. Dou')
+    expect([...container.querySelectorAll('.contact-row-copy small')].map((item) => item.textContent)).toEqual([
+      'Cloud',
+      'Cloud',
+      'Local · Codex'
+    ])
 
-    const groups = [...container.querySelectorAll<HTMLButtonElement>('.contact-folder')]
+    const groups = folders
       .find((button) => button.textContent?.includes('Group chats'))!
     await act(async () => groups.click())
 

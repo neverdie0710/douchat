@@ -5,6 +5,9 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type {
   AgentConfig,
+  BuiltInAgentDefinition,
+  BuiltInAgentManifest,
+  BuiltInAgentUserOverrides,
   ChatMessage,
   Conversation,
   CreateGroupInput,
@@ -22,6 +25,7 @@ import type {
   UpdateAgentInput,
   UpdateConversationInput
 } from '../shared/types'
+import { normalizeAgentEmoji } from '../shared/avatar'
 
 const DEFAULT_TOPIC_ID = 'main'
 
@@ -31,6 +35,7 @@ const PRIVATE_MESSAGE_LIMIT = 400
 const RUN_LIMIT = 120
 const RUN_EVENT_LIMIT = 600
 const ACCOUNT_DEFAULT_CONTACTS_META = 'accountDefaultContacts:v1'
+const BUILT_IN_MANIFEST_META_PREFIX = 'builtInAgentManifest:v1:'
 const CURRENT_ACCOUNT_META = 'currentAccountId'
 const CONNECTORS_META = 'connectors:v1'
 const LEGACY_DEMO_REMOVED_META = 'legacyDemoRemoved:v1'
@@ -51,12 +56,50 @@ interface AccountDefaultContact {
   accountId: string
   agentId: string
   conversationId: string
+  systemKey?: string
+  cloudAgentId?: string
 }
 
 export interface DefaultCloudContactResult {
   agent?: AgentConfig
   conversation?: Conversation
   created: boolean
+}
+
+export const EMBEDDED_BUILT_IN_AGENT_MANIFEST: BuiltInAgentManifest = {
+  version: 1,
+  agents: [{
+    id: 'system-admin-fallback',
+    systemKey: 'dr-dou',
+    systemRole: 'admin',
+    capabilities: ['manage_agents'],
+    templateVersion: 1,
+    name: 'Dr. Dou',
+    role: '豆博士',
+    instructions:
+      '你是豆博士（Dr. Dou），Douchat 的云端智能助手。友好、可靠、简洁地帮助用户解决问题、完成任务，默认使用用户正在使用的语言回复。',
+    labels: '豆博士, Douchat',
+    color: '#14B8A6',
+    modelRoute: 'default'
+  }]
+}
+
+function defaultBuiltInAgent(manifest: BuiltInAgentManifest): BuiltInAgentDefinition {
+  return manifest.agents.find((agent) => agent.systemKey === 'dr-dou')
+    ?? manifest.agents.find((agent) => agent.systemRole === 'admin')
+    ?? EMBEDDED_BUILT_IN_AGENT_MANIFEST.agents[0]
+}
+
+function inferredBuiltInOverrides(agent: AgentConfig): BuiltInAgentUserOverrides {
+  if (agent.userOverrides) return { ...agent.userOverrides }
+  const fallback = defaultBuiltInAgent(EMBEDDED_BUILT_IN_AGENT_MANIFEST)
+  const overrides: BuiltInAgentUserOverrides = {}
+  if (agent.name !== fallback.name) overrides.name = agent.name
+  if (agent.instructions !== fallback.instructions) overrides.instructions = agent.instructions
+  if ((agent.labels ?? '') !== (fallback.labels ?? '')) overrides.labels = agent.labels ?? ''
+  if (agent.avatar) overrides.avatar = agent.avatar
+  if (agent.avatarEmoji) overrides.avatarEmoji = agent.avatarEmoji
+  return overrides
 }
 
 interface DouchatStoreOptions {
@@ -190,6 +233,7 @@ export class DouchatStore {
     this.db.exec(SCHEMA)
     this.seed(Boolean(options.seedDemo))
     if (!options.seedDemo) this.removeUnusedLegacyDemo()
+    this.backfillSystemAdminRoles()
     this.backfillAgentAvatarSeeds()
     this.backfillMessageSourceContent()
     this.backfillDeliveryReplies()
@@ -290,6 +334,19 @@ export class DouchatStore {
     } catch {
       return []
     }
+  }
+
+  private builtInManifest(accountId: string): BuiltInAgentManifest {
+    try {
+      const manifest = JSON.parse(this.meta(`${BUILT_IN_MANIFEST_META_PREFIX}${accountId}`)) as BuiltInAgentManifest
+      if (
+        Number.isInteger(manifest?.version)
+        && manifest.version > 0
+        && Array.isArray(manifest.agents)
+        && manifest.agents.some((agent) => agent?.systemRole === 'admin' && agent.systemKey === 'dr-dou')
+      ) return manifest
+    } catch {}
+    return EMBEDDED_BUILT_IN_AGENT_MANIFEST
   }
 
   private putConversation(conversation: Conversation): void {
@@ -523,6 +580,7 @@ export class DouchatStore {
         && agent.provider === expected.provider
         && agent.model === expected.model
         && !agent.avatar
+        && !agent.avatarEmoji
         && !agent.localAgentId
       )
     })
@@ -593,12 +651,38 @@ export class DouchatStore {
       !agent.avatarSeed
       && !agent.localAgentId
       && agent.provider !== 'local'
+      && agent.systemRole !== 'admin'
       && !agent.id.startsWith('dr-dou-')
     )
     if (!contacts.length) return
     this.tx(() => {
       for (const agent of contacts) {
         agent.avatarSeed = randomUUID()
+        this.putAgent(agent)
+      }
+    })
+  }
+
+  /** Account-default contacts predate explicit capability roles. Mark every
+   * surviving recorded contact at database open so migration does not depend
+   * on another login event firing in the current desktop session. */
+  private backfillSystemAdminRoles(): void {
+    const fallback = defaultBuiltInAgent(EMBEDDED_BUILT_IN_AGENT_MANIFEST)
+    const contacts = this.accountDefaultContacts()
+      .map((record) => this.agent(record.agentId))
+      .filter((agent): agent is AgentConfig => Boolean(agent && (
+        agent.systemRole !== 'admin'
+        || agent.systemKey !== fallback.systemKey
+        || !agent.capabilities?.includes('manage_agents')
+      )))
+    if (!contacts.length) return
+    this.tx(() => {
+      for (const agent of contacts) {
+        agent.systemRole = 'admin'
+        agent.systemKey = fallback.systemKey
+        agent.capabilities = [...fallback.capabilities]
+        agent.templateVersion ??= fallback.templateVersion
+        agent.modelRoute ??= fallback.modelRoute
         this.putAgent(agent)
       }
     })
@@ -670,8 +754,16 @@ export class DouchatStore {
     return this.meta('userAvatar')
   }
 
-  /** The welcome chat is account-specific. A deleted default contact stays
-   * deleted because onboarding records that the account was already set up. */
+  /** The account administrator survives independently from its deletable chat. */
+  get systemAdminAgentId(): string | undefined {
+    const accountId = this.meta(CURRENT_ACCOUNT_META)
+    const record = this.accountDefaultContacts().find((item) => item.accountId === accountId)
+    const agent = record ? this.agent(record.agentId) : undefined
+    return agent?.systemRole === 'admin' ? agent.id : undefined
+  }
+
+  /** The welcome chat is account-specific, but may be deleted while its
+   * system-administrator contact remains available in the contacts list. */
   get defaultConversationId(): string | undefined {
     const accountId = this.meta(CURRENT_ACCOUNT_META)
     const record = this.accountDefaultContacts().find((item) => item.accountId === accountId)
@@ -711,37 +803,93 @@ export class DouchatStore {
 
   // ───────────────────────────── agents ─────────────────────────────
 
-  /** Create Dr. Dou exactly once for each Douchat account seen on this local
-   * profile. Repeated profile refreshes and later sign-ins are idempotent. */
+  /** Create one system administrator for each Douchat account seen on this
+   * local profile. Existing contacts are migrated; legacy deletions recover
+   * the contact once without recreating a deliberately deleted chat later. */
   ensureDefaultCloudContact(
     accountId: string,
-    binding: Pick<AgentConfig, 'provider' | 'model'>
+    binding: Pick<AgentConfig, 'provider' | 'model'>,
+    remoteManifest?: BuiltInAgentManifest
   ): DefaultCloudContactResult {
     const normalizedAccountId = accountId.trim()
     if (!normalizedAccountId) return { created: false }
+    if (remoteManifest) {
+      this.setMeta(`${BUILT_IN_MANIFEST_META_PREFIX}${normalizedAccountId}`, JSON.stringify(remoteManifest))
+    }
+    const definition = defaultBuiltInAgent(remoteManifest ?? this.builtInManifest(normalizedAccountId))
     const records = this.accountDefaultContacts()
-    const existing = records.find((record) => record.accountId === normalizedAccountId)
+    const existingIndex = records.findIndex((record) => record.accountId === normalizedAccountId)
+    const existing = records[existingIndex]
     if (existing) {
-      this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
-      return {
-        agent: this.agent(existing.agentId),
-        conversation: this.conversation(existing.conversationId),
-        created: false
+      const agent = this.agent(existing.agentId)
+      if (agent) {
+        const overrides = inferredBuiltInOverrides(agent)
+        const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
+        const cloudAgentId = definition.id === 'system-admin-fallback' ? agent.cloudAgentId : definition.id
+        Object.assign(agent, {
+          name: overrides.name ?? definition.name,
+          role: definition.role,
+          instructions: overrides.instructions ?? definition.instructions,
+          labels: overrides.labels ?? definition.labels ?? '',
+          color: definition.color,
+          provider: binding.provider,
+          model,
+          systemRole: definition.systemRole,
+          systemKey: definition.systemKey,
+          cloudAgentId,
+          templateVersion: definition.templateVersion,
+          modelRoute: definition.modelRoute,
+          capabilities: [...definition.capabilities],
+          userOverrides: overrides,
+          avatar: overrides.avatar ?? agent.avatar ?? '',
+          avatarEmoji: overrides.avatarEmoji ?? agent.avatarEmoji ?? ''
+        })
+        this.putAgent(agent)
+        const conversation = this.conversation(existing.conversationId)
+        if (conversation && conversation.name !== agent.name) {
+          conversation.name = agent.name
+          this.putConversation(conversation)
+        }
+        records[existingIndex] = {
+          ...existing,
+          systemKey: definition.systemKey,
+          cloudAgentId
+        }
+        this.setMeta(ACCOUNT_DEFAULT_CONTACTS_META, JSON.stringify(records))
+        this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
+        return {
+          agent,
+          conversation,
+          created: false
+        }
       }
     }
 
-    const input: ResolvedCreateAgentInput = {
-      name: 'Dr. Dou',
-      role: '豆博士',
-      instructions:
-        '你是豆博士（Dr. Dou），Douchat 的云端智能助手。友好、可靠、简洁地帮助用户解决问题、完成任务，默认使用用户正在使用的语言回复。',
-      labels: '豆博士, Douchat',
-      color: '#14B8A6',
-      ...binding
-    }
-    const id = `dr-dou-${randomUUID().slice(0, 6)}`
+    const preferredId = definition.id === 'system-admin-fallback'
+      ? `system-admin-${randomUUID()}`
+      : definition.id
+    const id = this.agent(preferredId) ? `system-admin-${randomUUID()}` : preferredId
     const now = Date.now()
-    const agent: AgentConfig = { ...input, avatar: '', id, createdAt: now }
+    const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
+    const agent: AgentConfig = {
+      id,
+      name: definition.name,
+      systemRole: definition.systemRole,
+      systemKey: definition.systemKey,
+      cloudAgentId: definition.id === 'system-admin-fallback' ? undefined : definition.id,
+      templateVersion: definition.templateVersion,
+      modelRoute: definition.modelRoute,
+      capabilities: [...definition.capabilities],
+      userOverrides: {},
+      avatar: '',
+      role: definition.role,
+      instructions: definition.instructions,
+      labels: definition.labels ?? '',
+      color: definition.color,
+      createdAt: now,
+      provider: binding.provider,
+      model
+    }
     const topic = newTopic('', now)
     const conversation: Conversation = {
       id: `direct-${id}`,
@@ -758,7 +906,15 @@ export class DouchatStore {
     return this.tx(() => {
       this.putAgent(agent)
       this.putConversation(conversation)
-      records.push({ accountId: normalizedAccountId, agentId: agent.id, conversationId: conversation.id })
+      const record = {
+        accountId: normalizedAccountId,
+        agentId: agent.id,
+        conversationId: conversation.id,
+        systemKey: definition.systemKey,
+        cloudAgentId: agent.cloudAgentId
+      }
+      if (existingIndex >= 0) records[existingIndex] = record
+      else records.push(record)
       this.setMeta(ACCOUNT_DEFAULT_CONTACTS_META, JSON.stringify(records))
       this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
       return { agent, conversation, created: true }
@@ -776,9 +932,21 @@ export class DouchatStore {
   createAgent(input: ResolvedCreateAgentInput): AgentConfig {
     const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${randomUUID().slice(0, 6)}`
     const now = Date.now()
+    const {
+      systemRole: _ignoredSystemRole,
+      systemKey: _ignoredSystemKey,
+      cloudAgentId: _ignoredCloudAgentId,
+      templateVersion: _ignoredTemplateVersion,
+      modelRoute: _ignoredModelRoute,
+      capabilities: _ignoredCapabilities,
+      userOverrides: _ignoredUserOverrides,
+      ...safeInput
+    } = input as ResolvedCreateAgentInput & Partial<AgentConfig>
+    const avatar = validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : ''
     const agent: AgentConfig = {
-      ...input,
-      avatar: validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : '',
+      ...safeInput,
+      avatar,
+      avatarEmoji: avatar ? '' : normalizeAgentEmoji(input.avatarEmoji),
       avatarSeed: !input.localAgentId && input.provider !== 'local' ? randomUUID() : undefined,
       id,
       createdAt: now
@@ -805,10 +973,42 @@ export class DouchatStore {
   updateAgent(agentId: string, input: UpdateAgentInput): AgentConfig | undefined {
     const agent = this.agent(agentId)
     if (!agent) return undefined
-    const next = { ...input }
+    const {
+      systemRole: _ignoredSystemRole,
+      systemKey: _ignoredSystemKey,
+      cloudAgentId: _ignoredCloudAgentId,
+      templateVersion: _ignoredTemplateVersion,
+      modelRoute: _ignoredModelRoute,
+      capabilities: _ignoredCapabilities,
+      userOverrides: _ignoredUserOverrides,
+      ...next
+    } = input as UpdateAgentInput & Partial<AgentConfig>
+    if (agent.systemRole === 'admin') {
+      // Runtime routing and permissions remain service-owned even when an
+      // untrusted renderer sends extra keys over IPC.
+      delete next.role
+      delete next.color
+      delete next.provider
+      delete next.model
+      delete next.localAgentId
+    }
     if (next.avatar !== undefined) {
       next.avatar = next.avatar.trim()
       if (!validAvatar(next.avatar)) delete next.avatar
+    }
+    if (next.avatarEmoji !== undefined) {
+      const original = next.avatarEmoji.trim()
+      next.avatarEmoji = normalizeAgentEmoji(next.avatarEmoji)
+      if (original && !next.avatarEmoji) delete next.avatarEmoji
+    }
+    if (next.avatar) next.avatarEmoji = ''
+    if (next.avatarEmoji) next.avatar = ''
+    if (agent.systemRole === 'admin') {
+      const overrides = { ...agent.userOverrides }
+      for (const key of ['name', 'avatar', 'avatarEmoji', 'instructions', 'labels'] as const) {
+        if (next[key] !== undefined) overrides[key] = next[key]
+      }
+      agent.userOverrides = overrides
     }
     Object.assign(agent, next)
     return this.tx(() => {
@@ -833,6 +1033,9 @@ export class DouchatStore {
   }
 
   deleteAgent(agentId: string): void {
+    if (this.agent(agentId)?.systemRole === 'admin') {
+      throw new Error('The system administrator cannot be deleted')
+    }
     this.tx(() => {
       this.write('DELETE FROM agents WHERE id = ?', agentId)
       // Its own direct chats go with it, and the cascade takes their messages,

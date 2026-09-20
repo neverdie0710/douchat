@@ -2,7 +2,7 @@ import { runLocalAgent } from './localAgentRuntime'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core'
 import { Type, type ImageContent } from '@earendil-works/pi-ai'
 import { builtinModels } from '@earendil-works/pi-ai/providers/all'
@@ -15,6 +15,7 @@ import type {
   EndpointTestResult,
   ModelOption,
   ChatMessage,
+  MessageAction,
   MessageAttachment,
   MessageImageInput,
   Conversation,
@@ -35,6 +36,7 @@ import {
 import { summarizeRuntimeError } from '../shared/bot/errors'
 import { botGreetingPrompt } from '../shared/bot/greeting'
 import { botIdentityPrompt } from '../shared/bot/identity'
+import { supportedInterfaceLanguage, type InterfaceLanguage } from '../shared/language'
 import { CLOUD_MODEL_OPTIONS } from '../shared/models'
 import {
   groupControllerSessionId,
@@ -65,6 +67,7 @@ import {
   type GatewayConfig
 } from './gateway'
 import { DouchatStore } from './store'
+import { normalizeAgentEmoji } from '../shared/avatar'
 
 /**
  * Nothing is faked when no model is reachable: a bot that cannot call a model
@@ -78,6 +81,29 @@ const MAX_INPUT_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 const INPUT_IMAGE_TYPES = new Set<MessageAttachment['mimeType']>([
   'image/png', 'image/jpeg', 'image/webp', 'image/gif'
 ])
+const AGENT_COLORS = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
+
+type AgentReply = { text: string; error?: string; attachments?: MessageAttachment[]; actions?: MessageAction[] }
+
+function toolActionTarget(tool: string, args: unknown): string | undefined {
+  if (!args || typeof args !== 'object') return undefined
+  const input = args as Record<string, unknown>
+  const path = typeof input.path === 'string' ? input.path : undefined
+  if (path && ['computer_open_file', 'computer_list_files', 'computer_make_directory'].includes(tool)) {
+    return basename(path) || path
+  }
+  if (tool === 'computer_move_file' && typeof input.source === 'string') return basename(input.source) || input.source
+  if (tool === 'computer_open' && typeof input.url === 'string') {
+    try { return new URL(input.url).hostname }
+    catch { return input.url.slice(0, 120) }
+  }
+  if (tool === 'message_agent' && typeof input.agent === 'string') return input.agent.slice(0, 120)
+  if (tool === 'create_agent' && typeof input.name === 'string') return input.name.slice(0, 120)
+  if (tool === 'update_agent' && typeof input.agent === 'string') {
+    return (typeof input.name === 'string' ? input.name : input.agent).slice(0, 120)
+  }
+  return undefined
+}
 
 function validInputImages(images: MessageImageInput[] | undefined): MessageImageInput[] {
   if (images === undefined) return []
@@ -167,6 +193,8 @@ export interface CloudGatewayOptions {
   baseUrl: string
   resolveAccessToken: () => string | undefined
   onUnauthorized?: () => void | Promise<void>
+  /** Convert an attached chat image into the compact local data URL used for avatars. */
+  avatarFromImage?: (image: ImageContent) => string
 }
 
 export interface ConnectorProvider {
@@ -188,13 +216,17 @@ export class DouchatRuntime {
   private readonly activeResponded = new Map<string, Set<string>>()
   private readonly activeRun = new Map<string, string>()
   private readonly activity = new Map<string, ConversationActivityState>()
+  private readonly toolActions = new Map<string, Map<string, MessageAction>>()
   private readonly aborts = new Map<string, AbortController>()
   private readonly liveAuth = new Map<string, boolean>()
+  private readonly activeInputImages = new Map<string, ImageContent[]>()
+  private readonly pendingSessionRefresh = new Set<string>()
   private modelOptions: ModelOption[] = []
   private connectionError = ''
   private gateway?: GatewayConfig
   private connectionGeneration = 0
   private cloudReconnect?: Promise<void>
+  private interfaceLanguage: InterfaceLanguage = 'en'
 
   constructor(
     private readonly store: DouchatStore,
@@ -230,6 +262,10 @@ export class DouchatRuntime {
       userName: this.store.userName,
       userAvatar: this.store.userAvatar
     }
+  }
+
+  setInterfaceLanguage(language: string): void {
+    this.interfaceLanguage = supportedInterfaceLanguage(language)
   }
 
   private emit(): void {
@@ -470,6 +506,7 @@ export class DouchatRuntime {
       agentIds,
       label,
       startedAt: current?.phase === phase && current.topicId === topicId ? current.startedAt : Date.now(),
+      action: Object.prototype.hasOwnProperty.call(extra, 'action') ? extra.action : current?.action,
       takeover: extra.takeover ?? current?.takeover,
       limited: extra.limited,
       failed: extra.failed
@@ -494,9 +531,16 @@ export class DouchatRuntime {
             context === 'group'
               ? 'You are replying inside a group chat. Other members see your public text; use the private transport described in the request when a message is meant for one recipient.'
               : 'You are replying in your private chat with the human.',
-            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, and Documents with computer_list_files, computer_make_directory, and computer_move_file. File moves never overwrite and deletion is unavailable. You may also receive explicitly authorized connector tools such as email_search and email_read; the actual tool list is the source of truth for what is connected. Never claim a computer action, connector action, or handoff happened without calling its tool.'
+            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, and Documents with computer_list_files, computer_make_directory, and computer_move_file. For local file discovery, first call computer_list_files without a path, then use only absolute paths returned by that tool; never guess the user’s home path, use ~, or pass a relative path. Whenever your reply mentions a local file returned by computer_list_files, including alternative matches, make its visible filename a Markdown link using the exact absolute path in this form: [filename](<douchat-file:///absolute/path>). Do not create a local-file link for an unverified path. When the human explicitly asks to open, view, listen to, or play a listed local file, use computer_open_file to open it in the operating system’s default app; do not try to navigate the web browser to a local path. File moves never overwrite and deletion is unavailable. You may also receive explicitly authorized connector tools such as email_search and email_read; the actual tool list is the source of truth for what is connected. Never claim a computer action, connector action, or handoff happened without calling its tool.'
           ].join('\n')
-    return [config.instructions, identity, workspace].filter(Boolean).join('\n\n')
+    const agentManagement = context === 'direct' && this.isSystemAdmin(config)
+      ? [
+          'You can manage the user’s Douchat agents. Treat 联系人、智能体、agent, and bot as equivalent names for a Douchat agent.',
+          'When the human asks to create one, call create_agent instead of explaining how to do it. If no name is provided, ask for a name before calling the tool. A description is optional and should remain empty unless the human supplies one.',
+          'When the human asks to rename an agent or change its nickname, avatar, or description, call update_agent. For an emoji avatar, pass exactly one emoji in emoji; when no particular emoji was requested, choose one suitable for the agent’s name or description. Use avatar="attached" when the human wants the image attached to the current message to become the avatar, and avatar="remove" when they ask to clear every custom avatar. Never claim that an agent was created or changed unless the corresponding tool succeeded.'
+        ].join('\n')
+      : ''
+    return [config.instructions, identity, workspace, agentManagement].filter(Boolean).join('\n\n')
   }
 
   private session(config: AgentConfig, sessionKey: string, context: 'direct' | 'group' | 'controller'): Agent {
@@ -506,12 +550,15 @@ export class DouchatRuntime {
     const model = this.resolveModel(config)
     if (!model) throw new Error(`Model ${config.provider}/${config.model} is not available`)
 
+    // Agent-list mutations are private account operations. Keep them out of
+    // group sessions so another member cannot cause a contact change.
+    const managementTools = context === 'direct' ? this.agentManagementTools(config) : []
     const tools =
       context === 'controller'
         ? []
         : context === 'group'
-          ? [...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
-          : [this.messageAgentTool(config), ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
+          ? [...managementTools, ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
+          : [this.messageAgentTool(config), ...managementTools, ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
 
     const agent = new Agent({
       initialState: {
@@ -528,17 +575,54 @@ export class DouchatRuntime {
       const runId = this.activeRun.get(config.id)
       if (!runId) return
       if (event.type === 'tool_execution_start') {
+        const key = `${runId}:${config.id}`
+        const actions = this.toolActions.get(key) ?? new Map<string, MessageAction>()
+        const target = toolActionTarget(event.toolName, event.args)
+        const action: MessageAction = {
+          id: event.toolCallId,
+          tool: event.toolName,
+          status: 'running',
+          ...(target ? { target } : {})
+        }
+        actions.set(event.toolCallId, action)
+        this.toolActions.set(key, actions)
+        const conversationId = this.activeConversation.get(config.id)
+        const topicId = this.activeTopic.get(config.id)
+        if (conversationId && topicId) {
+          this.setActivity(conversationId, topicId, 'replying', [config.id], config.name, { action })
+        }
         this.store.updateRun(runId, { latestActivity: event.toolName })
         this.store.addRunEvent({ runId, type: 'tool', label: `${config.name} · ${event.toolName}`, detail: compact(event.args) })
         this.emit()
       }
-      if (event.type === 'tool_execution_end' && event.isError) {
-        this.store.addRunEvent({
-          runId,
-          type: 'tool',
-          label: `${config.name} · ${event.toolName} failed`,
-          detail: compact(event.result)
-        })
+      if (event.type === 'tool_execution_end') {
+        const key = `${runId}:${config.id}`
+        const actions = this.toolActions.get(key)
+        const previous = actions?.get(event.toolCallId)
+        const action: MessageAction = {
+          id: event.toolCallId,
+          tool: event.toolName,
+          status: event.isError ? 'failed' : 'succeeded',
+          ...(previous?.target ? { target: previous.target } : {})
+        }
+        actions?.set(event.toolCallId, action)
+        const conversationId = this.activeConversation.get(config.id)
+        const topicId = this.activeTopic.get(config.id)
+        if (conversationId && topicId) {
+          const runningAction = [...(actions?.values() ?? [])].find((item) => item.status === 'running')
+          // Keep the finished action only as phase context. The renderer turns
+          // it into a calm “preparing result” line rather than a completion
+          // receipt, while the primary reply loader remains unchanged.
+          this.setActivity(conversationId, topicId, 'replying', [config.id], config.name, { action: runningAction ?? action })
+        }
+        if (event.isError) {
+          this.store.addRunEvent({
+            runId,
+            type: 'tool',
+            label: `${config.name} · ${event.toolName} failed`,
+            detail: compact(event.result)
+          })
+        }
         this.emit()
       }
     })
@@ -621,6 +705,224 @@ export class DouchatRuntime {
     return tool as unknown as AgentTool<ReturnType<typeof Type.Object>>
   }
 
+  /** Contact management is an account-level capability held only by the
+   * signed-in account's explicitly marked system administrator. */
+  private isSystemAdmin(config: AgentConfig): boolean {
+    return config.systemRole === 'admin'
+      && config.capabilities?.includes('manage_agents') === true
+      && this.store.systemAdminAgentId === config.id
+  }
+
+  private resolveManagedAgent(reference: string): { agent?: AgentConfig; error?: string } {
+    const normalized = reference.trim().toLocaleLowerCase()
+    const exactId = this.store.agent(reference.trim())
+    if (exactId) return { agent: exactId }
+    const matches = this.store.agents.filter((agent) => agent.name.trim().toLocaleLowerCase() === normalized)
+    if (matches.length === 1) return { agent: matches[0] }
+    if (matches.length > 1) {
+      return {
+        error: `More than one agent is named “${reference.trim()}”. Ask the human which one they mean: ${matches.map((agent) => `${agent.name} (${agent.id})`).join(', ')}.`
+      }
+    }
+    return { error: `No agent named “${reference.trim()}” exists.` }
+  }
+
+  private avatarFromCurrentMessage(agentId: string): { avatar?: string; error?: string } {
+    const image = this.activeInputImages.get(agentId)?.[0]
+    if (!image) return { error: 'No image is attached to the current message. Ask the human to attach an image and try again.' }
+    if (!this.cloudGateway?.avatarFromImage) return { error: 'This app cannot prepare the attached image as an avatar.' }
+    try {
+      return { avatar: this.cloudGateway.avatarFromImage(image) }
+    } catch (cause) {
+      return { error: cause instanceof Error ? cause.message : 'The attached image could not be used as an avatar.' }
+    }
+  }
+
+  private refreshAgentAfterUpdate(agentId: string, currentAgentId: string): void {
+    if (agentId === currentAgentId) {
+      // Do not reset the Agent object while its management tool is executing.
+      this.pendingSessionRefresh.add(agentId)
+      return
+    }
+    this.resetAgentSessions(agentId)
+  }
+
+  private agentManagementTools(config: AgentConfig): AgentTool[] {
+    if (!this.isSystemAdmin(config)) return []
+
+    const createParameters = Type.Object({
+      name: Type.String({ description: 'Nickname for the new Douchat agent' }),
+      description: Type.Optional(Type.String({ description: 'Optional behavior description supplied by the human. Omit it to keep the description blank.' })),
+      emoji: Type.Optional(Type.String({ description: 'Exactly one emoji to use as the avatar. Choose a suitable emoji if the human asks for an emoji avatar without naming one.' })),
+      avatar: Type.Optional(Type.Literal('attached', { description: 'Use the first image attached to the current human message as the avatar' }))
+    })
+    const createTool: AgentTool<typeof createParameters> = {
+      name: 'create_agent',
+      label: 'Create agent',
+      description: 'Create a new Douchat contact/agent/bot. Use this whenever the human asks to create or add one.',
+      parameters: createParameters,
+      execute: async (_toolCallId, params) => {
+        const name = params.name.trim().slice(0, 80)
+        if (!name) {
+          return {
+            content: [{ type: 'text' as const, text: 'An agent name is required. Ask the human what to call it.' }],
+            details: { created: false }
+          }
+        }
+        const duplicate = this.store.agents.find((agent) => agent.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())
+        if (duplicate) {
+          return {
+            content: [{ type: 'text' as const, text: `An agent named “${duplicate.name}” already exists (${duplicate.id}).` }],
+            details: { created: false, agentId: duplicate.id }
+          }
+        }
+        const requestedEmoji = params.emoji?.trim() ?? ''
+        const avatarEmoji = normalizeAgentEmoji(requestedEmoji)
+        if (requestedEmoji && !avatarEmoji) {
+          return {
+            content: [{ type: 'text' as const, text: 'The emoji avatar must contain exactly one emoji.' }],
+            details: { created: false }
+          }
+        }
+        if (params.avatar === 'attached' && avatarEmoji) {
+          return {
+            content: [{ type: 'text' as const, text: 'Choose either the attached image or an emoji for the avatar, not both.' }],
+            details: { created: false }
+          }
+        }
+        let avatar = ''
+        if (params.avatar === 'attached') {
+          const prepared = this.avatarFromCurrentMessage(config.id)
+          if (prepared.error || !prepared.avatar) {
+            return {
+              content: [{ type: 'text' as const, text: prepared.error ?? 'The attached image could not be used as an avatar.' }],
+              details: { created: false }
+            }
+          }
+          avatar = prepared.avatar
+        }
+        const binding = this.defaultCloudAgentModel()
+        const agent = this.store.createAgent({
+          name,
+          avatar,
+          avatarEmoji,
+          role: 'Assistant',
+          instructions: params.description?.trim().slice(0, 4000) ?? '',
+          labels: '',
+          color: AGENT_COLORS[this.store.agents.length % AGENT_COLORS.length],
+          ...binding
+        })
+        this.statuses.set(agent.id, 'idle')
+        this.emit()
+        return {
+          content: [{ type: 'text' as const, text: `Created the agent “${agent.name}”. It now appears in the agent list.` }],
+          details: { created: true, agentId: agent.id, conversationId: `direct-${agent.id}` }
+        }
+      }
+    }
+
+    const updateParameters = Type.Object({
+      agent: Type.String({ description: 'Exact current agent nickname or agent id' }),
+      name: Type.Optional(Type.String({ description: 'New nickname' })),
+      description: Type.Optional(Type.String({ description: 'New description. Use an empty string to clear it.' })),
+      emoji: Type.Optional(Type.String({ description: 'Exactly one emoji for the new avatar. Choose a suitable one if the human requested an emoji avatar without specifying which emoji.' })),
+      avatar: Type.Optional(Type.Union([
+        Type.Literal('attached', { description: 'Use the first image attached to the current human message' }),
+        Type.Literal('remove', { description: 'Remove the custom avatar' })
+      ]))
+    })
+    const updateTool: AgentTool<typeof updateParameters> = {
+      name: 'update_agent',
+      label: 'Update agent',
+      description: 'Change an existing Douchat agent’s nickname, avatar, or description.',
+      parameters: updateParameters,
+      execute: async (_toolCallId, params) => {
+        const resolved = this.resolveManagedAgent(params.agent)
+        if (!resolved.agent) {
+          return {
+            content: [{ type: 'text' as const, text: resolved.error ?? 'The agent could not be found.' }],
+            details: { updated: false }
+          }
+        }
+        const update: { name?: string; instructions?: string; avatar?: string; avatarEmoji?: string } = {}
+        if (params.name !== undefined) {
+          const name = params.name.trim().slice(0, 80)
+          if (!name) {
+            return {
+              content: [{ type: 'text' as const, text: 'The new nickname cannot be blank.' }],
+              details: { updated: false, agentId: resolved.agent.id }
+            }
+          }
+          const duplicate = this.store.agents.find((agent) => agent.id !== resolved.agent!.id && agent.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase())
+          if (duplicate) {
+            return {
+              content: [{ type: 'text' as const, text: `Another agent is already named “${duplicate.name}”.` }],
+              details: { updated: false, agentId: resolved.agent.id }
+            }
+          }
+          update.name = name
+        }
+        if (params.description !== undefined) update.instructions = params.description.trim().slice(0, 4000)
+        if (params.emoji !== undefined) {
+          const requestedEmoji = params.emoji.trim()
+          const avatarEmoji = normalizeAgentEmoji(requestedEmoji)
+          if (!requestedEmoji || !avatarEmoji) {
+            return {
+              content: [{ type: 'text' as const, text: 'The emoji avatar must contain exactly one emoji.' }],
+              details: { updated: false, agentId: resolved.agent.id }
+            }
+          }
+          if (params.avatar === 'attached') {
+            return {
+              content: [{ type: 'text' as const, text: 'Choose either the attached image or an emoji for the avatar, not both.' }],
+              details: { updated: false, agentId: resolved.agent.id }
+            }
+          }
+          update.avatarEmoji = avatarEmoji
+        }
+        if (params.avatar === 'remove') {
+          update.avatar = ''
+          update.avatarEmoji = ''
+        }
+        if (params.avatar === 'attached') {
+          const prepared = this.avatarFromCurrentMessage(config.id)
+          if (prepared.error || !prepared.avatar) {
+            return {
+              content: [{ type: 'text' as const, text: prepared.error ?? 'The attached image could not be used as an avatar.' }],
+              details: { updated: false, agentId: resolved.agent.id }
+            }
+          }
+          update.avatar = prepared.avatar
+        }
+        if (!Object.keys(update).length) {
+          return {
+            content: [{ type: 'text' as const, text: 'No nickname, avatar, or description change was provided.' }],
+            details: { updated: false, agentId: resolved.agent.id }
+          }
+        }
+        const previousName = resolved.agent.name
+        const updated = this.store.updateAgent(resolved.agent.id, update)
+        if (!updated) {
+          return {
+            content: [{ type: 'text' as const, text: `The agent “${previousName}” could not be updated.` }],
+            details: { updated: false, agentId: resolved.agent.id }
+          }
+        }
+        this.refreshAgentAfterUpdate(updated.id, config.id)
+        this.emit()
+        return {
+          content: [{ type: 'text' as const, text: `Updated the agent “${updated.name}”.` }],
+          details: { updated: true, agentId: updated.id }
+        }
+      }
+    }
+
+    return [
+      createTool as unknown as AgentTool<ReturnType<typeof Type.Object>>,
+      updateTool as unknown as AgentTool<ReturnType<typeof Type.Object>>
+    ]
+  }
+
   private enqueueAgent<T>(agentId: string, task: () => Promise<T>): Promise<T> {
     const previous = this.queues.get(agentId) ?? Promise.resolve()
     const execution = previous.catch(() => undefined).then(task)
@@ -633,6 +935,14 @@ export class DouchatRuntime {
       if (this.queues.get(agentId) === settled) this.queues.delete(agentId)
     })
     return execution
+  }
+
+  private takeToolActions(runId: string | undefined, agentId: string): MessageAction[] {
+    if (!runId) return []
+    const key = `${runId}:${agentId}`
+    const actions = [...(this.toolActions.get(key)?.values() ?? [])]
+    this.toolActions.delete(key)
+    return actions
   }
 
   /** One model turn for one bot. Never throws: failures come back as text. */
@@ -660,15 +970,21 @@ export class DouchatRuntime {
     responded?: Set<string>
     signal?: AbortSignal
     images?: ImageContent[]
-  }): Promise<{ text: string; error?: string; attachments?: MessageAttachment[] }> {
+  }): Promise<AgentReply> {
     this.statuses.set(config.id, 'thinking')
     this.busyAgents.add(config.id)
     this.activeConversation.set(config.id, conversationId)
     this.activeTopic.set(config.id, topicId)
     this.activeDepth.set(config.id, depth)
     this.activeResponded.set(config.id, responded)
+    this.activeInputImages.set(config.id, images ?? [])
     if (runId) this.activeRun.set(config.id, runId)
     this.emit()
+
+    const finish = (reply: Omit<AgentReply, 'actions'>): AgentReply => {
+      const actions = this.takeToolActions(runId, config.id)
+      return actions.length ? { ...reply, actions } : reply
+    }
 
     try {
       if (config.localAgentId) {
@@ -688,6 +1004,7 @@ export class DouchatRuntime {
         try {
           const reply = await runLocalAgent(config, [
             `You are ${config.name}. Role: ${config.role}.`, config.instructions,
+            'When you mention a verified local file inside Downloads, Desktop, or Documents, make its visible filename a Markdown link using its exact absolute path: [filename](<douchat-file:///absolute/path>). Do not create this link for an unverified path.',
             config.localAgentId === 'codex'
               ? 'When an image is requested, use your image-generation capability. Douchat will attach image files produced by that tool automatically. Never say an image was created or sent unless the tool actually produced the image file.'
               : '',
@@ -698,7 +1015,7 @@ export class DouchatRuntime {
             data: Buffer.from(image.data, 'base64')
           })))
           const attachments = await Promise.all(reply.images.map((image) => this.store.saveImageAttachment(image)))
-          return { text: reply.text, ...(attachments.length ? { attachments } : {}) }
+          return finish({ text: reply.text, ...(attachments.length ? { attachments } : {}) })
         } finally {
           signal?.removeEventListener('abort', forwardAbort)
           runs.delete(abort)
@@ -716,10 +1033,10 @@ export class DouchatRuntime {
       const lastMessage = [...session.state.messages].reverse().find((message) => message.role === 'assistant')
       const text = lastMessage && 'content' in lastMessage ? this.readText(lastMessage.content) : ''
       const error = lastMessage && 'errorMessage' in lastMessage ? (lastMessage.errorMessage as string) : undefined
-      if (!text.trim() && error) return { text: '', error }
-      return { text, error: text.trim() ? undefined : `${config.name} finished without a text response.` }
+      if (!text.trim() && error) return finish({ text: '', error })
+      return finish({ text, error: text.trim() ? undefined : `${config.name} finished without a text response.` })
     } catch (cause) {
-      return { text: '', error: cause instanceof Error ? cause.message : 'Unknown runtime error' }
+      return finish({ text: '', error: cause instanceof Error ? cause.message : 'Unknown runtime error' })
     } finally {
       this.statuses.set(config.id, 'idle')
       this.busyAgents.delete(config.id)
@@ -728,6 +1045,8 @@ export class DouchatRuntime {
       this.activeDepth.delete(config.id)
       this.activeResponded.delete(config.id)
       this.activeRun.delete(config.id)
+      this.activeInputImages.delete(config.id)
+      if (this.pendingSessionRefresh.delete(config.id)) this.resetAgentSessions(config.id)
       this.emit()
     }
   }
@@ -755,8 +1074,9 @@ export class DouchatRuntime {
     common: Partial<ChatMessage> = {}
   ): ChatMessage[] {
     const blocks = splitBotReply(text)
-    if (!blocks.length && (extra.attachments?.length || extra.deliveries?.length)) blocks.push('')
+    if (!blocks.length && (extra.attachments?.length || extra.deliveries?.length || extra.actions?.length)) blocks.push('')
     if (!blocks.length) return []
+    const { actions, ...closingExtra } = extra
     const replyGroupId = blocks.length > 1 ? randomUUID() : undefined
     const conversation = this.store.conversation(conversationId)
     const members = (conversation?.agentIds ?? [])
@@ -778,8 +1098,11 @@ export class DouchatRuntime {
         ...(members.length
           ? { recipients: mentionedMembers(block, members).map((member) => ({ id: member.id, name: member.name })) }
           : {}),
+        // The receipt explains how the turn acted, so keep it with the first
+        // explanatory bubble instead of after a later follow-up aside.
+        ...(index === 0 && actions?.length ? { actions } : {}),
         // Envelopes and errors belong to the closing bubble of a turn.
-        ...(index === blocks.length - 1 ? extra : {})
+        ...(index === blocks.length - 1 ? closingExtra : {})
       })
     )
   }
@@ -952,16 +1275,25 @@ export class DouchatRuntime {
     this.setActivity(conversation.id, topicId, 'replying', [bot.id], bot.name)
 
     const history = this.store.topicMessages(conversation.id, topicId)
+    const sessionKey = `direct:${conversation.id}:${topicId}`
     const peers = this.store.agents.filter((agent) => agent.id !== bot.id).map(asMember)
     const promptText = imagePrompt(user.text, images.length)
     const contextual = directReplyPrompt(
       promptText,
-      history.map((message) => ({ content: message.text, source: message.source }))
+      history
+        .filter((message) => message.id !== user.id && message.kind === 'message')
+        .map((message) => ({
+          authorId: message.authorId,
+          authorName: message.authorName,
+          content: message.text,
+          source: message.source
+        })),
+      !this.sessions.has(sessionKey)
     )
     const prompt = botReplyPrompt(directA2ASourcePrompt(promptText, asMember(bot), peers, contextual === promptText ? '' : contextual))
     const reply = await this.runReply({
       config: bot,
-      sessionKey: `direct:${conversation.id}:${topicId}`,
+      sessionKey,
       context: 'direct',
       prompt,
       conversationId: conversation.id,
@@ -980,6 +1312,7 @@ export class DouchatRuntime {
     this.saveBubbles(conversation.id, topicId, bot, publicText, {
       ...(failure ? { error: summarizeRuntimeError(failure).title } : {}),
       ...(reply.attachments?.length ? { attachments: reply.attachments } : {}),
+      ...(reply.actions?.length ? { actions: reply.actions } : {}),
       ...(delivery.messages.length
         ? {
             deliveries: delivery.messages.map((message) => ({
@@ -1040,13 +1373,15 @@ export class DouchatRuntime {
     )
     this.clearActivity(direct.id)
     const text = reply.text.trim() || reply.error || ''
-    if (!text && !reply.attachments?.length) return
+    if (!text && !reply.attachments?.length && !reply.actions?.length) return
     const saved = this.saveBubbles(
       direct.id,
       topicId,
       target,
       text,
-      reply.text.trim() ? { attachments: reply.attachments } : { error: reply.error, attachments: reply.attachments },
+      reply.text.trim()
+        ? { attachments: reply.attachments, actions: reply.actions }
+        : { error: reply.error, attachments: reply.attachments, actions: reply.actions },
       { source: { kind: 'bot', id: delivery.sender.id, name: delivery.sender.name, content: delivery.content } }
     )
     this.store.addDeliveryReplies(delivery.id, saved.map((message) => ({
@@ -1164,7 +1499,7 @@ export class DouchatRuntime {
         })
       )
       if (signal.aborted) return { messages: [] }
-      if (!outcome.text.trim() && !outcome.attachments?.length) {
+      if (!outcome.text.trim() && !outcome.attachments?.length && !outcome.actions?.length) {
         // Failover owns member failures: leave no broken bubble behind.
         this.disposeSession(groupMemberSessionId(conversation.id, member.id, topicId))
         return { messages: [], failed: true }
@@ -1182,6 +1517,7 @@ export class DouchatRuntime {
       this.deliverToHumanInbox(conversation, delivery.messages)
       const saved = this.saveBubbles(conversation.id, topicId, config, delivery.publicText, {
         ...(outcome.attachments?.length ? { attachments: outcome.attachments } : {}),
+        ...(outcome.actions?.length ? { actions: outcome.actions } : {}),
         ...(delivery.messages.length
           ? {
               deliveries: delivery.messages.map((message) => ({
@@ -1280,6 +1616,7 @@ export class DouchatRuntime {
       if (!(await this.canRunLive(speaker))) return
       const prompt = botGreetingPrompt({
         bot: { id: speaker.id, name: speaker.name, description: botDescription(speaker), labels: speaker.labels },
+        language: this.interfaceLanguage,
         group: group
           ? {
               name: group.name,
@@ -1373,8 +1710,8 @@ export class DouchatRuntime {
         conversation.id,
         topicId,
         agent,
-        reply.text || (reply.attachments?.length ? '' : `${agent.name} finished without a text response.`),
-        { attachments: reply.attachments }
+        reply.text || (reply.attachments?.length || reply.actions?.length ? '' : `${agent.name} finished without a text response.`),
+        { attachments: reply.attachments, actions: reply.actions }
       )
       this.store.addUnread(conversation.id, 1)
       this.store.updateRun(run.id, { status: 'succeeded', latestActivity: 'Finished', finishedAt: Date.now() })
@@ -1400,6 +1737,13 @@ export class DouchatRuntime {
     this.sessions.delete(sessionKey)
   }
 
+  private resetAgentSessions(agentId: string): void {
+    for (const [key, session] of [...this.sessions]) {
+      if (session.agentId !== agentId && !key.includes(encodeURIComponent(agentId))) continue
+      this.disposeSession(key)
+    }
+  }
+
   resetConversation(conversationId: string, topicId?: string): void {
     const prefixes = [
       `direct:${conversationId}:`,
@@ -1416,10 +1760,7 @@ export class DouchatRuntime {
   disposeAgent(agentId: string): void {
     for (const abort of this.localRuns.get(agentId) ?? []) abort.abort()
     this.localRuns.delete(agentId)
-    for (const [key, session] of [...this.sessions]) {
-      if (session.agentId !== agentId && !key.includes(encodeURIComponent(agentId))) continue
-      this.disposeSession(key)
-    }
+    this.resetAgentSessions(agentId)
     void this.computer.stop(agentId)
     this.statuses.delete(agentId)
   }

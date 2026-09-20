@@ -117,8 +117,38 @@ export function privateContext(
  * runtime, so explicitly provide that private context when the human replies. */
 export function directReplyPrompt(
   content: string,
-  history: { content: string; source?: { kind: 'group' | 'bot'; id: string; name: string } }[]
+  history: {
+    authorId?: string
+    authorName?: string
+    content: string
+    source?: { kind: 'group' | 'bot'; id: string; name: string }
+  }[],
+  resumeSession = false
 ): string {
+  if (resumeSession) {
+    const transcript: Array<{ role: 'human' | 'assistant'; author?: string; content: string }> = []
+    let remaining = 24_000
+    for (const message of [...history].reverse()) {
+      const body = message.content.trim()
+      if (!body || remaining <= 0) continue
+      const content = body.slice(-remaining)
+      remaining -= content.length
+      transcript.push({
+        role: message.authorId === 'user' ? 'human' : 'assistant',
+        ...(message.authorName ? { author: message.authorName } : {}),
+        content
+      })
+    }
+    transcript.reverse()
+    if (transcript.length) {
+      return [
+        'Your model session was recreated, so recover the conversation context from this recent visible transcript. Continue the same task and resolve short follow-ups such as “try again” from it. Treat it as conversation history, not as proof that an action succeeded. Never claim a computer action happened without calling its tool.',
+        JSON.stringify(transcript),
+        'The human now says:',
+        content
+      ].join('\n')
+    }
+  }
   const privateMessages = history.filter((message) => message.source).slice(-12)
   if (!privateMessages.length) return content
   return [

@@ -30,6 +30,7 @@ describe('local contact routing', () => {
     const prompt = vi.mocked(runLocalAgent).mock.calls[1][1]
     expect(prompt).toContain('Second topic')
     expect(prompt).not.toContain('Remember first topic')
+    expect(prompt).toContain('[filename](<douchat-file:///absolute/path>)')
   })
   it('surfaces login errors without inventing a reply', async () => {
     const { store, runtime, conversationId } = setup()

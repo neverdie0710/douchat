@@ -1,5 +1,5 @@
 import { X } from 'lucide-react'
-import { t, tr, usePreferences } from './preferences'
+import { resolveInterfaceLanguage, t, tr, usePreferences } from './preferences'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
@@ -41,7 +41,7 @@ export function App(): ReactElement {
 }
 
 function WorkspaceApp(): ReactElement {
-  usePreferences()
+  const preferences = usePreferences()
   const imeComposing = useRef(false)
   const [authState, setAuthState] = useState<DesktopAuthState>({ status: 'checking' })
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
@@ -54,6 +54,10 @@ function WorkspaceApp(): ReactElement {
   const [dialog, setDialog] = useState<Dialog>(null)
   const [showInspector, setShowInspector] = useState(false)
   const [inspectorAgentId, setInspectorAgentId] = useState<string>()
+  const interfaceLanguage = resolveInterfaceLanguage(preferences.language)
+  useEffect(() => {
+    void window.douchat.setInterfaceLanguage(interfaceLanguage)
+  }, [interfaceLanguage])
   useEffect(() => {
     if (!showInspector) return
     const closeOnEscape = (event: KeyboardEvent): void => {
@@ -342,6 +346,7 @@ function WorkspaceApp(): ReactElement {
             snapshot={snapshot}
             selection={contact}
             onMessage={openChat}
+            onStartDirect={(agentId) => { void startDirectChat(agentId) }}
             onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
             onDeleteBot={deleteAgent}
             onTogglePin={togglePin}
@@ -383,6 +388,15 @@ function WorkspaceApp(): ReactElement {
         }}
         inspectorOpen={showInspector}
         onToggleInspector={() => setShowInspector((value) => !value)}
+        onOpenAgentProfile={(agentId, anchor) => {
+          setInspectorAgentId(agentId)
+          setDialog({ kind: 'member-profile', agentId, anchor })
+        }}
+        onOpenUserProfile={() => {
+          setDialog(null)
+          setSettingsTab('profile')
+          setSettingsOpen(true)
+        }}
         onSend={send}
         onStop={() => conversation && void window.douchat.stopConversation(conversation.id)}
       />
@@ -408,6 +422,7 @@ function WorkspaceApp(): ReactElement {
             <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
             <ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: dialog.agentId }}
               onMessage={(id) => { setDialog(null); openChat(id) }}
+              onStartDirect={(agentId) => { setDialog(null); void startDirectChat(agentId) }}
               onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
               onDeleteBot={deleteAgent}
               onTogglePin={togglePin} />

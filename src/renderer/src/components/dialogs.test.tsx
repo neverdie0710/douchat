@@ -179,6 +179,58 @@ describe('create agent terminology', () => {
     expect(container.textContent).toContain('No available local agents')
   })
 
+  it('creates a manual agent with a blank description by default', async () => {
+    const onCreate = vi.fn(async () => undefined)
+    await act(async () => root.render(
+      <BotModal
+        localAgents={[]}
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn(async () => undefined)}
+      />
+    ))
+
+    const name = container.querySelector<HTMLInputElement>('.field-row input')!
+    const setValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(name), 'value')!.set!
+    await act(async () => {
+      setValue.call(name, 'Blank Slate')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector<HTMLFormElement>('form')!.requestSubmit())
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Blank Slate',
+      instructions: ''
+    }))
+  })
+
+  it('selects an emoji avatar from a dropdown', async () => {
+    const onUpdate = vi.fn(async () => undefined)
+    await act(async () => root.render(
+      <BotModal
+        agent={agents[0]}
+        localAgents={[]}
+        onSettings={vi.fn()}
+        onClose={vi.fn()}
+        onCreate={vi.fn(async () => undefined)}
+        onUpdate={onUpdate}
+      />
+    ))
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.edit-contact-emoji-trigger')!.click())
+    const options = container.querySelectorAll<HTMLButtonElement>('.edit-contact-emoji-grid button')
+    expect(options).toHaveLength(48)
+    const brain = [...options].find((option) => option.dataset.emoji === '🧠')!
+    await act(async () => brain.click())
+    await act(async () => container.querySelector<HTMLFormElement>('form')!.requestSubmit())
+
+    expect(onUpdate).toHaveBeenCalledWith('alpha', expect.objectContaining({
+      avatar: '',
+      avatarEmoji: '🧠'
+    }))
+  })
+
   it('offers every detected local agent', async () => {
     const localAgents: LocalAgent[] = [
       { id: 'claude', name: 'Claude Code', command: 'claude', path: '/bin/claude', installed: true, chatSupported: true },

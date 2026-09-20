@@ -14,7 +14,8 @@ vi.mock('./common', () => ({
   ConversationAvatar: ({ conversation }: { conversation: Conversation }) => (
     <span data-conversation-avatar={conversation.id} />
   ),
-  agentDisplayName: (agent: AgentConfig) => agent.name
+  agentDisplayName: (agent: AgentConfig) => agent.name,
+  agentSourceLabel: (agent: AgentConfig) => agent.localAgentId ? `Local · ${agent.localAgentId}` : 'Cloud'
 }))
 
 import { ContactCard } from './ContactCard'
@@ -47,6 +48,7 @@ describe('group contact profile', () => {
 
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    document.documentElement.lang = 'en'
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -64,6 +66,7 @@ describe('group contact profile', () => {
         snapshot={snapshot}
         selection={{ kind: 'group', id: group.id }}
         onMessage={onMessage}
+        onStartDirect={vi.fn()}
         onEditBot={vi.fn()}
         onDeleteBot={vi.fn()}
         onTogglePin={vi.fn()}
@@ -81,5 +84,40 @@ describe('group contact profile', () => {
     await act(async () => open.click())
 
     expect(onMessage).toHaveBeenCalledWith(group.id)
+  })
+
+  it('keeps the system administrator in contacts after its chat is deleted', async () => {
+    const admin: AgentConfig = {
+      id: 'system-admin-1',
+      name: 'Dr. Dou',
+      systemRole: 'admin',
+      role: '豆博士',
+      instructions: '',
+      color: '#14B8A6',
+      provider: 'gateway',
+      model: 'default',
+      createdAt: 1
+    }
+    const onStartDirect = vi.fn()
+    await act(async () => root.render(
+      <ContactCard
+        snapshot={{ ...snapshot, agents: [admin], conversations: [] }}
+        selection={{ kind: 'bot', id: admin.id }}
+        onMessage={vi.fn()}
+        onStartDirect={onStartDirect}
+        onEditBot={vi.fn()}
+        onDeleteBot={vi.fn()}
+        onTogglePin={vi.fn()}
+      />
+    ))
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Agent menu"]')!.click())
+    expect(container.textContent).toContain('Edit agent')
+    expect(container.textContent).not.toContain('Delete agent')
+    expect(container.querySelector('.contact-profile-identity p')?.textContent).toBe('Cloud')
+    expect([...container.querySelectorAll('.contact-field')].find((field) => field.textContent?.startsWith('Source'))?.textContent).toBe('SourceCloud')
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.contact-profile-actions button')!.click())
+    expect(onStartDirect).toHaveBeenCalledWith(admin.id)
   })
 })

@@ -1,5 +1,5 @@
 import { Bot, UserRound, Users } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
@@ -9,8 +9,32 @@ import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarW
 
 export const colors = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
 
+const localAgentNames: Record<string, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  gemini: 'Gemini',
+  grok: 'Grok Build',
+  openclaw: 'OpenClaw',
+  fastclaw: 'FastClaw',
+  hermes: 'Hermes',
+  opencode: 'OpenCode',
+  cursor: 'Cursor',
+  kimi: 'Kimi',
+  omp: 'OMP'
+}
+
+export function localAgentDisplayName(localAgentId: string): string {
+  return localAgentNames[localAgentId] ?? localAgentId
+}
+
+export function agentSourceLabel(agent: AgentConfig): string {
+  return agent.localAgentId
+    ? `${t('Local')} · ${localAgentDisplayName(agent.localAgentId)}`
+    : t('Cloud')
+}
+
 export function isDrDou(agent: AgentConfig): boolean {
-  return agent.id.startsWith('dr-dou-')
+  return agent.systemRole === 'admin' || agent.id.startsWith('dr-dou-')
 }
 
 /** Built-in identities are stored under a stable canonical name, while their
@@ -20,6 +44,7 @@ export function agentDisplayName(agent: AgentConfig): string {
 }
 
 export function agentDisplayRole(agent: AgentConfig): string {
+  if (agent.systemRole === 'admin') return t('System administrator')
   return isDrDou(agent) && agent.role === '豆博士' ? t('Douchat assistant') : agent.role
 }
 
@@ -32,18 +57,19 @@ export function conversationDisplayName(conversation: Conversation, agents: Agen
 export function AgentAvatar({ agent, size = 36 }: { agent: AgentConfig; size?: number }): ReactElement {
   const logo = agent.localAgentId ? agentIcons[agent.localAgentId] : undefined
   const builtInPicture = isDrDou(agent) ? agentIcons['dr-dou-human'] : undefined
-  const picture = agent.avatar || logo || builtInPicture
-  const generated = !picture && Boolean(agent.avatarSeed)
+  const emoji = agent.avatarEmoji
+  const picture = agent.avatar || (!emoji ? logo || builtInPicture : undefined)
+  const generated = !picture && !emoji && Boolean(agent.avatarSeed)
   const displayName = agentDisplayName(agent)
   return (
     <span
-      className={`agent-avatar${logo && !agent.avatar ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}${generated ? ' generated-agent-avatar' : ''}`}
+      className={`agent-avatar${logo && !agent.avatar && !emoji ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar && !emoji ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}${emoji ? ' emoji-agent-avatar' : ''}${generated ? ' generated-agent-avatar' : ''}`}
       data-agent={agent.localAgentId}
       style={{ '--agent-color': agent.color, '--avatar-size': `${size}px` } as CSSProperties}
       aria-label={displayName}
       title={displayName}
     >
-      {picture ? <img src={picture} alt="" /> : generated ? <GeneratedAgentAvatar seed={agent.avatarSeed!} /> : <span className="avatar-eyes">
+      {picture ? <img src={picture} alt="" /> : emoji ? <span className="avatar-emoji" aria-hidden="true">{emoji}</span> : generated ? <GeneratedAgentAvatar seed={agent.avatarSeed!} /> : <span className="avatar-eyes">
         <i />
         <i />
       </span>}
@@ -64,14 +90,34 @@ export function UserAvatar({
   size?: number
   className?: string
 }): ReactElement {
+  const [loadedSrc, setLoadedSrc] = useState('')
+  const [failedSrc, setFailedSrc] = useState('')
+  const canLoadPhoto = Boolean(src) && failedSrc !== src
+  const hasPhoto = canLoadPhoto && loadedSrc === src
+
   return (
     <span
-      className={`user-avatar ${src ? 'has-photo' : ''} ${className}`.trim()}
+      className={`user-avatar ${hasPhoto ? 'has-photo' : ''} ${className}`.trim()}
       style={{ '--avatar-size': `${size}px` } as CSSProperties}
       title={name}
       aria-label={name}
     >
-      {src ? <img src={src} alt="" /> : <UserRound size={Math.round(size * 0.58)} strokeWidth={1.8} />}
+      {canLoadPhoto && (
+        <img
+          className={hasPhoto ? 'is-loaded' : ''}
+          src={src}
+          alt=""
+          onLoad={() => {
+            setFailedSrc('')
+            setLoadedSrc(src)
+          }}
+          onError={() => {
+            setFailedSrc(src)
+            setLoadedSrc((loaded) => loaded === src ? '' : loaded)
+          }}
+        />
+      )}
+      {!hasPhoto && <UserRound size={Math.round(size * 0.58)} strokeWidth={1.8} />}
     </span>
   )
 }

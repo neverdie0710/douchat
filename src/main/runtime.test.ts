@@ -40,6 +40,14 @@ interface MessageAgentToolLike {
   ) => Promise<{ content: Array<{ type: string; text: string }> }>
 }
 
+interface AgentManagementToolLike {
+  name: string
+  execute: (
+    toolCallId: string,
+    params: Record<string, string | undefined>
+  ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>
+}
+
 /**
  * The suite covers orchestration — dispatch, mention routing, bubble splitting
  * — not a provider, so every bot answers from a scripted model rather than the
@@ -86,6 +94,143 @@ afterEach(() => {
 })
 
 describe('DouchatRuntime', () => {
+  it('lets only the current account system administrator create and edit agents', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-management-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'))
+    const defaultAgent = store.ensureDefaultCloudContact('account-1', {
+      provider: 'gateway',
+      model: 'default'
+    }).agent!
+    const avatar = 'data:image/png;base64,aGVsbG8='
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined, {
+      baseUrl: 'http://localhost:3004/v1',
+      resolveAccessToken: () => 'dch_current',
+      avatarFromImage: () => avatar
+    })
+    const internals = runtime as unknown as {
+      activeInputImages: Map<string, Array<{ type: 'image'; data: string; mimeType: string }>>
+      agentManagementTools: (config: NonNullable<ReturnType<DouchatStore['agent']>>) => AgentManagementToolLike[]
+    }
+    internals.activeInputImages.set(defaultAgent.id, [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }])
+
+    const tools = internals.agentManagementTools(defaultAgent)
+    expect(tools.map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+    const create = tools.find((tool) => tool.name === 'create_agent')!
+    const createdResult = await create.execute('create-1', { name: 'Researcher', avatar: 'attached' })
+    const createdId = createdResult.details.agentId as string
+    expect(createdResult.details.created).toBe(true)
+    expect(store.agent(createdId)).toMatchObject({
+      name: 'Researcher',
+      role: 'Assistant',
+      instructions: '',
+      avatar
+    })
+    expect(store.conversation(`direct-${createdId}`)?.agentIds).toEqual([createdId])
+
+    const update = tools.find((tool) => tool.name === 'update_agent')!
+    const updatedResult = await update.execute('update-1', {
+      agent: 'Researcher',
+      name: 'Release Scout',
+      description: 'Track release notes.',
+      emoji: '🦊'
+    })
+    expect(updatedResult.details.updated).toBe(true)
+    expect(store.agent(createdId)).toMatchObject({
+      name: 'Release Scout',
+      instructions: 'Track release notes.',
+      avatar: '',
+      avatarEmoji: '🦊'
+    })
+    expect(store.conversation(`direct-${createdId}`)?.name).toBe('Release Scout')
+
+    await update.execute('update-2', { agent: 'Release Scout', avatar: 'remove' })
+    expect(store.agent(createdId)).toMatchObject({ avatar: '', avatarEmoji: '' })
+    expect(internals.agentManagementTools(store.agent(createdId)!)).toEqual([])
+
+    store.deleteConversation(`direct-${defaultAgent.id}`)
+    expect(store.defaultConversationId).toBeUndefined()
+    expect(store.systemAdminAgentId).toBe(defaultAgent.id)
+    expect(internals.agentManagementTools(defaultAgent).map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+    const withoutCapability = { ...defaultAgent, capabilities: [] }
+    expect(internals.agentManagementTools(withoutCapability)).toEqual([])
+  })
+
+  it('tells the system administrator to use management tools for contact requests', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-management-prompt-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'))
+    const defaultAgent = store.ensureDefaultCloudContact('account-1', {
+      provider: 'gateway',
+      model: 'default'
+    }).agent!
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+    const prompt = (runtime as unknown as {
+      systemPrompt: (agent: NonNullable<ReturnType<DouchatStore['agent']>>, context: 'direct') => string
+    }).systemPrompt(defaultAgent, 'direct')
+
+    expect(prompt).toContain('Treat 联系人、智能体、agent, and bot as equivalent')
+    expect(prompt).toContain('call create_agent')
+    expect(prompt).toContain('call update_agent')
+    expect(prompt).toContain('choose one suitable for the agent')
+    expect(prompt).toContain('should remain empty unless the human supplies one')
+  })
+
+  it('does not grant an earlier account administrator access after switching accounts', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-account-admin-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'))
+    const earlier = store.ensureDefaultCloudContact('account-1', {
+      provider: 'gateway',
+      model: 'default'
+    }).agent!
+    const current = store.ensureDefaultCloudContact('account-2', {
+      provider: 'gateway',
+      model: 'default'
+    }).agent!
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+    const internals = runtime as unknown as {
+      agentManagementTools: (config: NonNullable<ReturnType<DouchatStore['agent']>>) => AgentManagementToolLike[]
+    }
+
+    expect(earlier.systemRole).toBe('admin')
+    expect(current.systemRole).toBe('admin')
+    expect(internals.agentManagementTools(earlier)).toEqual([])
+    expect(internals.agentManagementTools(current).map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+  })
+
+  it('asks agents to preserve verified local files as reopenable history links', () => {
+    const { store, runtime } = createRuntime()
+    const prompt = (runtime as unknown as {
+      systemPrompt: (agent: NonNullable<ReturnType<DouchatStore['agent']>>, context: 'direct') => string
+    }).systemPrompt(store.agent('dobi')!, 'direct')
+
+    expect(prompt).toContain('[filename](<douchat-file:///absolute/path>)')
+    expect(prompt).toContain('Do not create a local-file link for an unverified path')
+  })
+
+  it('returns to the ordinary reply loader after a tool action completes', () => {
+    const { runtime } = createRuntime()
+    const activityRuntime = runtime as unknown as {
+      setActivity: (
+        conversationId: string,
+        topicId: string,
+        phase: 'replying',
+        agentIds: string[],
+        label: string,
+        extra?: { action?: { id: string; tool: string; status: 'running' } }
+      ) => void
+    }
+
+    activityRuntime.setActivity('direct-dobi', 'topic-1', 'replying', ['dobi'], 'Dr. Dou', {
+      action: { id: 'tool-1', tool: 'computer_list_files', status: 'running' }
+    })
+    expect(runtime.snapshot().activity[0]?.action?.status).toBe('running')
+
+    activityRuntime.setActivity('direct-dobi', 'topic-1', 'replying', ['dobi'], 'Dr. Dou', { action: undefined })
+    expect(runtime.snapshot().activity[0]?.action).toBeUndefined()
+  })
+
   it('loads Cloud models with the desktop token and removes them on sign-out', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-cloud-'))
     directories.push(directory)
@@ -250,6 +395,25 @@ describe('DouchatRuntime', () => {
     expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(1)
   })
 
+  it('uses the selected interface language for proactive greetings', async () => {
+    const { store, runtime } = createRuntime()
+    const internals = runtime as unknown as {
+      runReply: (options: ReplyOptions) => Promise<{ text: string }>
+    }
+    let greetingPrompt = ''
+    internals.runReply = async ({ prompt }) => {
+      greetingPrompt = prompt
+      return { text: '你好，很高兴见到你。' }
+    }
+    runtime.setInterfaceLanguage('zh-CN')
+    store.clearConversation('direct-dobi', store.activeTopicId('direct-dobi'))
+
+    await runtime.greet('direct-dobi')
+
+    expect(greetingPrompt).toContain('"language":"zh-CN"')
+    expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))[0]?.text).toBe('你好，很高兴见到你。')
+  })
+
   it('keeps each topic transcript separate', async () => {
     const { store, runtime } = createRuntime()
     const first = store.activeTopicId('direct-lin')
@@ -259,6 +423,62 @@ describe('DouchatRuntime', () => {
 
     expect(store.topicMessages('direct-lin', first).some((message) => message.text === 'second task')).toBe(false)
     expect(store.topicMessages('direct-lin', second.id)[0].text).toBe('second task')
+  })
+
+  it('restores direct-chat context when the in-memory session is recreated', async () => {
+    const { store, runtime } = createRuntime()
+    const conversationId = 'direct-dobi'
+    const topicId = store.activeTopicId(conversationId)
+    store.clearConversation(conversationId, topicId)
+    store.addMessage({
+      conversationId,
+      topicId,
+      authorId: 'user',
+      authorName: store.userName,
+      text: 'Play the Qin emperor video from Downloads.',
+      kind: 'message'
+    })
+    store.addMessage({
+      conversationId,
+      topicId,
+      authorId: 'dobi',
+      authorName: 'Dobi',
+      text: 'I could not open the local file in the browser.',
+      kind: 'message'
+    })
+    let receivedPrompt = ''
+    ;(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }).runReply = async (options) => {
+      receivedPrompt = options.prompt
+      return { text: 'I will use the local-file tool this time.' }
+    }
+
+    await runtime.sendMessage(conversationId, 'Try again.')
+
+    expect(receivedPrompt).toContain('Play the Qin emperor video from Downloads.')
+    expect(receivedPrompt).toContain('I could not open the local file in the browser.')
+    expect(receivedPrompt).toContain('Try again.')
+    expect(receivedPrompt).toContain('Your model session was recreated')
+  })
+
+  it('persists completed tool actions on the reply bubble', async () => {
+    const { store, runtime } = createRuntime()
+    ;(runtime as unknown as {
+      runReply: (options: ReplyOptions) => Promise<{
+        text: string
+        actions: Array<{ id: string; tool: string; status: 'succeeded'; target: string }>
+      }>
+    }).runReply = async () => ({
+      text: 'The video is open.',
+      actions: [{ id: 'open-video-1', tool: 'computer_open_file', status: 'succeeded', target: 'qin-emperor.mp4' }]
+    })
+
+    await runtime.sendMessage('direct-dobi', 'Open that video again.')
+
+    const messages = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    const reply = [...messages].reverse().find((message) => message.authorId === 'dobi')
+    expect(reply?.actions).toEqual([
+      { id: 'open-video-1', tool: 'computer_open_file', status: 'succeeded', target: 'qin-emperor.mp4' }
+    ])
   })
 
   it('persists a pasted image and passes its bytes to the model', async () => {
