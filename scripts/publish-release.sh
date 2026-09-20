@@ -38,6 +38,7 @@ content_type() {
     *.dmg) echo "application/x-apple-diskimage" ;;
     *.zip) echo "application/zip" ;;
     *.exe) echo "application/vnd.microsoft.portable-executable" ;;
+    *.AppImage) echo "application/vnd.appimage" ;;
     *.deb) echo "application/vnd.debian.binary-package" ;;
     *) echo "application/octet-stream" ;;
   esac
