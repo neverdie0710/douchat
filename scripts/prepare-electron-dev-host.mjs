@@ -10,6 +10,7 @@ const infoPlist = join(appBundle, 'Contents', 'Info.plist')
 const projectRoot = resolve(import.meta.dirname, '..')
 const entitlements = join(projectRoot, 'resources', 'entitlements.mac.plist')
 const developmentBundleId = 'ai.thinkany.douchat.dev'
+const developmentAppName = 'Douchat Dev'
 const launchServicesRegister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 const microphoneUsageDescription = 'Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。'
 const speechRecognitionUsageDescription = 'Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。'
@@ -59,6 +60,8 @@ function hasPreparedBundleMetadata() {
   try {
     if (
       plistValue('CFBundleIdentifier') !== developmentBundleId
+      || plistValue('CFBundleDisplayName') !== developmentAppName
+      || plistValue('CFBundleName') !== developmentAppName
       || plistValue('NSMicrophoneUsageDescription') !== microphoneUsageDescription
       || plistValue('NSSpeechRecognitionUsageDescription') !== speechRecognitionUsageDescription
     ) return false
@@ -104,8 +107,8 @@ if (
 }
 
 setPlistString('CFBundleIdentifier', developmentBundleId)
-setPlistString('CFBundleDisplayName', 'Douchat')
-setPlistString('CFBundleName', 'Douchat')
+setPlistString('CFBundleDisplayName', developmentAppName)
+setPlistString('CFBundleName', developmentAppName)
 setPlistString('NSMicrophoneUsageDescription', microphoneUsageDescription)
 setPlistString('NSSpeechRecognitionUsageDescription', speechRecognitionUsageDescription)
 for (const helper of helperBundles) {
@@ -138,4 +141,4 @@ if (identity === '-') {
 execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', appBundle], { stdio: 'inherit' })
 registerWithLaunchServices()
 
-console.log(`Prepared Douchat development host (${developmentBundleId}, ${identity === '-' ? 'ad-hoc' : 'developer signed'})`)
+console.log(`Prepared ${developmentAppName} host (${developmentBundleId}, ${identity === '-' ? 'ad-hoc' : 'developer signed'})`)

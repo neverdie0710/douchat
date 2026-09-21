@@ -29,6 +29,7 @@ describe('interface language preference', () => {
 
     expect(document.documentElement.lang).toBe('zh-CN')
     expect(t('Settings')).toBe('设置')
+    expect(t('Meet Douchat')).toBe('认识 Douchat')
     setPreferences({ appearance: 'dark' })
     expect(JSON.parse(localStorage.getItem('douchat.general') || '{}').language).toBe('system')
   })

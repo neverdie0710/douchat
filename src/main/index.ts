@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, powerMonitor, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, session, shell, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -28,9 +28,13 @@ import { DesktopAuth } from './desktopAuth'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, normalizeWebAppUrl } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
-import { userDataDirectoryName } from './userData'
+import { applicationName, userDataDirectoryName } from './userData'
 
 const development = !app.isPackaged
+// Chromium derives the macOS safeStorage Keychain service from the application
+// name. Keep development on "Douchat Dev Safe Storage" so local builds never
+// contend with the signed release's "Douchat Safe Storage" credentials.
+app.setName(applicationName(development))
 const appIcon = join(app.getAppPath(), 'resources/icons', development ? 'douchat-dev.png' : 'douchat.png')
 const authScheme = desktopAuthScheme()
 const webAppUrl = normalizeWebAppUrl(
@@ -319,6 +323,10 @@ function configureMediaPermissions(): void {
 
 app.whenReady().then(() => {
   if (!hasSingleInstanceLock) return
+  // Electron creates a default File/Edit/View/Window menu on Windows when no
+  // application menu is provided. Douchat exposes its actions in the app UI,
+  // so remove the native menu instead of merely hiding it until Alt is pressed.
+  if (process.platform === 'win32') Menu.setApplicationMenu(null)
   configureMediaPermissions()
   if (process.defaultApp && process.argv[1]) {
     app.setAsDefaultProtocolClient(authScheme, process.execPath, [process.argv[1]])

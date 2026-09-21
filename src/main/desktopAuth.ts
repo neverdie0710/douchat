@@ -257,7 +257,18 @@ export class DesktopAuth {
       const { code } = parseDesktopAuthCallback(input, flow.redirectUri, flow.state)
       const exchanged = await this.exchangeCode(code, flow.codeVerifier)
       this.accessToken = exchanged.accessToken
-      await this.saveCredential(exchanged.accessToken)
+      try {
+        await this.saveCredential(exchanged.accessToken)
+      } catch (error) {
+        // Keychain access is optional for the current process. If the user
+        // declines it, keep the authenticated session in memory and leave no
+        // unreadable credential behind to trigger another prompt at startup.
+        await this.removeFile(this.credentialPath)
+        console.warn(
+          '[douchat] secure session persistence unavailable; using an in-memory session:',
+          error instanceof Error ? error.message : error
+        )
+      }
       await this.removeFile(this.pendingPath)
       return this.setState({ status: 'signed-in', user: exchanged.user })
     } catch (error) {

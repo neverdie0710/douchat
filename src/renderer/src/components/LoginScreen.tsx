@@ -25,8 +25,8 @@ export function LoginScreen({ state, onLogin }: { state: DesktopAuthState; onLog
         <span>DOUCHAT</span>
       </div>
       <div className="login-heading">
-        <p>{t('Meet Douchat')}</p>
-        <h1 id="login-title">{t('Your smartest collaboration partner.')}</h1>
+        <h1 id="login-title">{t('Meet Douchat')}</h1>
+        <p className="login-positioning">{t('Keep every AI conversation in one calm, clear desktop workspace. Mix models and agents freely, while your conversation history stays in your control.')}</p>
       </div>
 
       <div className="login-action-panel">
