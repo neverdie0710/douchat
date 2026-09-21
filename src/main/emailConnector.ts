@@ -92,8 +92,29 @@ export class EmailConnectorManager {
     await rename(temporary, this.credentialPath)
   }
 
-  private async credential(accountId: string): Promise<EmailCredential | undefined> {
-    const encrypted = (await this.secrets())[accountId]
+  private activeAccountId(): string {
+    const accountId = this.store.currentAccountId
+    if (!accountId) throw new Error('Sign in before using an email connection')
+    return accountId
+  }
+
+  private credentialKey(accountId: string, connectorId: string): string {
+    return `${accountId}:${connectorId}`
+  }
+
+  private async credential(connectorId: string): Promise<EmailCredential | undefined> {
+    const accountId = this.activeAccountId()
+    const secrets = await this.secrets()
+    const key = this.credentialKey(accountId, connectorId)
+    let encrypted = secrets[key]
+    // Pre-isolation releases keyed secrets only by connector id. Only the
+    // account that owns the migrated connector metadata may claim that secret.
+    if (!encrypted && secrets[connectorId] && this.store.connectors.some((item) => item.id === connectorId)) {
+      encrypted = secrets[connectorId]
+      secrets[key] = encrypted
+      delete secrets[connectorId]
+      await this.writeSecrets(secrets)
+    }
     if (!encrypted || !safeStorage.isEncryptionAvailable()) return undefined
     try { return JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'base64'))) as EmailCredential }
     catch { return undefined }
@@ -101,6 +122,9 @@ export class EmailConnectorManager {
 
   private async resolved(input: EmailConnectorInput): Promise<{ input: EmailConnectorInput; credential: EmailCredential }> {
     const checked = validate(input)
+    if (checked.id && !this.store.connectors.some((account) => account.id === checked.id)) {
+      throw new Error('Email connection not found')
+    }
     const existing = checked.id ? await this.credential(checked.id) : undefined
     const credential = { username: checked.username || existing?.username || '', password: checked.password || existing?.password || '' }
     if (!credential.password) throw new Error('Enter the mailbox password or authorization code.')
@@ -126,6 +150,7 @@ export class EmailConnectorManager {
   }
 
   async test(input: EmailConnectorInput): Promise<EmailConnectionTestResult> {
+    const ownerId = this.activeAccountId()
     const resolved = await this.resolved(input)
     const imapResult: EmailConnectionTestResult['imap'] = { ok: false }
     const smtpResult: EmailConnectionTestResult['smtp'] = { ok: false }
@@ -148,10 +173,12 @@ export class EmailConnectorManager {
       smtpResult.ok = true
     } catch (error) { smtpResult.error = publicError(error) }
     finally { transport.close() }
+    if (this.store.currentAccountId !== ownerId) throw new Error('Account changed while testing the email connection')
     return { ok: imapResult.ok && smtpResult.ok, imap: imapResult, smtp: smtpResult }
   }
 
   async save(raw: EmailConnectorInput): Promise<EmailConnectorAccount> {
+    const ownerId = this.activeAccountId()
     const { input, credential } = await this.resolved(raw)
     const result = await this.test({ ...input, password: credential.password })
     if (!result.ok) throw new Error([result.imap.error, result.smtp.error].filter(Boolean).join(' · ') || 'Email connection failed.')
@@ -171,15 +198,16 @@ export class EmailConnectorManager {
       smtpPort: input.smtpPort,
       smtpSecure: input.smtpSecure,
       agentIds: input.agentIds.filter((agentId) => {
-        const agent = this.store.agent(agentId)
+        const agent = this.store.accountAgents.find((item) => item.id === agentId)
         return Boolean(agent && !agent.localAgentId)
       }),
       status: 'connected',
       updatedAt: now
     }
     const secrets = await this.secrets()
-    secrets[id] = safeStorage.encryptString(JSON.stringify(credential)).toString('base64')
+    secrets[this.credentialKey(ownerId, id)] = safeStorage.encryptString(JSON.stringify(credential)).toString('base64')
     await this.writeSecrets(secrets)
+    if (this.store.currentAccountId !== ownerId) throw new Error('Account changed while saving the email connection')
     const accounts = this.store.connectors.filter((item) => item.id !== id)
     accounts.push(account)
     this.store.setConnectors(accounts)
@@ -187,12 +215,15 @@ export class EmailConnectorManager {
   }
 
   async disconnect(accountId: string): Promise<void> {
+    this.account(accountId)
+    const ownerId = this.activeAccountId()
     const secrets = await this.secrets()
-    delete secrets[accountId]
+    delete secrets[this.credentialKey(ownerId, accountId)]
     if (Object.keys(secrets).length) await this.writeSecrets(secrets)
     else await unlink(this.credentialPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     })
+    if (this.store.currentAccountId !== ownerId) throw new Error('Account changed while disconnecting the email connection')
     this.store.setConnectors(this.store.connectors.filter((item) => item.id !== accountId))
   }
 

@@ -21,6 +21,43 @@ afterEach(() => {
 })
 
 describe('DouchatStore', () => {
+  it('keeps a saved group when its inbox conversation is deleted', () => {
+    const store = createStore()
+    const group = store.createGroup({ name: 'Saved', agentIds: store.agents.slice(0, 2).map((agent) => agent.id) })
+    expect(group.savedToContacts).toBeUndefined()
+    store.updateConversation(group.id, { savedToContacts: true })
+    store.deleteConversation(group.id)
+    expect(store.conversation(group.id)).toMatchObject({ savedToContacts: true, hidden: true })
+    store.updateConversation(group.id, { savedToContacts: false })
+    expect(store.conversation(group.id)?.savedToContacts).toBe(false)
+  })
+
+  it('persists shared agent ownership and ignores forged owner updates', () => {
+    const store = createStore()
+    const agent = store.agents[0]
+    expect(store.claimSocialAgent(agent.id, 'local-demo-account').ownerId).toBe('local-demo-account')
+    expect(() => store.claimSocialAgent(agent.id, 'bob')).toThrow('自己的')
+    store.updateAgent(agent.id, { ownerId: 'bob', name: 'Updated' } as UpdateAgentInput)
+    expect(store.agent(agent.id)?.ownerId).toBe('local-demo-account')
+    store.saveSocialTaskResult({ id: 'task', ownerId: 'local-demo-account', claim: 'claim', reply: 'Done', failed: false })
+    expect(store.socialTaskOutbox()).toHaveLength(1)
+    store.saveSocialTaskResult({ id: 'task', ownerId: 'local-demo-account', claim: 'claim', reply: 'Updated', failed: false })
+    expect(store.socialTaskOutbox()).toHaveLength(1)
+    store.setCurrentAccountId('other-account')
+    expect(store.socialTaskOutbox()).toEqual([])
+    store.setCurrentAccountId('local-demo-account')
+    store.removeSocialTaskResult('task')
+    expect(store.socialTaskOutbox()).toHaveLength(0)
+  })
+
+  it('allows sharing the current account’s built-in agent while rejecting other accounts', () => {
+    const store = createStore()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    expect(store.claimSocialAgent(admin.id, 'alice').systemRole).toBe('admin')
+    store.setCurrentAccountId('bob')
+    expect(() => store.claimSocialAgent(admin.id, 'bob')).toThrow('自己的')
+  })
+
   it('persists menu preferences and restores hidden chats when new messages arrive', () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-menu-'))
     temporaryDirectories.push(directory)
@@ -206,6 +243,236 @@ describe('DouchatStore', () => {
     const reopened = store.ensureDirectConversation(second.agent!.id)
     expect(reopened.created).toBe(true)
     expect(store.defaultConversationId).toBe(reopened.conversation.id)
+  })
+
+  it('keeps all account data isolated by the active account', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-account-scope-'))
+    temporaryDirectories.push(directory)
+    const store = new DouchatStore(join(directory, 'douchat.db'))
+    const binding = { provider: 'gateway', model: 'default' }
+    const firstAdmin = store.ensureDefaultCloudContact('user-1', binding).agent!
+    const firstAgent = store.createAgent({
+      name: 'First helper',
+      role: 'Assistant',
+      instructions: 'Help the first account.',
+      color: '#7C6CF2',
+      provider: 'gateway',
+      model: 'default'
+    })
+    const firstConversation = store.accountConversations.find((item) => item.agentIds[0] === firstAgent.id)!
+    const firstRoutine = store.createRoutine({
+      name: 'First reminder',
+      agentId: firstAgent.id,
+      conversationId: firstConversation.id,
+      prompt: 'Only notify the first account.',
+      schedule: { kind: 'interval', intervalMinutes: 30 },
+      timezone: 'Asia/Shanghai'
+    }, Date.now() + 30 * 60_000)
+    store.createRun({
+      agentId: firstAgent.id,
+      conversationId: firstConversation.id,
+      routineId: firstRoutine.id,
+      title: firstRoutine.name,
+      prompt: firstRoutine.prompt,
+      trigger: 'manual'
+    })
+    const firstAvatar = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
+    store.setUserName('First user')
+    store.setUserAvatar(firstAvatar)
+    store.setEndpoint({ baseUrl: 'https://first.example.com/v1', apiKey: 'first-secret' })
+    store.setConnectors([{
+      id: 'first-mail', kind: 'email', name: 'First mailbox', email: 'first@example.com', username: 'first@example.com',
+      imapHost: 'imap.example.com', imapPort: 993, imapSecure: true,
+      smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true,
+      agentIds: [firstAgent.id], status: 'connected', updatedAt: 1
+    }])
+    const firstAttachment = await store.saveImageAttachment({
+      name: 'private.png', mimeType: 'image/png', data: Uint8Array.from([1, 2, 3])
+    })
+    store.addMessage({
+      conversationId: firstConversation.id,
+      topicId: store.activeTopicId(firstConversation.id),
+      authorId: 'user',
+      authorName: 'First user',
+      text: '',
+      kind: 'message',
+      attachments: [firstAttachment]
+    })
+
+    const secondAdmin = store.ensureDefaultCloudContact('user-2', binding).agent!
+    expect(store.currentAccountId).toBe('user-2')
+    expect(store.accountAgents.map((agent) => agent.id)).toEqual([secondAdmin.id])
+    expect(store.accountConversations).toHaveLength(1)
+    expect(store.accountRoutines).toEqual([])
+    expect(store.accountRuns).toEqual([])
+    expect(store.userName).toBe('You')
+    expect(store.userAvatar).toBe('')
+    expect(store.endpoint).toBeUndefined()
+    expect(store.connectors).toEqual([])
+    await expect(store.attachmentDataUrl(firstAttachment.id)).rejects.toThrow('Attachment not found')
+
+    store.setUserName('Second user')
+    store.setEndpoint({ baseUrl: 'https://second.example.com/v1', apiKey: 'second-secret' })
+
+    store.setCurrentAccountId('user-1')
+    expect(store.accountAgents.map((agent) => agent.id)).toEqual([firstAdmin.id, firstAgent.id])
+    expect(store.accountConversations).toHaveLength(2)
+    expect(store.accountRoutines.map((routine) => routine.id)).toEqual([firstRoutine.id])
+    expect(store.accountRuns).toHaveLength(1)
+    expect(store.userName).toBe('First user')
+    expect(store.userAvatar).toBe(firstAvatar)
+    expect(store.endpoint).toEqual({ baseUrl: 'https://first.example.com/v1', apiKey: 'first-secret' })
+    expect(store.connectors.map((connector) => connector.id)).toEqual(['first-mail'])
+    expect(await store.attachmentDataUrl(firstAttachment.id)).toContain('data:image/png;base64,')
+
+    store.setCurrentAccountId('user-2')
+    expect(store.userName).toBe('Second user')
+    expect(store.endpoint).toEqual({ baseUrl: 'https://second.example.com/v1', apiKey: 'second-secret' })
+
+    store.setCurrentAccountId('')
+    expect(store.accountAgents).toEqual([])
+    expect(store.accountConversations).toEqual([])
+    expect(store.accountRoutines).toEqual([])
+    expect(store.accountRuns).toEqual([])
+    expect(store.userName).toBe('You')
+    expect(store.userAvatar).toBe('')
+    expect(store.endpoint).toBeUndefined()
+    expect(store.connectors).toEqual([])
+  })
+
+  it('migrates legacy unowned tasks to the account identified by their contacts', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-account-migration-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const store = new DouchatStore(file)
+    const binding = { provider: 'gateway', model: 'default' }
+    const firstAdmin = store.ensureDefaultCloudContact('user-1', binding).agent!
+    const helper = store.createAgent({
+      name: 'Legacy helper',
+      role: 'Assistant',
+      instructions: 'Legacy account helper.',
+      color: '#14B8A6',
+      provider: 'gateway',
+      model: 'default'
+    })
+    const direct = store.accountConversations.find((conversation) => conversation.agentIds[0] === helper.id)!
+    const group = store.createGroup({ name: 'Legacy team', agentIds: [firstAdmin.id, helper.id] })
+    const routine = store.createRoutine({
+      name: 'Legacy reminder',
+      agentId: helper.id,
+      conversationId: direct.id,
+      prompt: 'Send only to the original account.',
+      schedule: { kind: 'interval', intervalMinutes: 60 },
+      timezone: 'Asia/Shanghai'
+    }, Date.now() + 60 * 60_000)
+    const run = store.createRun({
+      agentId: helper.id,
+      conversationId: direct.id,
+      routineId: routine.id,
+      title: routine.name,
+      prompt: routine.prompt,
+      trigger: 'manual'
+    })
+    store.ensureDefaultCloudContact('user-2', binding)
+    store.close()
+
+    // Releases before account scoping wrote these rows without ownerId. The
+    // group still links the custom contact to user-1's system administrator.
+    const database = new DatabaseSync(file)
+    const stripOwner = (table: string, ids: string[]): void => {
+      for (const id of ids) {
+        const row = database.prepare(`SELECT data FROM ${table} WHERE id = ?`).get(id) as { data: string } | undefined
+        if (!row) continue
+        const value = JSON.parse(row.data) as { ownerId?: string }
+        delete value.ownerId
+        database.prepare(`UPDATE ${table} SET data = ? WHERE id = ?`).run(JSON.stringify(value), id)
+      }
+    }
+    stripOwner('agents', [helper.id])
+    stripOwner('conversations', [direct.id, group.id])
+    stripOwner('routines', [routine.id])
+    stripOwner('runs', [run.id])
+    const legacyConnector = {
+      id: 'legacy-mail', kind: 'email', name: 'Legacy mailbox', email: 'legacy@example.com', username: 'legacy@example.com',
+      imapHost: 'imap.example.com', imapPort: 993, imapSecure: true,
+      smtpHost: 'smtp.example.com', smtpPort: 465, smtpSecure: true,
+      agentIds: [helper.id], status: 'connected', updatedAt: 1
+    }
+    const upsertMeta = database.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+    upsertMeta.run('userName', 'Legacy current user')
+    upsertMeta.run('userAvatar', 'data:image/jpeg;base64,/9j/4AAQSkZJRg==')
+    upsertMeta.run('endpoint', JSON.stringify({ baseUrl: 'https://legacy.example.com/v1', apiKey: 'legacy-secret' }))
+    upsertMeta.run('connectors:v1', JSON.stringify([legacyConnector]))
+    database.close()
+
+    const migrated = new DouchatStore(file)
+    expect(migrated.currentAccountId).toBe('user-2')
+    expect(migrated.accountRoutines).toEqual([])
+    expect(migrated.agent(helper.id)?.ownerId).toBe('user-1')
+    expect(migrated.conversation(direct.id)?.ownerId).toBe('user-1')
+    expect(migrated.routines.find((item) => item.id === routine.id)?.ownerId).toBe('user-1')
+    expect(migrated.runs.find((item) => item.id === run.id)?.ownerId).toBe('user-1')
+    expect(migrated.userName).toBe('You')
+    expect(migrated.userAvatar).toBe('')
+    expect(migrated.endpoint).toBeUndefined()
+    expect(migrated.connectors).toEqual([])
+    migrated.setCurrentAccountId('user-1')
+    expect(migrated.accountRoutines.map((item) => item.id)).toEqual([routine.id])
+    expect(migrated.accountRuns.map((item) => item.id)).toEqual([run.id])
+    expect(migrated.connectors.map((connector) => connector.id)).toEqual(['legacy-mail'])
+    expect(migrated.userName).toBe('You')
+    expect(migrated.endpoint).toBeUndefined()
+  })
+
+  it('migrates legacy profile and endpoint settings only when one account is known', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-account-meta-migration-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const store = new DouchatStore(file)
+    store.ensureDefaultCloudContact('only-user', { provider: 'gateway', model: 'default' })
+    store.close()
+    const database = new DatabaseSync(file)
+    database.prepare("DELETE FROM meta WHERE key LIKE 'account:v1:only-user:%'").run()
+    const upsert = database.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)')
+    upsert.run('userName', 'Legacy user')
+    upsert.run('userAvatar', 'data:image/jpeg;base64,/9j/4AAQSkZJRg==')
+    upsert.run('endpoint', JSON.stringify({ baseUrl: 'https://legacy.example.com/v1', apiKey: 'legacy-key' }))
+    database.close()
+
+    const migrated = new DouchatStore(file)
+    expect(migrated.currentAccountId).toBe('only-user')
+    expect(migrated.userName).toBe('Legacy user')
+    expect(migrated.userAvatar).toContain('data:image/jpeg;base64,')
+    expect(migrated.endpoint).toEqual({ baseUrl: 'https://legacy.example.com/v1', apiKey: 'legacy-key' })
+  })
+
+  it('recovers legacy attachment ownership and refuses cross-account reads', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-attachment-scope-'))
+    temporaryDirectories.push(directory)
+    const file = join(directory, 'douchat.db')
+    const store = new DouchatStore(file)
+    const contact = store.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'default' })
+    const attachment = await store.saveImageAttachment({
+      name: 'legacy.png', mimeType: 'image/png', data: Uint8Array.from([4, 5, 6])
+    })
+    store.addMessage({
+      conversationId: contact.conversation!.id,
+      topicId: store.activeTopicId(contact.conversation!.id),
+      authorId: 'user',
+      authorName: 'User one',
+      text: '',
+      kind: 'message',
+      attachments: [attachment]
+    })
+    store.close()
+    const database = new DatabaseSync(file)
+    database.prepare('DELETE FROM attachmentOwners WHERE id = ?').run(attachment.id)
+    database.close()
+
+    const migrated = new DouchatStore(file)
+    expect(await migrated.attachmentDataUrl(attachment.id)).toContain('data:image/png;base64,')
+    migrated.setCurrentAccountId('user-2')
+    await expect(migrated.attachmentDataUrl(attachment.id)).rejects.toThrow('Attachment not found')
   })
 
   it('syncs cloud-owned built-in fields while preserving local user overrides and history ids', () => {
@@ -656,6 +923,43 @@ describe('DouchatStore', () => {
     expect(restored.routines[0]).toMatchObject({ name: 'Morning brief', nextRunAt: 2_000, enabled: true })
     expect(restored.runs[0]).toMatchObject({ routineId: routine.id, status: 'succeeded' })
     expect(restored.runEvents[0]).toMatchObject({ runId: run.id, label: 'Finished' })
+  })
+
+  it('fails interrupted runs on launch and retries interrupted one-time work', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-interrupted-run-'))
+    temporaryDirectories.push(directory)
+    const filePath = join(directory, 'douchat.db')
+    const store = new DouchatStore(filePath, { seedDemo: true })
+    const routine = store.createRoutine({
+      name: 'One-time reminder',
+      agentId: 'dobi',
+      conversationId: 'direct-dobi',
+      prompt: 'Send the reminder.',
+      schedule: { kind: 'once', runAt: Date.now() - 1_000 },
+      timezone: 'Asia/Shanghai'
+    }, Date.now() - 1_000)
+    store.setRoutineEnabled(routine.id, false)
+    const run = store.createRun({
+      agentId: 'dobi',
+      conversationId: 'direct-dobi',
+      routineId: routine.id,
+      title: routine.name,
+      prompt: routine.prompt,
+      trigger: 'schedule',
+      status: 'running',
+      startedAt: Date.now() - 500
+    })
+    const reopenedAt = Date.now()
+
+    const restored = new DouchatStore(filePath, { seedDemo: true })
+
+    expect(restored.runs.find((item) => item.id === run.id)).toMatchObject({
+      status: 'failed',
+      latestActivity: 'Interrupted',
+      error: 'Douchat restarted before this task finished'
+    })
+    expect(restored.routines.find((item) => item.id === routine.id)).toMatchObject({ enabled: true })
+    expect(restored.routines.find((item) => item.id === routine.id)!.nextRunAt).toBeGreaterThanOrEqual(reopenedAt + 60_000)
   })
 
   it('persists connector metadata without credentials', () => {

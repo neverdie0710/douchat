@@ -29,7 +29,7 @@ export function localAgentDisplayName(localAgentId: string): string {
 
 export function agentSourceLabel(agent: AgentConfig): string {
   return agent.localAgentId
-    ? `${t('Local')} · ${localAgentDisplayName(agent.localAgentId)}`
+    ? `${t('Local')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
     : t('Cloud')
 }
 
@@ -107,6 +107,7 @@ export function UserAvatar({
           className={hasPhoto ? 'is-loaded' : ''}
           src={src}
           alt=""
+          referrerPolicy="no-referrer"
           onLoad={() => {
             setFailedSrc('')
             setLoadedSrc(src)
@@ -144,16 +145,22 @@ export function ConversationAvatar({
   userAvatar: string
   size?: number
 }): ReactElement {
-  const members = conversation.agentIds
-    .map((id) => agents.find((agent) => agent.id === id))
-    .filter((agent): agent is AgentConfig => Boolean(agent))
+  if (conversation.person) return <UserAvatar src={conversation.person.image || ''} name={conversation.person.name} size={size} />
+  const members = conversationMembers(conversation, agents)
   if (conversation.type === 'direct') {
     return members[0] ? <AgentAvatar agent={members[0]} size={size} /> : <EmptyAvatar size={size} />
   }
+  if (conversation.avatar || conversation.avatarEmoji) {
+    return <AgentAvatar agent={{ id: conversation.id, name: conversation.name,
+      avatar: conversation.avatar, avatarEmoji: conversation.avatarEmoji,
+      color: '#6b8afd', role: '', instructions: '', provider: '', model: '', createdAt: 0 }} size={size} />
+  }
   // The person is a member of every group too. Reserve the last mosaic tile
   // for them so they stay visible even when a room has many agents.
-  const visibleAgents = members.slice(0, 8)
-  const tileCount = visibleAgents.length + 1
+  const people = conversation.socialRoom?.members ?? [{ id: 'user', name: userName, image: userAvatar }]
+  const visibleAgents = members.slice(0, Math.max(0, 9 - Math.min(people.length, 9)))
+  const visiblePeople = people.slice(0, 9 - visibleAgents.length)
+  const tileCount = visibleAgents.length + visiblePeople.length
   const columns = tileCount === 1 ? 1 : tileCount <= 4 ? 2 : 3
   const tileSize = (size - 4 - (columns - 1) * 1.5) / columns
   return (
@@ -166,7 +173,7 @@ export function ConversationAvatar({
       {visibleAgents.map((member) => (
         <AgentAvatar key={member.id} agent={member} size={tileSize} />
       ))}
-      <UserAvatar src={userAvatar} name={userName || t('You')} size={tileSize} />
+      {visiblePeople.map((person) => <UserAvatar key={person.id} src={person.image || ''} name={person.name || t('You')} size={tileSize} />)}
     </span>
   )
 }
@@ -203,6 +210,14 @@ export function isDifferentDay(current: ChatMessage, previous?: ChatMessage): bo
 
 export function conversationMembers(conversation: Conversation | undefined, agents: AgentConfig[]): AgentConfig[] {
   if (!conversation) return []
+  if (conversation.socialRoom) return conversation.socialRoom.agents.map((remote) => {
+    const local = remote.ownerId === conversation.ownerId ? agents.find((agent) => agent.id === remote.localId) : undefined
+    return { role: '', instructions: '', color: '#6b8afd', provider: '', model: '', createdAt: 0,
+      avatar: remote.avatar, avatarEmoji: remote.avatarEmoji, avatarSeed: remote.avatarSeed,
+      localAgentId: remote.localAgentId, systemRole: remote.systemRole,
+      ...(remote.color ? { color: remote.color } : {}),
+      ...local, id: remote.id, ownerId: remote.ownerId, name: remote.name }
+  })
   return conversation.agentIds
     .map((id) => agents.find((agent) => agent.id === id))
     .filter((agent): agent is AgentConfig => Boolean(agent))
@@ -251,4 +266,12 @@ export function SidebarResizer(): ReactElement {
       }}
     />
   )
+}
+
+/** Display membership is broader than permission to address an agent. */
+export function mentionableAgents(conversation: Conversation | undefined, members: AgentConfig[]): AgentConfig[] {
+  if (!conversation?.socialRoom) return members
+  const allowed = new Set(conversation.socialRoom.agents
+    .filter((agent) => agent.ownerId === conversation.ownerId).map((agent) => agent.id))
+  return members.filter((agent) => allowed.has(agent.id))
 }

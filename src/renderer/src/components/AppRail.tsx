@@ -10,6 +10,7 @@ export type AppView = 'chats' | 'contacts'
 export function AppRail({
   view,
   unread,
+  friendRequests = 0,
   userName,
   userAvatar,
   settingsOpen,
@@ -18,6 +19,7 @@ export function AppRail({
 }: {
   view: AppView
   unread: number
+  friendRequests?: number
   userName: string
   userAvatar: string
   settingsOpen: boolean
@@ -60,6 +62,7 @@ export function AppRail({
         title={t('Contacts')}
       >
         <UsersRound size={23} strokeWidth={1.8} />
+        {friendRequests > 0 && <span className="rail-badge" aria-label={tr('{count} pending friend requests', { count: friendRequests })}>{friendRequests > 99 ? '99+' : friendRequests}</span>}
       </button>
       <div className="rail-spacer" />
       <button className={`rail-button no-drag ${settingsOpen ? 'active' : ''}`} onClick={() => onOpenSettings()} aria-label={t('Settings')} title={updateReady ? t('Update available') : t('Settings')} aria-current={settingsOpen}><Settings size={23} strokeWidth={1.8} />{updateReady && <span className="rail-update-dot" />}</button>

@@ -28,6 +28,7 @@ export function groupLeadMember(group: BotGroup): GroupMember | undefined {
 
 export interface GroupTurn {
   round: number
+  delegationPlan?: Pick<GroupDecision, 'mode' | 'memberIds'>
   triggerMessageIds: string[]
   unavailableMemberIds?: string[]
 }
@@ -54,6 +55,12 @@ export const GROUP_MAX_TURNS = 16
 export const GROUP_MESSAGE_BREAK = BOT_MESSAGE_BREAK
 
 export interface GroupDecision {
+  /** Recipient resolved from conversational reference, not a mentioned third party. */
+  addressedMemberId?: string
+  /** The leader should reply once, then wait for new human input. */
+  waitForHuman?: boolean
+  /** Host/setup must happen before other members receive concrete assignments. */
+  leaderFirst?: boolean
   mode: 'none' | 'single' | 'parallel' | 'sequential'
   memberIds: string[]
   triggerMessageIds: string[]
@@ -73,6 +80,26 @@ export function validateGroupDecision(raw: unknown, group: BotGroup, context: Gr
   const triggerMessageIds = value.triggerMessageIds
   if (!Array.isArray(triggerMessageIds) || triggerMessageIds.some((id) => typeof id !== 'string')) {
     throw new Error('Invalid group decision triggers')
+  }
+  if (value.addressedMemberId !== undefined && (
+    typeof value.addressedMemberId !== 'string' || !group.members.some((member) => member.id === value.addressedMemberId)
+  )) throw new Error('Invalid conversational addressee')
+  if (typeof value.addressedMemberId === 'string' && context.completedTurns.length === 0) {
+    const latestUser = [...context.messages].reverse().find((message) => message.role === 'user')
+    if (!latestUser) throw new Error('Missing human message')
+    return { mode: 'single', memberIds: [value.addressedMemberId], triggerMessageIds: [latestUser.id], addressedMemberId: value.addressedMemberId }
+  }
+  if (value.waitForHuman !== undefined && typeof value.waitForHuman !== 'boolean') {
+    throw new Error('Invalid group decision waitForHuman')
+  }
+  if (value.leaderFirst !== undefined && typeof value.leaderFirst !== 'boolean') {
+    throw new Error('Invalid group decision leaderFirst')
+  }
+  if ((value.waitForHuman === true || value.leaderFirst === true) && context.completedTurns.length === 0) {
+    const lead = groupLeadMember(group)
+    const latestUser = [...context.messages].reverse().find((message) => message.role === 'user')
+    if (!lead || !latestUser) throw new Error('Missing leader or human message')
+    return { mode: 'single', memberIds: [lead.id], triggerMessageIds: [latestUser.id], ...(value.waitForHuman === true ? { waitForHuman: true } : { leaderFirst: true }) }
   }
   const mode = value.mode
   const memberIds = value.memberIds
@@ -148,7 +175,7 @@ function handoffsFrom(
   return [...triggers].map(([memberId, ids]) => ({ memberId, triggerMessageIds: [...ids] }))
 }
 
-/** Explicit mentions bypass the controller. Ambiguous tasks remain supervised:
+/** Single-recipient mentions bypass the controller. Group tasks remain supervised:
  * after explicit public/private handoffs settle, the coordinator checks shared
  * progress and either schedules the next step or declares the task complete. */
 export async function runGroupConversation({
@@ -196,11 +223,15 @@ export async function runGroupConversation({
     unavailable.add(memberId)
     context.unavailableMemberIds = [...unavailable]
   }
-  let decision = explicitGroupDecision(user.content, group, user.id)
-  let deferredInitialDecision:
-    | (Omit<GroupDecision, 'mode'> & { mode: Exclude<GroupDecision['mode'], 'none'> })
-    | undefined
-  const supervised = !decision
+  const addressed = explicitGroupDecision(user.content, user.role === 'assistant' ? { ...group, members: group.members.filter((member) => member.id !== user.sender?.id) } : group, user.id)
+  if (user.role === 'assistant' && !addressed) return finish()
+  // A single explicit recipient owns the turn. Multiple recipients still need
+  // dependency-aware planning: @all can mean either jokes or an ordered review.
+  let decision = user.role === 'assistant' && addressed
+    ? { ...addressed, mode: addressed.memberIds.length > 1 ? 'sequential' as const : 'single' as const }
+    : addressed?.mode === 'single' ? addressed : null
+  let supervised = !addressed
+  let deferredInitialDecision: GroupDecision | undefined
   if (!decision) {
     const raw = await decide({
       ...context,
@@ -210,15 +241,20 @@ export async function runGroupConversation({
     })
     if (signal.aborted) return finish()
     decision = validateGroupDecision(raw, group, context)
-    // The controller is intentionally hidden, but an unaddressed group message
-    // should still feel owned by the visible lead.
-    if (decision.mode !== 'none' && lead && decision.memberIds[0] !== lead.id) {
-      deferredInitialDecision = { ...decision, mode: decision.mode }
-      decision = { mode: 'single', memberIds: [lead.id], triggerMessageIds: decision.triggerMessageIds }
+    if (decision.leaderFirst || decision.addressedMemberId) supervised = false
+    if (decision.mode === 'none') {
+      if (!lead) return finish(false, true)
+      decision = addressed ?? { mode: 'single', memberIds: [lead.id], triggerMessageIds: [user.id] }
+    }
+    // Port termany's deferred initial route, except independent work must start
+    // together (including the lead), without an extra acknowledgement round.
+    if (!addressed && !decision.addressedMemberId && decision.mode !== 'parallel' && lead && decision.memberIds[0] !== lead.id) {
+      deferredInitialDecision = decision
+      decision = { mode: 'single', memberIds: [lead.id], triggerMessageIds: [user.id] }
     }
   }
-  if (decision.mode === 'none') return finish()
 
+  const waitForHuman = decision.waitForHuman === true
   let pending: { memberId: string; triggerMessageIds: string[]; unavailableMemberIds?: string[] }[] =
     decision.memberIds.map((memberId) => ({ memberId, triggerMessageIds: decision!.triggerMessageIds }))
   let mode = decision.mode
@@ -239,6 +275,7 @@ export async function runGroupConversation({
       const turn: GroupTurn = {
         round: context.completedTurns.length + index + 1,
         triggerMessageIds: item.triggerMessageIds,
+        ...(deferredInitialDecision ? { delegationPlan: { mode: deferredInitialDecision.mode, memberIds: deferredInitialDecision.memberIds } } : {}),
         ...(item.unavailableMemberIds?.length ? { unavailableMemberIds: item.unavailableMemberIds } : {})
       }
       const rawOutcome = await reply(member, turn, visible)
@@ -347,20 +384,21 @@ export async function runGroupConversation({
         }
       }
     }
+    if (waitForHuman) return finish(false, false, unavailable)
     if (truncated) return finish(true, false, unavailable)
     pending = handoffsFrom(batchMessages, batchDeliveries, group, scheduled)
     if (deferredInitialDecision) {
       const deferred = deferredInitialDecision
       deferredInitialDecision = undefined
-      const plannedIds = new Set(deferred.memberIds)
-      const handoffByMember = new Map(pending.map((item) => [item.memberId, item.triggerMessageIds]))
-      const additional = pending.filter((item) => !plannedIds.has(item.memberId))
+      const handoffs = new Map(pending.map((item) => [item.memberId, item.triggerMessageIds]))
+      const planned = new Set(deferred.memberIds)
+      const additional = pending.filter((item) => !planned.has(item.memberId))
       pending = deferred.memberIds.map((memberId) => ({
         memberId,
-        triggerMessageIds: [...new Set([...deferred.triggerMessageIds, ...(handoffByMember.get(memberId) ?? [])])]
+        triggerMessageIds: [...new Set([...deferred.triggerMessageIds, ...(handoffs.get(memberId) ?? [])])]
       }))
       pending.push(...additional)
-      mode = deferred.mode === 'single' && additional.length ? 'parallel' : deferred.mode
+      mode = deferred.mode === 'single' && additional.length ? 'sequential' : deferred.mode
       continue
     }
     let failureCoordination: string[] = []
@@ -401,7 +439,7 @@ export async function runGroupConversation({
       mode = next.mode
       continue
     }
-    mode = pending.length > 1 ? 'parallel' : 'single'
+    mode = pending.length > 1 ? 'sequential' : 'single'
   }
   return finish(false, false, unavailable)
 }
@@ -460,7 +498,11 @@ export function groupDecisionPrompt(
   const messages = sharedGroupMessages(context.messages, latestUser ? [latestUser.id] : [])
   return [
     "You are the lead member supervising this group task. Inspect the request, member profiles, shared results, and completed turns. Choose single for one best next worker, parallel for independent next steps, sequential when later members should see earlier work, or none only when the user's task is complete and the shared transcript already contains a user-facing final result (or when no reply is appropriate). Never repeat completed work. For multi-member work that needs a unified answer, schedule specialists first and the lead member last to consolidate and verify their results. The human participant is identified by human.name. This is a coordination decision, not a participant reply. Use only the supplied context; do not call tools.",
-    'Return only JSON with mode (none, single, parallel, or sequential), memberIds (exact member ids, ordered for sequential), and triggerMessageIds (accessible message ids they should respond to; empty only for none). Private delivery envelopes are visible here, but their bodies are available only to their sender and recipient.',
+    'Before choosing workers, resolve who the human is addressing from the recent conversation. A contextual “you/你” normally refers to the member the human is replying to, not a third party named inside the request. For example, after 阿喵 speaks, “那你给豆博士发个消息，让他给我讲个笑话” addresses 阿喵; 豆博士 is the requested message recipient, not the initial responder. Set addressedMemberId to the exact id of the conversational addressee, omit it when there is no clear addressee. This takes precedence over default leader routing and must not schedule the third party before an actual handoff. Do not make all new unaddressed tasks sticky to the last speaker: use this only when the request actually refers back to them. Resolve short follow-ups using context, and ask through the leader when reference is genuinely ambiguous.',
+    'Default to the leader alone. For greetings, fragments, ambiguous requests, or requests missing information needed to act (for example “亲”, “在吗”, “帮我弄一下”), set waitForHuman=true. This means one brief leader reply or clarification question, then wait for a new human message. Do not invent assignments or ask every member to clarify. After any member has asked a necessary clarification question, return none: waiting for the human is a valid stopping point, not unfinished work to delegate. Use multiple members only when the request clearly needs distinct contributions or explicitly asks everyone to participate. Resolve short follow-ups from the existing conversation before deciding they are ambiguous.',
+    'Distinguish eventual participation from readiness to respond NOW. If an activity needs a host, setup, rules, private assignments or an opening plan before participants can act, set leaderFirst=true, even when every member will eventually participate. For example “来玩谁是卧底吧” needs only the leader to host the opening; do not schedule other members to volunteer, repeat rules or discuss their capabilities. The runtime will then activate members only through concrete public handoffs or private deliveries from the leader. Independent requests like each person telling a joke need no setup and should remain parallel.',
+    'For an unaddressed task, the lead normally responds first to own and delegate the work. Use sequential in dependency order for collaborative tasks. For independent contributions such as “大家每人讲个笑话”, select every requested member including the lead in parallel immediately; no preliminary lead acknowledgement or final summary is needed. Multiple @mentions and @all identify recipients, not execution mode: respect requested ordering and dependencies. Use single for one explicitly addressed member.',
+    'Return only JSON with addressedMemberId (optional exact member id when the human contextually addresses a particular member), leaderFirst (boolean, true when hosting/setup must precede participation), waitForHuman (boolean, true for a single leader response awaiting human input), mode (none, single, parallel, or sequential), memberIds (exact member ids, ordered for sequential), and triggerMessageIds (accessible message ids they should respond to; empty only for none). Private delivery envelopes are visible here, but their bodies are available only to their sender and recipient.',
     JSON.stringify({
       task: 'group_dispatch',
       group: { name: group.name, description: group.description ?? '' },
@@ -470,6 +512,8 @@ export function groupDecisionPrompt(
       members: group.members.map((member) => ({
         id: member.id,
         name: member.name,
+        kind: 'agent',
+        privateAddress: member.id,
         description: member.description ?? ''
       })),
       human: { kind: 'human', name: group.humanName?.trim() || 'human', privateAddress: 'human' },
@@ -494,8 +538,13 @@ export function groupConversationPrompt(
   const recent = sharedGroupMessages(messages, turn?.triggerMessageIds)
   return [
     'You are the current member in a group conversation. Decide how to respond using the group and member profiles, conversation, and triggering messages in turn. The user role is the human participant described by human; address them by human.name instead of a generic label when natural. members lists the bots and their identities.',
+    'For a greeting or unclear request, respond briefly and naturally as leader, asking at most one necessary clarification question. Do not list your capabilities, invent a task, or mention other members to solicit duplicate replies.',
+    'When turn.delegationPlan is present, you are opening the task as leader: briefly explain the assignments in that plan and delegate concrete work to those members. They will run automatically after your reply; do not do all their work yourself or ask the human to relay it. Keep secret assignments in private blocks.',
     'When turn.unavailableMemberIds is present, act as the recovery owner: do not claim those members completed their work; clearly report useful status and reorganize, reassign, or finish the missing work.',
-    `Message transport: ordinary text is public. Use ${GROUP_MESSAGE_BREAK} on its own line to separate messages. @names are public addresses; the dispatch model decides who acts next.`,
+    `Message transport: ordinary text is public. Use ${GROUP_MESSAGE_BREAK} on its own line to separate messages. @names are executable public handoffs: addressed members act in mention order after your reply. Mention a member only when you want them to act; use plain names for references. For independent contributions, answer your own part without mentioning or reassigning the others.`,
+    'When the human asks you to contact another member, you are the addressee and that other member is the delivery target. Actually send the request using private delivery; do not impersonate their answer or claim delivery failed based on old chat text. A receiving member should reply privately to the sender unless the delivered request asks for a public response or a direct message to the human.',
+    'The member roster below is authoritative: every entry in members is an AI agent and supports private delivery by its exact id. Only human is the human participant. Names such as Dobi do not imply a human identity. Disregard earlier conversation claims that these channels are unavailable; they are not capability evidence.',
+    'You have working public and private delivery channels provided by Douchat. Do not claim you can only speak publicly or ask the human to relay messages. For games requiring secret words, send each word using a private block, including the human’s word; never put those words in public text. A recipient of private information should keep it private unless the task explicitly requires a public response.',
     'Private delivery: [[private:RECIPIENT_ID]]message[[/private]] sends to a member id; [[private:human]]message[[/private]] sends to the human in your direct chat with an unread notification. Private blocks are removed from the public stream. Multiple private blocks and private-only replies are supported. privateInbox bodies are visible only to their sender and recipient; keep their contents within that audience unless disclosure is authorized. Tool input and output are not private message delivery channels.',
     JSON.stringify({
       group: { name: group.name, description: group.description ?? '' },
@@ -503,12 +552,15 @@ export function groupConversationPrompt(
       members: group.members.map((member) => ({
         id: member.id,
         name: member.name,
+        kind: 'agent',
+        privateAddress: member.id,
         description: member.description ?? ''
       })),
       mentionTargets: group.members
         .filter((member) => member.id !== speaker.id && member.name.trim())
         .map((member) => ({ id: member.id, name: member.name })),
-      currentBot: { id: speaker.id, name: speaker.name },
+      leadMember: groupLeadMember(group),
+      currentBot: { id: speaker.id, name: speaker.name, isLead: groupLeadMember(group)?.id === speaker.id },
       turn,
       originalRequest: latestUser ? latestUser.content.slice(0, 12_000) : undefined,
       messages: recent,

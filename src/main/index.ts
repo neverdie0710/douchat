@@ -1,3 +1,5 @@
+import { SocialClient } from './social'
+import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -8,6 +10,7 @@ import type {
   CodeArtifactInput,
   EmailConnectorInput,
   CreateAgentInput,
+  CustomLocalAgentInput,
   DesktopAuthState,
   EndpointInput,
   MessageImageInput,
@@ -22,13 +25,14 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { detectLocalAgents, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, validateLocalAgent } from './localAgents'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, normalizeWebAppUrl } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
+import { openLocalAgentTerminal } from './terminalLauncher'
 
 const development = !app.isPackaged
 // Chromium derives the macOS safeStorage Keychain service from the application
@@ -48,6 +52,7 @@ const webAppUrl = normalizeWebAppUrl(
  * overwrite a user's installed Douchat data.
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
+configureLocalAgentRegistry(app.getPath('userData'))
 
 let mainWindow: BrowserWindow | null = null
 let store: DouchatStore
@@ -114,7 +119,31 @@ function broadcast(snapshot: AppSnapshot): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:snapshot', snapshot)
 }
 
+let social: SocialClient | undefined
+let socialAccountId = ''
+
 function broadcastAuth(state: DesktopAuthState): void {
+  const nextSocialAccount = state.status === 'signed-in' ? state.user.id : ''
+  const accountChanged = Boolean(store && store.currentAccountId !== nextSocialAccount)
+  if (store && accountChanged) {
+    const previousAgents = store.accountAgents
+    const previousConversations = store.accountConversations
+    for (const conversation of previousConversations) runtime?.stopConversation(conversation.id)
+    for (const agent of previousAgents) runtime?.disposeAgent(agent.id)
+    for (const window of chatWindows.values()) window.close()
+    for (const window of codeArtifactWindows.values()) window.close()
+    codeArtifacts.clear()
+    store.setCurrentAccountId(nextSocialAccount)
+    scheduler?.accountChanged()
+    // Models and credentials are account state. Force the connection catalog
+    // to be rebuilt even when both the old and new account are signed in.
+    cloudSessionActive = false
+  }
+  if (nextSocialAccount !== socialAccountId) {
+    socialAccountId = nextSocialAccount
+    if (nextSocialAccount) social?.start()
+    else social?.stop()
+  }
   let welcomeConversationId: string | undefined
   let builtInRefresh: Promise<string | undefined> = Promise.resolve(undefined)
   if (state.status === 'signed-in' && store && runtime) {
@@ -185,6 +214,7 @@ function openChatWindow(conversationId: string): void {
   chatWindows.set(conversationId, window)
   window.on('closed', () => chatWindows.delete(conversationId))
   window.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url); return { action: 'deny' } })
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
   if (process.env.ELECTRON_RENDERER_URL) {
     const url = new URL(process.env.ELECTRON_RENDERER_URL)
     url.searchParams.set('conversation', conversationId)
@@ -231,6 +261,7 @@ function openCodeArtifactWindow(input: CodeArtifactInput): void {
     codeArtifacts.delete(artifactId)
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
   // The preview iframe may run the supplied page's scripts, but it may not
   // navigate itself to a remote document (which would discard our CSP).
   window.webContents.on('will-frame-navigate', (event) => {
@@ -273,6 +304,7 @@ function createWindow(): void {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -283,11 +315,15 @@ function createWindow(): void {
 
 function validateRoutineInput(input: CreateRoutineInput): void {
   if (!input.name?.trim() || !input.prompt?.trim()) throw new Error('Routine name and instructions are required')
-  if (!store.agents.some((agent) => agent.id === input.agentId)) throw new Error('Routine agent not found')
-  if (!store.conversations.some((conversation) => conversation.id === input.conversationId)) {
+  if (!store.accountAgents.some((agent) => agent.id === input.agentId)) throw new Error('Routine agent not found')
+  if (!store.accountConversations.some((conversation) => conversation.id === input.conversationId)) {
     throw new Error('Routine conversation not found')
   }
-  if (input.schedule.kind === 'interval') {
+  if (input.schedule.kind === 'once') {
+    if (!Number.isFinite(input.schedule.runAt) || input.schedule.runAt <= Date.now()) {
+      throw new Error('One-time routine must be scheduled in the future')
+    }
+  } else if (input.schedule.kind === 'interval') {
     if (!Number.isFinite(input.schedule.intervalMinutes) || input.schedule.intervalMinutes < 1) {
       throw new Error('Routine interval must be at least one minute')
     }
@@ -328,9 +364,11 @@ app.whenReady().then(() => {
   // so remove the native menu instead of merely hiding it until Alt is pressed.
   if (process.platform === 'win32') Menu.setApplicationMenu(null)
   configureMediaPermissions()
-  if (process.defaultApp && process.argv[1]) {
-    app.setAsDefaultProtocolClient(authScheme, process.execPath, [process.argv[1]])
-  } else {
+  // Development auth returns through a loopback HTTP callback, so it must not
+  // claim the production douchat:// scheme. Registering Electron.app here
+  // causes macOS to route packaged-app login and payment callbacks back into
+  // the development process instead of /Applications/Douchat.app.
+  if (!development) {
     app.setAsDefaultProtocolClient(authScheme)
   }
   app.dock?.setIcon(appIcon)
@@ -344,6 +382,10 @@ app.whenReady().then(() => {
     runtime.setInterfaceLanguage(typeof language === 'string' ? language : '')
   })
   store = DouchatStore.atUserData(app.getPath('userData'))
+  // The account id persisted in the database belongs to the previous app
+  // session. Keep the workspace closed until DesktopAuth identifies the
+  // current session; otherwise its scheduler could briefly run old tasks.
+  store.setCurrentAccountId('')
   emailConnectors = new EmailConnectorManager(store, app.getPath('userData'))
   computer = new LocalComputerProvider(
     () => runtime && broadcast(runtime.snapshot()),
@@ -371,7 +413,13 @@ app.whenReady().then(() => {
     }
   }, emailConnectors)
   runtime.setInterfaceLanguage(app.getLocale())
-  scheduler = new RoutineScheduler(store, runtime, () => broadcast(runtime.snapshot()))
+  scheduler = new RoutineScheduler(
+    store,
+    runtime,
+    () => broadcast(runtime.snapshot()),
+    async () => (await auth.getUsageSummary()).credits
+  )
+  runtime.setRoutineCreator((input) => scheduler.createRoutine(input))
   const updateDriver = app.isPackaged
     ? electronUpdater.autoUpdater as unknown as UpdateDriver
     : undefined
@@ -390,6 +438,17 @@ app.whenReady().then(() => {
     if (state.status === 'signed-in') focusMainWindow()
   })
 
+  social = new SocialClient(webAppUrl, auth, store, runtime, () => broadcast(runtime.snapshot()))
+  runtime.setHumanSender((id, text, images) => social!.sendMessage(id, text, images))
+  ipcMain.handle('douchat:social-snapshot', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return social!.snapshot()
+  })
+  ipcMain.handle('douchat:social-action', async (event, input: SocialAction) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    const result = await social!.action(input)
+    return result
+  })
   ipcMain.handle('douchat:get-auth-state', () => auth.getState())
   ipcMain.handle('douchat:request-microphone-access', async (event) => {
     if (!isDouchatRenderer(event.sender)) return 'denied'
@@ -429,8 +488,34 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:check-for-updates', () => updater.checkForUpdates())
   ipcMain.handle('douchat:install-update', () => updater.installUpdate())
   ipcMain.handle('douchat:detect-local-agents', () => { resetShellPath(); return detectLocalAgents() })
-  ipcMain.handle('douchat:search-messages', (_event, id: string, query: string) => store.searchMessages(id, query))
-  ipcMain.handle('douchat:message-page', (_event, conversationId: string, topicId: string, before?: string) => store.messagePage(conversationId, topicId, before))
+  ipcMain.handle('douchat:open-local-agent-terminal', (event, id: unknown) => {
+    if (!isDouchatRenderer(event.sender) || id !== 'claude') throw new Error('Invalid local agent terminal request')
+    return openLocalAgentTerminal(id, {
+      termanyAutomationAllowed: process.platform !== 'darwin' || systemPreferences.isTrustedAccessibilityClient(false)
+    })
+  })
+  ipcMain.handle('douchat:add-custom-local-agent', async (event, input: CustomLocalAgentInput) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
+    await addCustomLocalAgent(input)
+    resetShellPath()
+    return detectLocalAgents()
+  })
+  ipcMain.handle('douchat:remove-custom-local-agent', async (event, id: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
+    if (store.agents.some((agent) => agent.localAgentId === id)) {
+      throw new Error('Remove contacts using this local agent before deleting it.')
+    }
+    await removeCustomLocalAgent(id)
+    return detectLocalAgents()
+  })
+  ipcMain.handle('douchat:search-messages', (_event, id: string, query: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === id)) throw new Error('Chat not found')
+    return store.searchMessages(id, query)
+  })
+  ipcMain.handle('douchat:message-page', (_event, conversationId: string, topicId: string, before?: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
+    return store.messagePage(conversationId, topicId, before)
+  })
   ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
   ipcMain.handle('douchat:open-local-file', async (event, path: string) => {
     if (!isDouchatRenderer(event.sender) || typeof path !== 'string') throw new Error('Invalid file request')
@@ -444,14 +529,18 @@ app.whenReady().then(() => {
   }
 
   ipcMain.handle('douchat:create-agent', async (_event, input: CreateAgentInput) => {
-    if (input.localAgentId) await validateLocalAgent(input.localAgentId)
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
     const binding = input.localAgentId
       ? { provider: 'local', model: 'default' }
       : runtime.defaultCloudAgentModel()
-    const agent = store.createAgent({ ...input, ...binding })
-    const direct = store.conversations.find(
+    const agent = store.createAgent({
+      ...input,
+      localAgentName: localAgent?.custom ? localAgent.name : undefined,
+      ...binding
+    })
+    const direct = store.accountConversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
     )
     // A new bot opens with its own proactive greeting, like a new topic does.
@@ -459,14 +548,21 @@ app.whenReady().then(() => {
     return push()
   })
   ipcMain.handle('douchat:update-agent', async (_event, agentId: string, input: UpdateAgentInput) => {
-    if (input.localAgentId) await validateLocalAgent(input.localAgentId)
-    store.updateAgent(agentId, input)
+    if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
+    const { localAgentName: _ignoredLocalAgentName, ...safeInput } = input
+    store.updateAgent(agentId, {
+      ...safeInput,
+      ...(input.localAgentId !== undefined ? { localAgentName: localAgent?.custom ? localAgent.name : undefined } : {})
+    })
     // Identity and model edits take effect on the next turn, not mid-session.
     runtime.disposeAgent(agentId)
     return push()
   })
   ipcMain.handle('douchat:delete-agent', (_event, agentId: string) => {
-    if (store.agent(agentId)?.systemRole === 'admin') {
+    const agent = store.accountAgents.find((item) => item.id === agentId)
+    if (!agent) throw new Error('Agent not found')
+    if (agent.systemRole === 'admin') {
       throw new Error('The system administrator cannot be deleted')
     }
     runtime.disposeAgent(agentId)
@@ -474,7 +570,9 @@ app.whenReady().then(() => {
     return push()
   })
   ipcMain.handle('douchat:start-direct-chat', (_event, agentId: string) => {
-    if (typeof agentId !== 'string' || !agentId) throw new Error('Contact not found')
+    if (typeof agentId !== 'string' || !store.accountAgents.some((agent) => agent.id === agentId)) {
+      throw new Error('Contact not found')
+    }
     const { conversation, created } = store.ensureDirectConversation(agentId)
     store.markConversationRead(conversation.id)
     if (created) void runtime.greet(conversation.id)
@@ -486,13 +584,18 @@ app.whenReady().then(() => {
     void runtime.greet(group.id)
     return push()
   })
-  ipcMain.handle('douchat:update-conversation', (_event, conversationId: string, input: UpdateConversationInput) => {
+  ipcMain.handle('douchat:update-conversation', async (_event, conversationId: string, input: UpdateConversationInput) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
+    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)!
+    if (target.type === 'group' && target.remoteRoomId && input.name !== undefined) {
+      await social!.action({ action: 'rename-room', roomId: target.remoteRoomId, name: input.name.trim() })
+    }
     store.updateConversation(conversationId, input)
     if (input.agentIds || input.leadAgentId) runtime.resetConversation(conversationId)
     return push()
   })
   ipcMain.handle('douchat:open-conversation-window', (_event, conversationId: string) => {
-    if (!store.conversation(conversationId)) throw new Error('Chat not found')
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     openChatWindow(conversationId)
   })
   ipcMain.handle('douchat:open-code-artifact', (event, input: CodeArtifactInput) => {
@@ -512,17 +615,17 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:save-email-connector', async (event, input: EmailConnectorInput) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connector request')
     await emailConnectors.save(input)
-    for (const agent of store.agents) runtime.disposeAgent(agent.id)
+    for (const agent of store.accountAgents) runtime.disposeAgent(agent.id)
     return push()
   })
   ipcMain.handle('douchat:disconnect-email-connector', async (event, connectorId: string) => {
     if (!isDouchatRenderer(event.sender) || typeof connectorId !== 'string') throw new Error('Invalid connector request')
     await emailConnectors.disconnect(connectorId)
-    for (const agent of store.agents) runtime.disposeAgent(agent.id)
+    for (const agent of store.accountAgents) runtime.disposeAgent(agent.id)
     return push()
   })
   ipcMain.handle('douchat:delete-conversation', async (event, conversationId: string) => {
-    const target = store.conversation(conversationId)
+    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
     if (!target) return runtime.snapshot()
     const parent = BrowserWindow.fromWebContents(event.sender)
     const options = { type: 'warning' as const, message: `删除与“${target.name}”的聊天？`, detail: '聊天记录会被删除，此操作无法撤销。', buttons: ['取消', '删除'], defaultId: 0, cancelId: 0 }
@@ -535,10 +638,12 @@ app.whenReady().then(() => {
     return push()
   })
   ipcMain.handle('douchat:set-conversation-pinned', (_event, conversationId: string, pinned: boolean) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     store.setConversationPinned(conversationId, Boolean(pinned))
     return push()
   })
   ipcMain.handle('douchat:mark-read', (_event, conversationId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     store.markConversationRead(conversationId)
     return push()
   })
@@ -547,20 +652,24 @@ app.whenReady().then(() => {
     return push()
   })
   ipcMain.handle('douchat:create-topic', (_event, conversationId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     const topic = store.createTopic(conversationId)
     if (topic) void runtime.greet(conversationId)
     return push()
   })
   ipcMain.handle('douchat:rename-topic', (_event, conversationId: string, topicId: string, title: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     store.renameTopic(conversationId, topicId, title)
     return push()
   })
   ipcMain.handle('douchat:delete-topic', (_event, conversationId: string, topicId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     runtime.resetConversation(conversationId, topicId)
     store.deleteTopic(conversationId, topicId)
     return push()
   })
   ipcMain.handle('douchat:set-active-topic', (_event, conversationId: string, topicId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     store.setActiveTopic(conversationId, topicId)
     return push()
   })
@@ -570,9 +679,11 @@ app.whenReady().then(() => {
     text: string,
     images?: MessageImageInput[]
   ) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     await runtime.sendMessage(conversationId, text, images)
   })
   ipcMain.handle('douchat:stop-conversation', (_event, conversationId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     runtime.stopConversation(conversationId)
   })
   ipcMain.handle('douchat:set-endpoint', async (_event, input: EndpointInput) => {
@@ -581,6 +692,7 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:test-endpoint', (_event, input: EndpointInput) => runtime.testEndpoint(input))
   ipcMain.handle('douchat:clear-conversation', (_event, conversationId: string) => {
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     const topicId = store.activeTopicId(conversationId)
     store.clearConversation(conversationId, topicId)
     runtime.resetConversation(conversationId, topicId)
@@ -607,20 +719,21 @@ app.whenReady().then(() => {
     await scheduler.runNow(routineId)
   })
   ipcMain.handle('douchat:start-computer', async (_event, agentId: string) => {
-    if (!store.agents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
+    if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
     await computer.start(agentId)
     const snapshot = runtime.snapshot()
     broadcast(snapshot)
     return snapshot
   })
   ipcMain.handle('douchat:stop-computer', async (_event, agentId: string) => {
+    if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
     await computer.stop(agentId)
     const snapshot = runtime.snapshot()
     broadcast(snapshot)
     return snapshot
   })
   ipcMain.handle('douchat:show-computer', async (_event, agentId: string) => {
-    if (!store.agents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
+    if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
     await computer.show(agentId)
   })
 

@@ -36,7 +36,7 @@ interface DecisionPayload {
 interface MessageAgentToolLike {
   execute: (
     toolCallId: string,
-    params: { agent: string; message: string }
+    params: { agent: string; message: string; replyTo?: 'human' | 'caller' }
   ) => Promise<{ content: Array<{ type: string; text: string }> }>
 }
 
@@ -44,7 +44,21 @@ interface AgentManagementToolLike {
   name: string
   execute: (
     toolCallId: string,
-    params: Record<string, string | undefined>
+    params: Record<string, string | string[] | boolean | undefined>
+  ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>
+}
+
+interface RoutineToolLike {
+  execute: (
+    toolCallId: string,
+    params: {
+      name: string
+      prompt: string
+      schedule:
+        | { kind: 'once'; delayMinutes?: number; runAt?: number | string }
+        | { kind: 'interval'; intervalMinutes: number }
+        | { kind: 'weekly'; days: number[]; time: string }
+    }
   ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>
 }
 
@@ -94,6 +108,161 @@ afterEach(() => {
 })
 
 describe('DouchatRuntime', () => {
+  it.each(['agent', 'conversation'] as const)('disposes a busy %s session without resetting an active agent', (scope) => {
+    const { runtime } = createRuntime()
+    const reset = vi.fn(() => { throw new Error('Agent is already processing') })
+    const key = 'direct:direct-dobi:topic-1'
+    const replacement = { agentId: 'dobi', agent: { abort: vi.fn(), reset } }
+    const sessions = (runtime as unknown as {
+      sessions: Map<string, typeof replacement>
+    }).sessions
+    const abort = vi.fn(() => {
+      expect(sessions.has(key)).toBe(false)
+      // A new request arriving during cancellation must keep its fresh session.
+      sessions.set(key, replacement)
+    })
+    sessions.set(key, { agentId: 'dobi', agent: { abort, reset } })
+    const other = { agentId: 'other', agent: { abort: vi.fn(), reset } }
+    sessions.set('direct:other:topic-1', other)
+
+    expect(() => {
+      if (scope === 'agent') runtime.disposeAgent('dobi')
+      else runtime.resetConversation('direct-dobi', 'topic-1')
+    }).not.toThrow()
+
+    expect(abort).toHaveBeenCalledOnce()
+    expect(reset).not.toHaveBeenCalled()
+    expect(sessions.get(key)).toBe(replacement)
+    expect(sessions.get('direct:other:topic-1')).toBe(other)
+    expect(other.agent.abort).not.toHaveBeenCalled()
+  })
+
+  it('rejects shared tasks for a different owner or a cancelled session before model execution', async () => {
+    const { store, runtime } = createRuntime()
+    const agent = store.agents[0]
+    await expect(runtime.executeSocialTask('bob', agent.id, 'task', 'Do work', new AbortController().signal)).rejects.toThrow('不属于')
+    const abort = new AbortController()
+    abort.abort()
+    await expect(runtime.executeSocialTask('local-demo-account', agent.id, 'task', 'Do work', abort.signal)).rejects.toThrow('取消')
+  })
+
+  it('executes the owner’s built-in agent in shared group context', async () => {
+    const { store, runtime } = createRuntime()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    const internal = runtime as unknown as { canRunLive: () => Promise<boolean>; runReply: (options: unknown) => Promise<{ text: string }> }
+    const reply = vi.spyOn(internal, 'runReply').mockResolvedValue({ text: 'Done' })
+    vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
+    expect(await runtime.executeSocialTask('alice', admin.id, 'shared-task', 'Help the group', new AbortController().signal)).toBe('Done')
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ id: admin.id }), context: 'group' }))
+    await expect(runtime.executeSocialTask('bob', admin.id, 'foreign-task', 'Run', new AbortController().signal)).rejects.toThrow('不属于')
+    expect(reply).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a persistent routine from a top-level chat tool and prevents duplicates', async () => {
+    const { store, runtime } = createRuntime()
+    const agent = store.agents[0]
+    const conversation = store.conversations.find(
+      (item) => item.type === 'direct' && item.agentIds.includes(agent.id)
+    )!
+    let createCount = 0
+    runtime.setInterfaceLanguage('zh-CN')
+    runtime.setRoutineCreator((input) => {
+      createCount += 1
+      const nextRunAt = input.schedule.kind === 'once'
+        ? input.schedule.runAt
+        : Date.now() + 60_000
+      return store.createRoutine(input, nextRunAt)
+    })
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>
+      routineTool: (config: NonNullable<ReturnType<DouchatStore['agent']>>) => RoutineToolLike
+      systemPrompt: (
+        config: NonNullable<ReturnType<DouchatStore['agent']>>,
+        context: 'direct' | 'group' | 'controller',
+        routineCreationAllowed: boolean
+      ) => string
+    }
+    internals.activeConversation.set(agent.id, conversation.id)
+    const tool = internals.routineTool(agent)
+    const input = {
+      name: '跟进峰会结果',
+      prompt: '检查峰会结果，有新消息时给出来源和摘要。',
+      schedule: { kind: 'weekly' as const, days: [6, 0, 4, 2, 5, 3, 1], time: '09:00' }
+    }
+
+    const created = await tool.execute('routine-1', input)
+
+    expect(createCount).toBe(1)
+    expect(store.routines).toHaveLength(1)
+    expect(store.routines[0]).toMatchObject({
+      name: input.name,
+      prompt: input.prompt,
+      agentId: agent.id,
+      conversationId: conversation.id,
+      schedule: { kind: 'weekly', days: [0, 1, 2, 3, 4, 5, 6], time: '09:00' },
+      enabled: true
+    })
+    expect(created.details).toMatchObject({ created: true, routineId: store.routines[0].id })
+    expect(created.content[0].text).toContain('已创建自动任务“跟进峰会结果”')
+    expect(created.content[0].text).toContain('每天 09:00')
+    expect(created.content[0].text).toContain(`结果会推送到“${conversation.name}”`)
+
+    const duplicate = await tool.execute('routine-2', input)
+    expect(createCount).toBe(1)
+    expect(store.routines).toHaveLength(1)
+    expect(duplicate.details).toMatchObject({ created: false, existing: true, routineId: store.routines[0].id })
+    expect(duplicate.content[0].text).toContain('已经存在，没有重复创建')
+
+    const beforeReminder = Date.now()
+    const reminder = await tool.execute('routine-3', {
+      name: '喝水提醒',
+      prompt: '提醒用户喝水。',
+      schedule: { kind: 'once', delayMinutes: 5 }
+    })
+    expect(createCount).toBe(2)
+    expect(reminder.details).toMatchObject({ created: true })
+    const reminderRoutine = store.routines.find((routine) => routine.name === '喝水提醒')!
+    expect(reminderRoutine.schedule.kind).toBe('once')
+    expect(reminderRoutine.nextRunAt).toBeGreaterThanOrEqual(beforeReminder + 5 * 60_000)
+    expect(reminderRoutine.nextRunAt).toBeLessThanOrEqual(Date.now() + 5 * 60_000)
+    expect(reminder.content[0].text).toContain('仅执行一次')
+
+    const prompt = internals.systemPrompt(agent, 'direct', true)
+    expect(prompt).toContain('“盯一下”')
+    expect(prompt).toContain('“钉一下”')
+    expect(prompt).toContain('every day at 09:00')
+    expect(internals.systemPrompt(agent, 'controller', true)).not.toContain('create_routine')
+  })
+
+  it('marks an empty scheduled response as failed and shows a localized error', async () => {
+    const { store, runtime } = createRuntime()
+    runtime.setInterfaceLanguage('zh-CN')
+    const agent = store.agents[0]
+    const conversation = store.conversations.find((item) => item.agentIds.includes(agent.id))!
+    const routine = store.createRoutine({
+      name: '一分钟后发笑话',
+      prompt: '给用户发一个短笑话。',
+      agentId: agent.id,
+      conversationId: conversation.id,
+      schedule: { kind: 'once', runAt: Date.now() + 60_000 },
+      timezone: 'Asia/Shanghai'
+    }, Date.now() + 60_000)
+    const internals = runtime as unknown as {
+      runReply: () => Promise<{ text: string; error?: string; attachments?: []; actions?: [] }>
+    }
+    internals.runReply = async () => ({ text: '', error: `${agent.name} finished without a text response.` })
+
+    await expect(runtime.runRoutine(routine, 'schedule')).rejects.toThrow('finished without a text response')
+
+    expect(store.runs[0]).toMatchObject({ routineId: routine.id, status: 'failed' })
+    expect(store.runs[0].error).toContain('finished without a text response')
+    expect(store.messages.at(-1)).toMatchObject({
+      authorName: 'Douchat',
+      kind: 'system',
+      text: '自动任务“一分钟后发笑话”执行失败：智能体没有返回任何内容。'
+    })
+  })
+
   it('lets only the current account system administrator create and edit agents', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-management-'))
     directories.push(directory)
@@ -115,10 +284,43 @@ describe('DouchatRuntime', () => {
     internals.activeInputImages.set(defaultAgent.id, [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }])
 
     const tools = internals.agentManagementTools(defaultAgent)
-    expect(tools.map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+    expect(tools.map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
+    const originalGroup = store.createGroup({ name: '闲聊小群', agentIds: [defaultAgent.id] })
+    store.addMessage({ conversationId: originalGroup.id, topicId: originalGroup.activeTopicId, authorId: defaultAgent.id, authorName: defaultAgent.name, text: 'History stays', kind: 'message' })
+    const groupCount = store.accountConversations.filter((item) => item.type === 'group').length
+    const updateGroup = tools.find((tool) => tool.name === 'update_group')!
+    await updateGroup.execute('rename', { group: originalGroup.id, name: '三国英雄', emoji: '⚔️' })
+    expect(store.conversation(originalGroup.id)).toMatchObject({ name: '三国英雄', avatarEmoji: '⚔️', agentIds: [defaultAgent.id] })
+    expect(store.topicMessages(originalGroup.id, originalGroup.activeTopicId)[0].text).toBe('History stays')
+    expect(store.accountConversations.filter((item) => item.type === 'group')).toHaveLength(groupCount)
+    await updateGroup.execute('image', { group: '三国英雄', avatar: 'attached' })
+    expect(store.conversation(originalGroup.id)?.avatar).toBe(avatar)
+    expect(store.conversation(originalGroup.id)?.avatarEmoji).toBeUndefined()
+    await updateGroup.execute('remove', { group: originalGroup.id, avatar: 'remove' })
+    expect(store.conversation(originalGroup.id)?.avatar).toBeUndefined()
+    await expect(updateGroup.execute('invalid', { group: originalGroup.id, name: 'wrong', emoji: 'not emoji' })).rejects.toThrow()
+    expect(store.conversation(originalGroup.id)?.name).toBe('三国英雄')
+    store.createGroup({ name: '三国英雄', agentIds: [defaultAgent.id] })
+    await expect(updateGroup.execute('ambiguous', { group: '三国英雄', name: 'oops' })).rejects.toThrow()
     const create = tools.find((tool) => tool.name === 'create_agent')!
     const createdResult = await create.execute('create-1', { name: 'Researcher', avatar: 'attached' })
     const createdId = createdResult.details.agentId as string
+    await updateGroup.execute('add-member', { group: originalGroup.id, addAgents: ['Researcher', createdId] })
+    expect(store.conversation(originalGroup.id)?.agentIds).toEqual([defaultAgent.id, createdId])
+    await expect(updateGroup.execute('atomic', { group: originalGroup.id, name: 'must not change', addAgents: ['missing'] })).rejects.toThrow()
+    expect(store.conversation(originalGroup.id)?.name).toBe('三国英雄')
+    await updateGroup.execute('remove-leader', { group: originalGroup.id, removeAgents: [defaultAgent.id] })
+    expect(store.conversation(originalGroup.id)).toMatchObject({ agentIds: [createdId], leadAgentId: createdId })
+    expect(store.agent(defaultAgent.id)).toBeDefined()
+    expect(store.topicMessages(originalGroup.id, originalGroup.activeTopicId)[0].text).toBe('History stays')
+    await expect(updateGroup.execute('empty', { group: originalGroup.id, removeAgents: [createdId] })).rejects.toThrow('at least one')
+
+    const groupResult = await tools.find((tool) => tool.name === 'create_group')!.execute('group-1', { name: '我们三', agents: ['Researcher'] })
+    const group = store.conversation(groupResult.details.conversationId as string)!
+    expect(group).toMatchObject({ name: '我们三', type: 'group', ownerId: 'account-1' })
+    expect(group.agentIds).toEqual([defaultAgent.id, createdId])
+    await expect(tools.find((tool) => tool.name === 'create_group')!.execute('group-bad', { name: 'Bad', agents: ['Missing'] })).rejects.toThrow('No agent')
+
     expect(createdResult.details.created).toBe(true)
     expect(store.agent(createdId)).toMatchObject({
       name: 'Researcher',
@@ -151,7 +353,7 @@ describe('DouchatRuntime', () => {
     store.deleteConversation(`direct-${defaultAgent.id}`)
     expect(store.defaultConversationId).toBeUndefined()
     expect(store.systemAdminAgentId).toBe(defaultAgent.id)
-    expect(internals.agentManagementTools(defaultAgent).map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+    expect(internals.agentManagementTools(defaultAgent).map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
     const withoutCapability = { ...defaultAgent, capabilities: [] }
     expect(internals.agentManagementTools(withoutCapability)).toEqual([])
   })
@@ -196,7 +398,7 @@ describe('DouchatRuntime', () => {
     expect(earlier.systemRole).toBe('admin')
     expect(current.systemRole).toBe('admin')
     expect(internals.agentManagementTools(earlier)).toEqual([])
-    expect(internals.agentManagementTools(current).map((tool) => tool.name)).toEqual(['create_agent', 'update_agent'])
+    expect(internals.agentManagementTools(current).map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
   })
 
   it('asks agents to preserve verified local files as reopenable history links', () => {
@@ -207,6 +409,8 @@ describe('DouchatRuntime', () => {
 
     expect(prompt).toContain('[filename](<douchat-file:///absolute/path>)')
     expect(prompt).toContain('Do not create a local-file link for an unverified path')
+    expect(prompt).toContain('Only access local files when the human explicitly asks')
+    expect(prompt).toContain('otherwise ask for permission before calling a local-file tool')
   })
 
   it('returns to the ordinary reply loader after a tool action completes', () => {
@@ -291,6 +495,138 @@ describe('DouchatRuntime', () => {
     expect(request).toHaveBeenCalledTimes(2)
   })
 
+  it('resumes one empty model turn after a transient stream interruption', async () => {
+    vi.useFakeTimers()
+    try {
+      const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-stream-retry-'))
+      directories.push(directory)
+      const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+      const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+      const config = store.agent('dobi')!
+      const state = { messages: [] as Array<Record<string, unknown>> }
+      const prompt = vi.fn(async (input: string) => {
+        state.messages = [
+          { role: 'user', content: [{ type: 'text', text: input }] },
+          { role: 'assistant', content: [], errorMessage: 'Request was aborted' }
+        ]
+      })
+      const resume = vi.fn(async () => {
+        state.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Recovered reply' }] })
+      })
+      const session = { state, prompt, continue: resume, abort: vi.fn() }
+      const internals = runtime as unknown as {
+        sessions: Map<string, { agentId: string; agent: typeof session }>
+        runReply: (options: {
+          config: typeof config
+          sessionKey: string
+          context: 'direct'
+          prompt: string
+          conversationId: string
+          topicId: string
+        }) => Promise<{ text: string; error?: string }>
+      }
+      internals.sessions.set('retry-session', { agentId: config.id, agent: session })
+
+      const replyPromise = internals.runReply({
+        config,
+        sessionKey: 'retry-session',
+        context: 'direct',
+        prompt: 'Play some music.',
+        conversationId: 'direct-dobi',
+        topicId: store.activeTopicId('direct-dobi')
+      })
+      await vi.advanceTimersByTimeAsync(400)
+
+      await expect(replyPromise).resolves.toEqual({ text: 'Recovered reply', retryCount: 1 })
+      expect(prompt).toHaveBeenCalledOnce()
+      expect(resume).toHaveBeenCalledOnce()
+      expect(state.messages.some((message) => message.errorMessage === 'Request was aborted')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([false, true])('retries empty HTTP 500 responses three times, recovering=%s', async (recover) => {
+    vi.useFakeTimers()
+    try {
+      const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-500-'))
+      directories.push(directory)
+      const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+      const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+      const config = store.agent('dobi')!
+      const failed = () => ({ role: 'assistant', content: [], errorMessage: '500 status code (no body)' })
+      const state = { messages: [] as Array<Record<string, unknown>> }
+      const prompt = vi.fn(async () => { state.messages = [{ role: 'user', content: 'Start' }, { role: 'toolResult', content: 'Already created the group' }, failed()] })
+      const resume = vi.fn(async () => {
+        expect(state.messages.at(-1)?.role).toBe('toolResult')
+        state.messages.push(recover && resume.mock.calls.length === 3
+          ? { role: 'assistant', content: [{ type: 'text', text: 'Recovered' }] } : failed())
+      })
+      const session = { state, prompt, continue: resume, abort: vi.fn() }
+      const internals = runtime as unknown as {
+        sessions: Map<string, { agentId: string; agent: typeof session }>
+        runReply: (options: object) => Promise<{ text: string; error?: string; retryCount?: number }>
+      }
+      internals.sessions.set('retry-500', { agentId: config.id, agent: session })
+      const pending = internals.runReply({ config, sessionKey: 'retry-500', context: 'direct', prompt: 'Start', conversationId: 'direct-dobi', topicId: store.activeTopicId('direct-dobi') })
+      await vi.advanceTimersByTimeAsync(400)
+      expect(resume).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(800)
+      expect(resume).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1600)
+      const reply = await pending
+      expect(resume).toHaveBeenCalledTimes(3)
+      expect(prompt).toHaveBeenCalledOnce()
+      expect(reply.retryCount).toBe(3)
+      expect(reply.text).toBe(recover ? 'Recovered' : '')
+      if (!recover) expect(reply.error).toBe('500 status code (no body)')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('stops a stalled group coordinator instead of leaving the chat loading forever', async () => {
+    vi.useFakeTimers()
+    try {
+      const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-controller-timeout-'))
+      directories.push(directory)
+      const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+      const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+      const config = store.agent('dobi')!
+      const state = { messages: [] as Array<Record<string, unknown>> }
+      const prompt = vi.fn(() => new Promise<void>(() => undefined))
+      const session = { state, prompt, continue: vi.fn(async () => undefined), abort: vi.fn() }
+      const internals = runtime as unknown as {
+        sessions: Map<string, { agentId: string; agent: typeof session }>
+        runReply: (options: {
+          config: typeof config
+          sessionKey: string
+          context: 'controller'
+          prompt: string
+          conversationId: string
+          topicId: string
+        }) => Promise<{ text: string; error?: string }>
+      }
+      internals.sessions.set('stalled-controller', { agentId: config.id, agent: session })
+
+      const replyPromise = internals.runReply({
+        config,
+        sessionKey: 'stalled-controller',
+        context: 'controller',
+        prompt: 'Choose a group member.',
+        conversationId: 'crew',
+        topicId: store.activeTopicId('crew')
+      })
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      await expect(replyPromise).resolves.toEqual({
+        text: '',
+        error: 'The model response timed out after 30 seconds.'
+      })
+      expect(session.abort).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('runs a group turn with the lead first and splits replies into bubbles', async () => {
     const { store, runtime } = createRuntime()
     const topicId = store.activeTopicId('crew')
@@ -309,6 +645,39 @@ describe('DouchatRuntime', () => {
     expect(new Set(dobiBubbles.map((message) => message.replyGroupId)).size).toBe(1)
   })
 
+  it('routes the next unaddressed group message through the lead again', async () => {
+    const { store, runtime } = createRuntime()
+    const topicId = store.activeTopicId('crew')
+    await runtime.sendMessage('crew', 'plan the launch')
+    const before = store.topicMessages('crew', topicId).length
+
+    await runtime.sendMessage('crew', 'what happened next?')
+
+    const added = store.topicMessages('crew', topicId).slice(before)
+    expect(added[0]).toMatchObject({ authorId: 'user', text: 'what happened next?' })
+    expect(added[1].authorId).toBe('dobi')
+    expect(new Set(added.slice(1).map((message) => message.authorId))).toEqual(new Set(['dobi', 'lin']))
+  })
+
+  it('marks a group run failed when no member can produce a reply', async () => {
+    const { store, runtime } = createRuntime()
+    ;(runtime as unknown as {
+      runReply: (options: ReplyOptions) => Promise<{ text: string; error?: string }>
+    }).runReply = async () => ({ text: '', error: 'upstream unavailable' })
+
+    await runtime.sendMessage('crew', '@Dobi please answer')
+
+    const messages = store.topicMessages('crew', store.activeTopicId('crew'))
+    expect(messages.at(-1)).toMatchObject({
+      kind: 'system',
+      text: 'No member of this group could complete the request.'
+    })
+    expect(store.runs.at(-1)).toMatchObject({
+      status: 'failed',
+      error: 'No member of this group could complete the request'
+    })
+  })
+
   it('routes an @mention to that member only', async () => {
     const { store, runtime } = createRuntime()
     const topicId = store.activeTopicId('crew')
@@ -321,6 +690,57 @@ describe('DouchatRuntime', () => {
     expect(new Set(added.filter((message) => message.authorId !== 'user').map((message) => message.authorId))).toEqual(
       new Set(['lin'])
     )
+  })
+
+  it('delivers game secrets privately to agents and the human, with safe public receipts', async () => {
+    const { store, runtime } = createRuntime()
+    store.deleteConversation('direct-dobi')
+    const prompts: string[] = []
+    const internals = runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }
+    internals.runReply = async ({ config, prompt }) => {
+      if (config.id === 'dobi') return { text: 'Words delivered. [[private:lin]]agent-secret[[/private]][[private:human]]human-secret[[/private]]' }
+      prompts.push(prompt)
+      return { text: 'Ready.' }
+    }
+    await runtime.sendMessage('crew', '@Dobi start the game')
+    const publicMessages = store.topicMessages('crew', store.activeTopicId('crew'))
+    expect(JSON.stringify(publicMessages)).not.toContain('agent-secret')
+    expect(JSON.stringify(publicMessages)).not.toContain('human-secret')
+    expect(prompts[0]).toContain('agent-secret')
+    expect(prompts[0]).not.toContain('human-secret')
+    const direct = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    expect(direct.at(-1)).toMatchObject({ text: 'human-secret', source: { kind: 'group', id: 'crew' } })
+    expect(store.conversation('direct-dobi')?.unread).toBeGreaterThan(0)
+    let replyPrompt = ''
+    internals.runReply = async ({ prompt }) => { replyPrompt = prompt; return { text: 'Got it.' } }
+    await runtime.sendMessage('direct-dobi', 'I received my word')
+    expect(replyPrompt).toContain('human-secret')
+  })
+
+  it('publishes a fast parallel answer before a slow member finishes', async () => {
+    const { store, runtime } = createRuntime()
+    let release!: () => void
+    const slow = new Promise<void>((resolve) => { release = resolve })
+    let fastFinished!: () => void
+    const fast = new Promise<void>((resolve) => { fastFinished = resolve })
+    const internals = runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }
+    internals.runReply = async ({ config, context, prompt }) => {
+      if (context === 'controller') {
+        const payload = JSON.parse(prompt.slice(prompt.indexOf('{'))) as DecisionPayload
+        return { text: JSON.stringify({ mode: 'parallel', memberIds: ['dobi', 'lin'], triggerMessageIds: [payload.messages.at(-1)!.id] }) }
+      }
+      if (config.id === 'dobi') await slow
+      else fastFinished()
+      return { text: `${config.name} joke` }
+    }
+    const running = runtime.sendMessage('crew', '@all tell a joke each')
+    await fast
+    // Allow the completed member's persistence continuation to run.
+    await vi.waitFor(() => expect(store.topicMessages('crew', store.activeTopicId('crew')).some((message) => message.text === 'Lin joke')).toBe(true))
+    expect(store.topicMessages('crew', store.activeTopicId('crew')).some((message) => message.text === 'Dobi joke')).toBe(false)
+    expect(runtime.snapshot().activity.find((item) => item.conversationId === 'crew')?.agentIds).toEqual(['dobi'])
+    release()
+    await running
   })
 
   it('keeps the incoming private content with the reply source', async () => {
@@ -373,11 +793,79 @@ describe('DouchatRuntime', () => {
     const before = store.topicMessages('direct-dobi', topicId)
     const result = await internals.messageAgentTool(store.agent('dobi')!).execute('handoff-1', {
       agent: 'lin',
-      message: 'Check this detail.'
+      message: 'Check this detail.',
+      replyTo: 'caller'
     })
 
     expect(result.content[0]?.text).toBe('Lin replied: Lin internal answer.')
     expect(store.topicMessages('direct-dobi', topicId)).toEqual(before)
+  })
+
+  it('delivers a tool-requested greeting in the recipient private chat by default', async () => {
+    const { store, runtime } = createRuntime()
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>; activeTopic: Map<string, string>
+      messageAgentTool: (config: { id: string; name: string }) => MessageAgentToolLike
+      runReply: (options: ReplyOptions) => Promise<{ text: string }>
+    }
+    internals.activeConversation.set('dobi', 'direct-dobi')
+    internals.activeTopic.set('dobi', store.activeTopicId('direct-dobi'))
+    internals.runReply = async () => ({ text: 'Hi, I am Lin.' })
+    store.deleteConversation('direct-lin')
+    const before = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    await internals.messageAgentTool(store.agent('dobi')!).execute('hello', { agent: 'lin', message: 'Greet the human' })
+    expect(store.topicMessages('direct-lin', store.activeTopicId('direct-lin')).at(-1)).toMatchObject({ authorId: 'lin', text: 'Hi, I am Lin.', source: { id: 'dobi' } })
+    expect(store.conversation('direct-lin')?.unread).toBe(1)
+    expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toEqual(before)
+  })
+
+  it('posts an introduction in the selected group, not another member private inbox', async () => {
+    const { store, runtime } = createRuntime()
+    const tools = (runtime as unknown as { groupMessagingTools: (config: unknown) => AgentManagementToolLike[] }).groupMessagingTools(store.agent('dobi')!)
+    const list = await tools.find((tool) => tool.name === 'list_groups')!.execute('list', {})
+    expect(list.content[0].text).toContain('crew')
+    const send = tools.find((tool) => tool.name === 'send_group_message')!
+    const before = store.topicMessages('direct-lin', store.activeTopicId('direct-lin'))
+    const text = '大家好，我是 Dobi，拉这个群是为了大家一起聊天。'
+    const result = await send.execute('introduction', { group: 'crew', message: text })
+    expect(result.details).toMatchObject({ delivered: true, conversationId: 'crew' })
+    expect(store.topicMessages('crew', store.activeTopicId('crew')).at(-1)).toMatchObject({ authorId: 'dobi', text })
+    expect(store.topicMessages('direct-lin', store.activeTopicId('direct-lin'))).toEqual(before)
+    await send.execute('introduction', { group: 'crew', message: text })
+    expect(store.topicMessages('crew', store.activeTopicId('crew')).filter((message) => message.text === text)).toHaveLength(1)
+    const invalid = await send.execute('bad', { group: 'direct-lin', message: text })
+    expect(invalid.details.delivered).toBe(false)
+    const excluded = store.createGroup({ name: 'Other group', agentIds: ['lin'] })
+    expect((await send.execute('outsider', { group: excluded.id, message: text })).details.delivered).toBe(false)
+  })
+
+  it('dispatches tool-posted group mentions without requiring another human message', async () => {
+    const { store, runtime } = createRuntime()
+    const internals = runtime as unknown as {
+      activeRun: Map<string, string>
+      groupMessagingTools: (config: unknown) => AgentManagementToolLike[]
+      runReply: (options: ReplyOptions) => Promise<{ text: string }>
+    }
+    const calls: string[] = []
+    internals.runReply = async ({ config, context, prompt }) => {
+      calls.push(config.id)
+      if (context === 'direct') {
+        internals.activeRun.set(config.id, store.runs.at(-1)!.id)
+        const tool = internals.groupMessagingTools(store.agent(config.id)!).find((item) => item.name === 'send_group_message')!
+        await tool.execute('mention-lin', { group: 'crew', message: '@Lin 请在群里介绍一下自己' })
+        return { text: '已在群里联系 Lin。' }
+      }
+      expect(context).toBe('group')
+      const payload = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      expect(payload.messages.find((item: { content: string }) => item.content.includes('@Lin 请在群里'))).toMatchObject({ role: 'assistant', speakerId: 'dobi' })
+      return { text: '大家好，我是 Lin。' }
+    }
+    await runtime.sendMessage('direct-dobi', '让 Lin 在群里介绍自己')
+    expect(calls).toEqual(['dobi', 'lin'])
+    const messages = store.topicMessages('crew', store.activeTopicId('crew'))
+    expect(messages.at(-1)).toMatchObject({ authorId: 'lin', text: '大家好，我是 Lin。' })
+    expect(messages.filter((message) => message.text.includes('@Lin 请在群里'))).toHaveLength(1)
+    expect(runtime.snapshot().activity.some((item) => item.conversationId === 'crew')).toBe(false)
   })
 
   it('opens an empty topic with one proactive greeting', async () => {
@@ -479,6 +967,39 @@ describe('DouchatRuntime', () => {
     expect(reply?.actions).toEqual([
       { id: 'open-video-1', tool: 'computer_open_file', status: 'succeeded', target: 'qin-emperor.mp4' }
     ])
+  })
+
+  it('shows one diagnostic error after tools succeed and the model continuation fails', async () => {
+    const { store, runtime } = createRuntime()
+    ;(runtime as unknown as {
+      runReply: (options: ReplyOptions) => Promise<{
+        text: string
+        error: string
+        retryCount: number
+        actions: Array<{ id: string; tool: string; status: 'succeeded'; target?: string }>
+      }>
+    }).runReply = async () => ({
+      text: '',
+      error: 'Request was aborted',
+      retryCount: 1,
+      actions: [
+        { id: 'create-1', tool: 'create_agent', status: 'succeeded', target: '东子' },
+        { id: 'list-1', tool: 'computer_list_files', status: 'succeeded' }
+      ]
+    })
+
+    await runtime.sendMessage('direct-dobi', 'Create 东子 and let it inspect my videos.')
+
+    const messages = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    const errors = messages.filter((message) => message.kind === 'system')
+    expect(errors).toHaveLength(1)
+    expect(messages.some((message) => message.authorId === 'dobi' && message.error)).toBe(false)
+    expect(errors[0]).toMatchObject({ text: 'The model connection was interrupted' })
+    expect(errors[0].detail).toContain('Stage: model response after tool execution')
+    expect(errors[0].detail).toContain('Automatic retries: 1')
+    expect(errors[0].detail).toContain('- create_agent (东子)')
+    expect(errors[0].detail).toContain('- computer_list_files')
+    expect(store.runs.at(-1)).toMatchObject({ status: 'failed', error: 'The model connection was interrupted' })
   })
 
   it('persists a pasted image and passes its bytes to the model', async () => {

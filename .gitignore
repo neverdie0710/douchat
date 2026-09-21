@@ -6,6 +6,8 @@ out/
 dist/
 release/
 build/
+.output/
+.nitro/
 *.dmg
 *.exe
 *.AppImage
@@ -40,6 +42,8 @@ coverage/
 .nyc_output/
 .vite/
 .electron-vite/
+src/paraglide/
+src/routeTree.gen.ts
 .eslintcache
 *.tsbuildinfo
 
@@ -59,5 +63,6 @@ Thumbs.db
 # Local application data and temporary files
 .douchat/
 douchat-data/
+data/
 tmp/
 temp/

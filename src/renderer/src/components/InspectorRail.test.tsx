@@ -34,6 +34,7 @@ const direct: Conversation = {
 
 const snapshot = {
   agents: [agent], conversations: [group, direct], messages: [], agentStatuses: { alpha: 'idle' },
+  routines: [], runs: [],
   userName: 'Dobi', userAvatar: 'data:image/png;base64,avatar'
 } as unknown as AppSnapshot
 
@@ -61,10 +62,10 @@ describe('chat details rail', () => {
     container.remove()
   })
 
-  async function renderRail(conversation: Conversation = group, onSelectUser = vi.fn()): Promise<void> {
+  async function renderRail(conversation: Conversation = group, onSelectUser = vi.fn(), state: AppSnapshot = snapshot): Promise<void> {
     await act(async () => root.render(
       <InspectorRail
-        snapshot={snapshot}
+        snapshot={state}
         conversation={conversation}
         members={[agent]}
         onSelectAgent={vi.fn()}
@@ -86,6 +87,15 @@ describe('chat details rail', () => {
 
     await act(async () => memberTiles[1].click())
     expect(onSelectUser).toHaveBeenCalledOnce()
+  })
+
+  it('places the creator first in the shared group visual order', async () => {
+    await renderRail({ ...group, ownerId: 'self', socialRoom: {
+      id: 'remote', kind: 'group', name: 'Team', agents: [], createdAt: '',
+      members: [{ id: 'self', name: 'Dobi', email: 'self@test' }, { id: 'friend', name: 'Friend', email: 'friend@test' }]
+    } })
+    const tiles = [...container.querySelectorAll('.member-grid > .member-tile:not(.add)')]
+    expect(tiles.sort((a, b) => Number((a as HTMLElement).style.order) - Number((b as HTMLElement).style.order)).map((tile) => tile.textContent)).toEqual(['Dobi', 'Alpha', 'Friend'])
   })
 
   it('renames a group inline when Enter is pressed', async () => {
@@ -124,5 +134,31 @@ describe('chat details rail', () => {
 
     expect(container.querySelector('[role="switch"][aria-label="Mute notifications"]')).not.toBeNull()
     expect(container.querySelector('[role="switch"][aria-label="Pin to top"]')).not.toBeNull()
+  })
+
+  it('opens chat history and scheduled tasks in separate dialogs', async () => {
+    const runAt = Date.now() + 60_000
+    const state = {
+      ...snapshot,
+      routines: [{
+        id: 'routine-1', name: 'Say hello', agentId: agent.id, conversationId: direct.id,
+        prompt: 'Send a friendly hello.', target: 'local', schedule: { kind: 'once', runAt },
+        timezone: 'Asia/Shanghai', enabled: true, nextRunAt: runAt, createdAt: Date.now(), updatedAt: Date.now()
+      }],
+      runs: []
+    } as AppSnapshot
+    await renderRail(direct, vi.fn(), state)
+
+    const options = [...container.querySelectorAll<HTMLButtonElement>('.detail-search-button')]
+    expect(options.map((button) => button.textContent?.trim())).toEqual(['Search chat history', 'View scheduled tasks'])
+
+    await act(async () => options[0].click())
+    expect(document.querySelector('[aria-labelledby="chat-history-title"]')).not.toBeNull()
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-labelledby="chat-history-title"] button[aria-label="Close"]')!.click())
+
+    await act(async () => options[1].click())
+    expect(document.querySelector('[aria-labelledby="routine-records-title"]')?.textContent).toContain('Say hello')
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(document.querySelector('[aria-labelledby="routine-records-title"]')).toBeNull()
   })
 })

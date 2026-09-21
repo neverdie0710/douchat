@@ -1,9 +1,10 @@
+import type { SocialSnapshot } from '../../../shared/social'
 import { t } from '../preferences'
-import { MessageSquare, MoreHorizontal, Star, Users } from 'lucide-react'
+import { Check, Pencil, MessageSquare, MoreHorizontal, Star, Users, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import type { ContactSelection } from './ContactList'
-import { AgentAvatar, ConversationAvatar, agentDisplayName, agentSourceLabel } from './common'
+import { AgentAvatar, UserAvatar, ConversationAvatar, agentDisplayName, agentSourceLabel } from './common'
 
 function Field({ label, value }: { label: string; value: string }): ReactElement {
   return (
@@ -15,22 +16,39 @@ function Field({ label, value }: { label: string; value: string }): ReactElement
 }
 
 export function ContactCard({
+  readOnly = false,
+  ownerName,
   snapshot,
+  social,
+  onFriendMessage,
+  onRespondRequest,
   selection,
   onMessage,
   onStartDirect,
   onEditBot,
   onDeleteBot,
+  onDeleteConversation,
+  onRemoveFromContacts,
   onTogglePin
 }: {
+  ownerName?: string
+  readOnly?: boolean
   snapshot: AppSnapshot
+  social?: SocialSnapshot
+  onFriendMessage?: (id: string) => void
+  onRespondRequest?: (id: string, accept: boolean) => Promise<void>
   selection?: ContactSelection
   onMessage: (conversationId: string) => void
   onStartDirect: (agentId: string) => void
   onEditBot: (agent: AgentConfig) => void
+  onRemoveFromContacts?: (conversation: Conversation) => void
+  onDeleteConversation?: (conversation: Conversation) => void
   onDeleteBot: (agent: AgentConfig) => void
   onTogglePin: (conversation: Conversation) => void
 }): ReactElement {
+  const [friendBusy, setFriendBusy] = useState(false)
+  const [friendError, setFriendError] = useState('')
+  const friend = selection?.kind === 'friend' ? social?.friendships.find((item) => item.person.id === selection.id) : undefined
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const agent = selection?.kind === 'bot' ? snapshot.agents.find((item) => item.id === selection.id) : undefined
@@ -39,6 +57,7 @@ export function ContactCard({
 
   useEffect(() => {
     setProfileMenuOpen(false)
+    setFriendError('')
   }, [selection?.id, selection?.kind])
 
   useEffect(() => {
@@ -56,6 +75,33 @@ export function ContactCard({
       window.removeEventListener('keydown', escape)
     }
   }, [profileMenuOpen])
+
+  const person = friend?.person ?? (selection?.kind === 'friend' ? social?.rooms.flatMap((room) => room.members).find((member) => member.id === selection.id) : undefined)
+  if (person) {
+    const direct = snapshot.conversations.find((conversation) => conversation.person?.id === person.id)
+    const incoming = friend?.status === 'pending' && friend?.recipientId === social?.userId
+    const status = !friend ? '' : friend?.status === 'accepted' ? t('Added') : friend?.status === 'declined' ? t('Declined') : incoming ? t('Awaiting acceptance') : t('Request sent')
+    const respond = async (accept: boolean) => {
+      if (!friend || !onRespondRequest || friendBusy) return
+      setFriendBusy(true); setFriendError('')
+      try { await onRespondRequest(friend.id, accept) }
+      catch (error) { setFriendError(error instanceof Error ? error.message : String(error)) }
+      finally { setFriendBusy(false) }
+    }
+    return <main className="workspace contact-card-pane contact-profile-pane">
+      <div className="contact-profile-scroll"><div className="contact-profile-sheet">
+        <section className="contact-profile-header"><UserAvatar src={person.image || ''} name={person.name} size={64} /><div className="contact-profile-identity"><div className="contact-profile-name"><h1>{person.name}</h1>{direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}</div><p>{friend?.status === 'accepted' ? t('Friend') : t('Douchat user')}</p></div></section>
+        <section className="contact-profile-section"><h2>{t('Contact details')}</h2><Field label={t('Name')} value={person.name} /><Field label={t('Email')} value={person.email} /></section>
+        <section className="contact-profile-section"><h2>{t('More information')}</h2>{status && <Field label={t('Status')} value={status} />}<Field label={t('Shared groups')} value={String(social?.rooms.filter((room) => room.kind === 'group' && room.members.some((person) => person.id === person.id)).length ?? 0)} /></section>
+        {friendError && <p className="friend-profile-error" role="alert">{friendError}</p>}
+        <div className="contact-profile-actions">
+          {incoming && <><button disabled={friendBusy} onClick={() => void respond(true)}><Check size={24} /><span>{t('Accept request')}</span></button><button className="friend-decline-action" disabled={friendBusy} onClick={() => void respond(false)}><X size={24} /><span>{t('Decline request')}</span></button></>}
+          {friend?.status === 'accepted' && <button onClick={() => onFriendMessage?.(person.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button>}
+          {!incoming && friend?.status !== 'accepted' && <span className="friend-profile-status">{status}</span>}
+        </div>
+      </div></div>
+    </main>
+  }
 
   if (!agent && !group) {
     return (
@@ -89,7 +135,7 @@ export function ContactCard({
                 </div>
                 <p>{sourceLabel}</p>
               </div>
-              <div className="profile-menu-anchor" ref={profileMenuRef}>
+              {!readOnly && <div className="profile-menu-anchor" ref={profileMenuRef}>
                 <button className="profile-edit" onClick={() => setProfileMenuOpen((open) => !open)} aria-label={t('Agent menu')} aria-haspopup="menu" aria-expanded={profileMenuOpen} title={t('Agent menu')}><MoreHorizontal size={21} /></button>
                 {profileMenuOpen && <div className="dropdown-menu profile-actions-menu" role="menu">
                   <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
@@ -98,12 +144,13 @@ export function ContactCard({
                     <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>
                   </>}
                 </div>}
-              </div>
+              </div>}
             </section>
 
             <section className="contact-profile-section">
               <h2>{t('Agent details')}</h2>
               <Field label={t('Name')} value={displayName} />
+              {readOnly && ownerName && <Field label={t('Owned by')} value={ownerName} />}
               {agent.labels?.trim() && <Field label={t('Labels')} value={agent.labels} />}
             </section>
 
@@ -111,10 +158,10 @@ export function ContactCard({
               <h2>{t('More information')}</h2>
               <Field label={t('Shared groups')} value={String(sharedGroupCount)} />
               <Field label={t('Source')} value={sourceLabel} />
-              <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />
+              {agent.createdAt > 0 && <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />}
             </section>
 
-            <div className="contact-profile-actions"><button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button></div>
+            {!readOnly && <div className="contact-profile-actions"><button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button></div>}
           </div>
         </div>
       </main>
@@ -133,6 +180,17 @@ export function ContactCard({
           </button>
         </section>
       </div>
+      {onRemoveFromContacts && <button className="group-remove-contact" onClick={() => onRemoveFromContacts(group!)}>{t('Remove from contacts')}</button>}
     </main>
   )
+}
+
+export function SelfProfileCard({ name, email, avatar, onEdit }: { name: string; email: string; avatar: string; onEdit: () => void }): ReactElement {
+  return <main className="workspace contact-card-pane contact-profile-pane">
+    <div className="contact-profile-scroll"><div className="contact-profile-sheet">
+      <section className="contact-profile-header"><UserAvatar name={name} src={avatar} size={64} /><div className="contact-profile-identity"><div className="contact-profile-name"><h1>{name}</h1></div><p>{t('Myself')}</p></div></section>
+      <section className="contact-profile-section"><h2>{t('Contact details')}</h2><Field label={t('Name')} value={name} /><Field label={t('Email')} value={email} /></section>
+      <div className="contact-profile-actions"><button onClick={onEdit}><Pencil size={24} strokeWidth={1.7} /><span>{t('Edit profile')}</span></button></div>
+    </div></div>
+  </main>
 }

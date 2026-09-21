@@ -1,8 +1,9 @@
+import { executableCommand } from './windowsCommand'
 import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { AgentConfig, MessageAttachment } from '../shared/types'
+import type { AgentConfig, LocalAgent, MessageAttachment } from '../shared/types'
 import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 
@@ -44,9 +45,65 @@ export function localAgentText(id: string, stdout: string): string {
   return String(data.final ?? data.result ?? data.response ?? data.text ?? '').trim()
 }
 
-/** Only for the fresh, application-owned temporary workspace created below. */
-export function localAgentEnvironment(id: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return id === 'gemini' ? { ...env, GEMINI_CLI_TRUST_WORKSPACE: 'true' } : env
+function cleanProcessOutput(text: string): string {
+  return text
+    // Terminal colour/control sequences are useful in a shell, but make the
+    // in-app diagnostic unreadable and can interfere with error matching.
+    .replace(/\x1B(?:[@-_][0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g, '')
+    .trim()
+}
+
+export function localAgentExitError(
+  agent: Pick<LocalAgent, 'id' | 'name'>,
+  code: number | null,
+  stdout: string,
+  stderr: string
+): Error {
+  let diagnostic = cleanProcessOutput(stderr)
+  if (!diagnostic && stdout.trim()) {
+    try {
+      // Structured CLIs often put their useful authentication/configuration
+      // failure in JSON on stdout even though the process exits non-zero.
+      diagnostic = localAgentText(agent.id, stdout)
+    } catch (cause) {
+      diagnostic = cause instanceof Error ? cause.message : cleanProcessOutput(stdout)
+    }
+  }
+  diagnostic = cleanProcessOutput(diagnostic).slice(-1200)
+  return new Error(`${agent.name}: ${diagnostic || `Exited with status ${code ?? 'unknown'}`}`)
+}
+
+const CLAUDE_ACCOUNT_AUTH_CONFLICTS = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'ANTHROPIC_BASE_URL'
+] as const
+
+/** Only for the fresh, application-owned temporary workspace created below.
+ * Claude account-login fallback is intentionally opt-in: a working API-key
+ * setup keeps its normal precedence, while the specific connector conflict
+ * can retry against Claude Code's persisted claude.ai login. */
+export function localAgentEnvironment(
+  id: string,
+  env: NodeJS.ProcessEnv,
+  useClaudeAccountLogin = false
+): NodeJS.ProcessEnv {
+  if (id === 'gemini') return { ...env, GEMINI_CLI_TRUST_WORKSPACE: 'true' }
+  if (id !== 'claude' || !useClaudeAccountLogin) return env
+  const accountEnvironment = { ...env }
+  for (const name of CLAUDE_ACCOUNT_AUTH_CONFLICTS) delete accountEnvironment[name]
+  return accountEnvironment
+}
+
+export function shouldRetryClaudeWithAccountLogin(
+  id: string,
+  cause: unknown,
+  env: NodeJS.ProcessEnv
+): boolean {
+  if (id !== 'claude' || !(cause instanceof Error)) return false
+  if (!CLAUDE_ACCOUNT_AUTH_CONFLICTS.some((name) => Boolean(env[name]))) return false
+  return /claude\.ai connectors are disabled because/i.test(cause.message) && /auth source/i.test(cause.message)
 }
 
 export interface LocalAgentImage {
@@ -140,9 +197,10 @@ export async function runLocalAgent(
       ? `${prompt}\n\nThe human attached ${imagePaths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${imagePaths.length === 1 ? '' : 's'} before answering:\n${imagePaths.join('\n')}`
       : prompt
     const output = join(directory, 'reply.txt')
-    const stdout = await new Promise<string>((resolve, reject) => {
-      const child = spawn(agent.path!, localAgentArgs(agent.id, effectivePrompt, output), {
-        cwd: directory, env: localAgentEnvironment(agent.id, env), windowsHide: true, detached: process.platform !== 'win32',
+    const command = await executableCommand(agent.path!)
+    const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
+      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? [effectivePrompt] : localAgentArgs(agent.id, effectivePrompt, output))], {
+        cwd: directory, env: childEnvironment, windowsHide: true, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe']
       })
       let stdout = ''
@@ -153,7 +211,10 @@ export async function runLocalAgent(
         if (!child.pid) return
         try {
           if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
-          else child.kill('SIGKILL')
+          else {
+            const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+            killer.on('error', () => { child.kill('SIGKILL') })
+          }
         } catch { /* Already exited. */ }
       }
       const abort = (): void => { failure = new Error('Stopped'); kill() }
@@ -174,7 +235,7 @@ export async function runLocalAgent(
         cleanup()
         kill()
         if (failure) reject(failure)
-        else if (code !== 0) reject(new Error(`${agent.name}: ${stderr.trim().slice(-1200) || `Exited with status ${code}`}`))
+        else if (code !== 0) reject(localAgentExitError(agent, code, stdout, stderr))
         else resolve(stdout)
       })
       signal?.addEventListener('abort', abort, { once: true })
@@ -182,8 +243,28 @@ export async function runLocalAgent(
       child.stdin.on('error', () => { /* Process exit is reported by close. */ })
       child.stdin.end(['codex', 'openclaw'].includes(agent.id) ? effectivePrompt : undefined)
     })
+    let stdout: string
+    let usedClaudeAccountLogin = false
+    try {
+      stdout = await run(localAgentEnvironment(agent.id, env))
+    } catch (cause) {
+      if (!shouldRetryClaudeWithAccountLogin(agent.id, cause, env)) throw cause
+      usedClaudeAccountLogin = true
+      stdout = await run(localAgentEnvironment(agent.id, env, true))
+    }
     const images = agent.id === 'codex' ? await generatedImages(codexThreadId(stdout), env) : []
-    const text = agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
+    const replyText = async (): Promise<string> => agent.custom
+      ? stdout.trim()
+      : agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
+    let text: string
+    try {
+      text = await replyText()
+    } catch (cause) {
+      if (usedClaudeAccountLogin || !shouldRetryClaudeWithAccountLogin(agent.id, cause, env)) throw cause
+      usedClaudeAccountLogin = true
+      stdout = await run(localAgentEnvironment(agent.id, env, true))
+      text = await replyText()
+    }
     return localAgentReply(agent.name, text, images)
   } finally {
     await rm(directory, { recursive: true, force: true })

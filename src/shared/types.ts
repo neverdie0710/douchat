@@ -1,3 +1,4 @@
+import type { SocialAction, SocialResult, SocialSnapshot } from './social'
 export type AgentStatus = 'idle' | 'thinking' | 'offline'
 export type ComputerStatus = 'stopped' | 'starting' | 'ready' | 'working' | 'error'
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
@@ -7,13 +8,33 @@ export interface LocalAgent {
   id: string
   name: string
   command: string
+  /** A launchable CLI with a Douchat conversation adapter is available. */
   installed: boolean
+  /** Something belonging to this agent was found, even if it was only a desktop app. */
+  discovered: boolean
   path?: string
+  desktopPath?: string
+  version?: string
   chatSupported: boolean
+  status: 'ready' | 'desktop-only' | 'not-found'
+  /** Authentication is deliberately checked by the CLI when the first chat runs. */
+  authentication: 'unchecked'
+  /** User-registered commands use the generic prompt-argument/text-output adapter. */
+  custom?: boolean
+}
+
+export interface CustomLocalAgentInput {
+  name: string
+  /** Executable name on PATH or an absolute executable path. Never run through a shell. */
+  command: string
 }
 
 export interface AgentConfig {
+  /** Account ownership used for shared group execution. */
+  ownerId?: string
   localAgentId?: string
+  /** Snapshot of a custom local runtime's display name for durable contact labels. */
+  localAgentName?: string
 
   id: string
   name: string
@@ -80,6 +101,14 @@ export interface Topic {
 }
 
 export interface Conversation {
+  avatar?: string
+  avatarEmoji?: string
+  /** Human direct conversations use the same local inbox, with a remote delivery address. */
+  person?: import('./social').SocialPerson
+  remoteRoomId?: string
+  socialRoom?: import('./social').SocialRoom
+  /** Account that owns this local conversation. Missing only on legacy data awaiting migration. */
+  ownerId?: string
   id: string
   type: 'group' | 'direct'
   name: string
@@ -89,6 +118,7 @@ export interface Conversation {
   leadAgentId?: string
   topics: Topic[]
   activeTopicId: string
+  savedToContacts?: boolean
   muted?: boolean
   hidden?: boolean
   manuallyUnread?: boolean
@@ -302,6 +332,10 @@ export interface ComputerSession {
 
 export type RoutineSchedule =
   | {
+      kind: 'once'
+      runAt: number
+    }
+  | {
       kind: 'interval'
       intervalMinutes: number
     }
@@ -312,6 +346,8 @@ export type RoutineSchedule =
     }
 
 export interface Routine {
+  /** Account that created and is allowed to execute this local automation. */
+  ownerId?: string
   id: string
   name: string
   agentId: string
@@ -337,6 +373,8 @@ export interface CreateRoutineInput {
 }
 
 export interface TaskRun {
+  /** Account that owns the conversation/task which produced this run. */
+  ownerId?: string
   id: string
   agentId: string
   conversationId: string
@@ -387,6 +425,7 @@ export interface AppSnapshot {
 
 export interface CreateAgentInput {
   localAgentId?: string
+  localAgentName?: string
 
   name: string
   avatar?: string
@@ -403,6 +442,7 @@ export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'pro
 
 export interface UpdateAgentInput {
   localAgentId?: string
+  localAgentName?: string
 
   name?: string
   avatar?: string
@@ -423,6 +463,9 @@ export interface CreateGroupInput {
 }
 
 export interface UpdateConversationInput {
+  avatar?: string
+  avatarEmoji?: string
+  savedToContacts?: boolean
   muted?: boolean
   hidden?: boolean
   manuallyUnread?: boolean
@@ -482,6 +525,8 @@ export interface UpdateState {
 }
 
 export interface DouchatApi {
+  getSocialSnapshot: () => Promise<SocialSnapshot>
+  socialAction: (input: SocialAction) => Promise<SocialResult>
   platform: string
   /** The app name macOS shows in Privacy & Security for this build. */
   microphonePermissionOwner: 'Douchat' | 'Electron'
@@ -503,6 +548,9 @@ export interface DouchatApi {
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<UpdateState>
   detectLocalAgents: () => Promise<LocalAgent[]>
+  openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>
+  addCustomLocalAgent: (input: CustomLocalAgentInput) => Promise<LocalAgent[]>
+  removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   searchMessages: (conversationId: string, query: string) => Promise<ChatMessage[]>
   getMessagePage: (conversationId: string, topicId: string, before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
   getAttachmentData: (attachmentId: string) => Promise<string>

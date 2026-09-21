@@ -1,31 +1,44 @@
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, Camera, CircleUserRound, Coins, ExternalLink, Info, LogOut, Plus, RefreshCw, ScanSearch, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
-import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
+import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
-import { UserAvatar } from './common'
+import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'usage' | 'agents' | 'about'
+export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'about'
 
-export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefreshToken, onTab, onClose, onSignOut, onUpdateProfile, onDetect }: {
+export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
   agents: LocalAgent[]
+  routines?: Routine[]
+  runs?: TaskRun[]
+  workspaceAgents?: AgentConfig[]
+  conversations?: Conversation[]
   scanning: boolean
   error: string
   tab: SettingsTab
   creditsRefreshToken: number
+  creditsAttention?: boolean
+  onCreditsAvailable?: () => void
   onTab: (tab: SettingsTab) => void
   onClose: () => void
   onSignOut: () => Promise<void>
   onUpdateProfile: (input: UpdateDesktopProfileInput) => Promise<void>
   onDetect: () => void
+  onRemoveCustom?: (id: string) => Promise<void>
+  onDeleteRoutine?: (id: string) => Promise<void>
+  onSetRoutineEnabled?: (id: string, enabled: boolean) => Promise<void>
+  onRunRoutineNow?: (id: string) => Promise<void>
 }): ReactElement {
   const preferences = usePreferences()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState('')
+  const [customError, setCustomError] = useState('')
   const installed = agents.filter((agent) => agent.installed)
+  const desktopOnly = agents.filter((agent) => agent.status === 'desktop-only')
+  const missing = agents.filter((agent) => agent.status === 'not-found')
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -43,15 +56,26 @@ export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefre
       setSigningOut(false)
     }
   }
-  const row = (agent: LocalAgent): ReactElement => (
-    <article className="local-agent-row" key={agent.id}>
-      <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{agentIcons[agent.id] ? <img src={agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
-      <div className="local-agent-copy">
-        <strong>{agent.name}</strong>
-        <code title={agent.path}>{agent.path || agent.command}</code>
-      </div>
-    </article>
-  )
+  const removeCustom = async (agent: LocalAgent): Promise<void> => {
+    if (!onRemoveCustom || !window.confirm(t('Delete this custom local agent?'))) return
+    setCustomError('')
+    try { await onRemoveCustom(agent.id) }
+    catch (cause) { setCustomError(cause instanceof Error ? cause.message : 'Could not remove custom local agent.') }
+  }
+  const row = (agent: LocalAgent): ReactElement => {
+    const version = agent.custom ? '' : agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
+    return <article className="local-agent-row" key={agent.id}>
+        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{agentIcons[agent.id] ? <img src={agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
+        <div className="local-agent-copy">
+          <strong>{agent.name}</strong>
+          <code title={agent.path || agent.desktopPath}>{agent.path || agent.desktopPath || agent.command}</code>
+        </div>
+        {(version || agent.custom) && <div className="local-agent-row-aside">
+          {version && <span className="local-agent-version" title={agent.version}>{version}</span>}
+          {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
+        </div>}
+      </article>
+  }
   return <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <aside className="settings-sidebar">
@@ -60,6 +84,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefre
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
         <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Credits')}</span></button>
+        <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -79,22 +104,152 @@ export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefre
           </div></label>
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
-      </> : tab === 'usage' ? <UsageTab refreshToken={creditsRefreshToken} /> : tab === 'agents'  ? <>
+      </> : tab === 'usage' ? <UsageTab refreshToken={creditsRefreshToken} attention={creditsAttention} onCreditsAvailable={onCreditsAvailable} /> : tab === 'automation' ? <AutomationTab
+        routines={routines}
+        runs={runs}
+        agents={workspaceAgents}
+        conversations={conversations}
+        userName={user.name}
+        userAvatar={user.image || ''}
+        onDelete={onDeleteRoutine}
+        onSetEnabled={onSetRoutineEnabled}
+        onRunNow={onRunRoutineNow}
+      /> : tab === 'agents'  ? <>
         <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
+        {customError && <p className="settings-error" role="alert">{t(customError)}</p>}
         <section aria-label={t('Installed agents')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
           {installed.map(row)}
           {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local agents found. Install one in your terminal, then detect again.')}</p>}
         </section>
+        {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
+        {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
       </> : <AboutTab />}
     </main>
     </section>
   </div>
 }
 
-export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): ReactElement {
+function routineScheduleLabel(schedule: RoutineSchedule): string {
+  if (schedule.kind === 'once') {
+    return t('Once')
+  }
+  if (schedule.kind === 'interval') {
+    const minutes = Math.max(1, Math.round(schedule.intervalMinutes))
+    if (minutes % 1440 === 0) return t('Every {count} days').replace('{count}', String(minutes / 1440))
+    if (minutes % 60 === 0) return t('Every {count} hours').replace('{count}', String(minutes / 60))
+    return t('Every {count} minutes').replace('{count}', String(minutes))
+  }
+  const labels = [t('Sun'), t('Mon'), t('Tue'), t('Wed'), t('Thu'), t('Fri'), t('Sat')]
+  const days = [...new Set(schedule.days)].sort().map((day) => labels[day]).join(' · ')
+  return `${days} · ${schedule.time}`
+}
+
+function AutomationTab({ routines, runs, agents, conversations, userName, userAvatar, onDelete, onSetEnabled, onRunNow }: {
+  routines: Routine[]
+  runs: TaskRun[]
+  agents: AgentConfig[]
+  conversations: Conversation[]
+  userName: string
+  userAvatar: string
+  onDelete?: (id: string) => Promise<void>
+  onSetEnabled?: (id: string, enabled: boolean) => Promise<void>
+  onRunNow?: (id: string) => Promise<void>
+}): ReactElement {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const perform = async (key: string, action: () => Promise<void>): Promise<void> => {
+    setBusy(key)
+    setError('')
+    try { await action() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setBusy('') }
+  }
+  const remove = async (routine: Routine): Promise<void> => {
+    if (!onDelete || !window.confirm(t('Delete this automation?'))) return
+    await perform(`delete:${routine.id}`, () => onDelete(routine.id))
+  }
+  const date = (value: number): string => new Intl.DateTimeFormat(document.documentElement.lang || undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(value))
+
+  return <>
+    <header className="settings-heading"><div><h1>{t('Automation')}</h1><p>{t('Scheduled tasks created from your conversations.')}</p></div></header>
+    {error && <p className="settings-error" role="alert">{t(error)}</p>}
+    {!routines.length ? <section className="automation-empty">
+      <CalendarClock size={28} aria-hidden="true" />
+      <strong>{t('No scheduled tasks yet')}</strong>
+      <p>{t('Ask any contact to remind you later or run something on a schedule.')}</p>
+    </section> : <section className="automation-list" aria-label={t('Automation')}>
+      {routines.map((routine) => {
+        const agent = agents.find((item) => item.id === routine.agentId)
+        const conversation = conversations.find((item) => item.id === routine.conversationId)
+        const contactName = conversation
+          ? conversationDisplayName(conversation, agents)
+          : agent
+            ? agentDisplayName(agent)
+            : t('Unknown conversation')
+        const lastRun = runs
+          .filter((run) => run.routineId === routine.id)
+          .sort((left, right) => right.createdAt - left.createdAt)[0]
+        const onceFinished = routine.schedule.kind === 'once' && routine.schedule.runAt <= Date.now()
+        const status = lastRun?.status === 'running'
+          ? t('Running')
+          : routine.enabled && lastRun?.status === 'failed'
+            ? t('Retrying')
+            : routine.enabled
+              ? t('Active')
+              : lastRun?.status === 'failed'
+                ? t('Failed')
+                : onceFinished && lastRun?.status === 'succeeded'
+                  ? t('Completed')
+                  : onceFinished
+                    ? t('Expired')
+                    : t('Paused')
+        return <article className="automation-row" key={routine.id}>
+          <div className="automation-row-copy">
+            <div className="automation-row-title"><strong>{routine.name}</strong><span data-enabled={routine.enabled}>{status}</span></div>
+            <p>{routine.prompt}</p>
+            <div className="automation-row-meta">
+              <span className="automation-row-contact">
+                {conversation
+                  ? <ConversationAvatar conversation={conversation} agents={agents} userName={userName} userAvatar={userAvatar} size={22} />
+                  : agent
+                    ? <AgentAvatar agent={agent} size={22} />
+                    : <EmptyAvatar size={22} />}
+                <span className="automation-row-contact-name">{contactName}</span>
+              </span>
+              <span>{routineScheduleLabel(routine.schedule)}</span>
+              {routine.enabled
+                ? <span>{t('Next run: {time}').replace('{time}', date(routine.nextRunAt))}</span>
+                : routine.lastRunAt
+                  ? <span>{t('Last run: {time}').replace('{time}', date(routine.lastRunAt))}</span>
+                  : null}
+            </div>
+          </div>
+          <div className="automation-row-actions">
+            <button type="button" className="icon-button" disabled={!onRunNow || Boolean(busy)} aria-label={t('Run now')} title={t('Run now')} onClick={() => onRunNow && void perform(`run:${routine.id}`, () => onRunNow(routine.id))}><Play size={16} /></button>
+            <button
+              type="button"
+              className="icon-button"
+              disabled={!onSetEnabled || Boolean(busy) || (!routine.enabled && onceFinished)}
+              aria-label={routine.enabled ? t('Pause') : t('Resume')}
+              title={routine.enabled ? t('Pause') : t('Resume')}
+              onClick={() => onSetEnabled && void perform(`enabled:${routine.id}`, () => onSetEnabled(routine.id, !routine.enabled))}
+            >{routine.enabled ? <Pause size={16} /> : <Play size={16} />}</button>
+            <button type="button" className="icon-button automation-delete" disabled={!onDelete || Boolean(busy)} aria-label={t('Delete')} title={t('Delete')} onClick={() => void remove(routine)}><Trash2 size={16} /></button>
+          </div>
+        </article>
+      })}
+    </section>}
+    <p className="automation-footnote">{t('If Douchat is not running when a task is due, it runs once after the next launch.')}</p>
+  </>
+}
+
+export function UsageTab({ refreshToken = 0, attention = false, onCreditsAvailable }: { refreshToken?: number; attention?: boolean; onCreditsAvailable?: () => void }): ReactElement {
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -103,7 +258,11 @@ export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): React
   const load = async (): Promise<void> => {
     setLoading(true)
     setError('')
-    try { setSummary(await window.douchat.getUsageSummary()) }
+    try {
+      const next = await window.douchat.getUsageSummary()
+      setSummary(next)
+      if (next.credits > 0) onCreditsAvailable?.()
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setLoading(false) }
   }
@@ -119,6 +278,7 @@ export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): React
   }
 
   const credits = summary ? new Intl.NumberFormat(document.documentElement.lang || undefined).format(summary.credits) : '—'
+  const showAttention = attention && (!summary || summary.credits <= 0)
   return <>
     <header className="settings-heading usage-heading">
       <div><h1>{t('Credits')}</h1><p>{t('Manage your Douchat credit balance.')}</p></div>
@@ -126,6 +286,10 @@ export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): React
         <RefreshCw className={loading ? 'spin' : ''} size={15} />{t('Refresh')}
       </button>
     </header>
+    {showAttention && <div className="usage-credit-alert" role="alert">
+      <TriangleAlert size={18} aria-hidden="true" />
+      <div><strong>{t('Not enough Douchat credits')}</strong><span>{t('Top up credits to continue.')}</span></div>
+    </div>}
     <section className="usage-card" aria-label={t('Credits')} aria-busy={loading}>
       <div className="usage-credit-row">
         <span className="usage-credit-icon" aria-hidden="true"><Coins size={23} /></span>
@@ -136,7 +300,7 @@ export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): React
         <button
           className="primary-button usage-top-up-button"
           type="button"
-          disabled={!summary || opening}
+          disabled={opening}
           onClick={() => void openTopUp()}
         >
           <Plus size={16} />{t(opening ? 'Opening…' : 'Top up')}
@@ -235,7 +399,6 @@ function AboutTab(): ReactElement {
         </div>
       </div>
     </section>
-    <p className="settings-note about-note">{t('Updates are downloaded from signed Douchat releases. The app waits for active agent tasks before restarting.')}</p>
   </>
 }
 

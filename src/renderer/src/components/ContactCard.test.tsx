@@ -10,6 +10,7 @@ vi.mock('../preferences', () => ({
 }))
 
 vi.mock('./common', () => ({
+  UserAvatar: ({ name }: { name: string }) => <span data-user-avatar={name} />,
   AgentAvatar: ({ agent }: { agent: AgentConfig }) => <span data-agent-avatar={agent.id} />,
   ConversationAvatar: ({ conversation }: { conversation: Conversation }) => (
     <span data-conversation-avatar={conversation.id} />
@@ -57,6 +58,24 @@ describe('group contact profile', () => {
   afterEach(async () => {
     await act(async () => root.unmount())
     container.remove()
+  })
+
+  it('shows another owner’s agent without editing or direct messaging controls', async () => {
+    await act(async () => root.render(<ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: 'alpha' }} readOnly ownerName="Alice"
+      onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+    expect(container.querySelector('h1')?.textContent).toBe('Alpha')
+    expect(container.textContent).toContain('Owned byAlice')
+    expect(container.querySelector('[aria-label="Agent menu"]')).toBeNull()
+    expect(container.textContent).not.toContain('Send message')
+  })
+
+  it('shows a human group member even without a friendship', async () => {
+    await act(async () => root.render(<ContactCard snapshot={snapshot} selection={{ kind: 'friend', id: 'bob' }}
+      social={{ userId: 'me', friendships: [], rooms: [{ id: 'room', name: 'Team', kind: 'group', agents: [], createdAt: '', members: [{ id: 'bob', name: 'Bob', email: 'bob@test' }] }] }}
+      onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+    expect(container.querySelector('h1')?.textContent).toBe('Bob')
+    expect(container.textContent).toContain('bob@test')
+    expect(container.textContent).not.toContain('Send message')
   })
 
   it('keeps the group page focused on entering the chat', async () => {
@@ -120,4 +139,23 @@ describe('group contact profile', () => {
     await act(async () => container.querySelector<HTMLButtonElement>('.contact-profile-actions button')!.click())
     expect(onStartDirect).toHaveBeenCalledWith(admin.id)
   })
+  it('uses the same profile layout for friend requests and accepted friends', async () => {
+    const respond = vi.fn(async () => {})
+    const message = vi.fn()
+    const relation = { id: 'request', senderId: 'bob', recipientId: 'me', status: 'pending' as const, person: { id: 'bob', name: 'Bob', email: 'bob@example.com' } }
+    const props = { snapshot, selection: { kind: 'friend' as const, id: 'bob' }, onMessage: vi.fn(), onStartDirect: vi.fn(), onEditBot: vi.fn(), onDeleteBot: vi.fn(), onTogglePin: vi.fn(), onFriendMessage: message, onRespondRequest: respond }
+    await act(async () => root.render(<ContactCard {...props} social={{ userId: 'me', rooms: [], friendships: [relation] }} />))
+    expect(container.querySelector('.contact-profile-sheet')).not.toBeNull()
+    expect(container.textContent).toContain('bob@example.com')
+    expect(container.querySelector('.profile-edit')).toBeNull()
+    const accept = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Accept request')!
+    await act(async () => accept.click())
+    expect(respond).toHaveBeenCalledWith('request', true)
+    await act(async () => root.render(<ContactCard {...props} social={{ userId: 'me', rooms: [], friendships: [{ ...relation, status: 'accepted' }] }} />))
+    const send = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Send message')!
+    await act(async () => send.click())
+    expect(message).toHaveBeenCalledWith('bob')
+    expect(container.textContent).not.toContain('Accept request')
+  })
+
 })

@@ -1,3 +1,4 @@
+import { ContactKindBadge } from './ContactKindBadge'
 import { t, tr } from '../preferences'
 import {
   BellOff,
@@ -14,7 +15,7 @@ import type { ReactElement } from 'react'
 import type { AppSnapshot, ChatMessage, Conversation } from '../../../shared/types'
 import { latestAssistantPreview } from '../../../shared/bot/preview'
 import { compareConversationActivity, compareConversationOrganization } from '../../../shared/bot/order'
-import { ConversationAvatar, SidebarResizer, conversationDisplayName, formatTime, relativeTime } from './common'
+import { UserAvatar, ConversationAvatar, SidebarResizer, conversationDisplayName, formatTime, relativeTime } from './common'
 
 interface ContextMenuState {
   id: string
@@ -123,6 +124,7 @@ export function BotInbox({
   const menuTarget = snapshot.conversations.find((conversation) => conversation.id === contextMenu?.id)
 
   const row = (conversation: Conversation): ReactElement => {
+    const person = conversation.person
     const displayName = conversationDisplayName(conversation, snapshot.agents)
     const messages = messagesByConversation.get(conversation.id) ?? []
     const working = workingIds.has(conversation.id)
@@ -136,7 +138,7 @@ export function BotInbox({
       }))
     )
     const last = messages[messages.length - 1]
-    const previewText = last?.authorId === 'user'
+    const previewText = last?.attachments?.length && !last.text ? t('Image') : person ? last?.text || t('Start a conversation') : last?.authorId === 'user'
         ? tr('You: {message}', { message: last.text })
         : preview
           ? conversation.type === 'group'
@@ -159,7 +161,7 @@ export function BotInbox({
         }}
       >
         <span className="conversation-avatar">
-          <ConversationAvatar conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} />
+          <>{person ? <UserAvatar name={person.name} src={person.image || ''} size={36} /> : <ConversationAvatar conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} />}</>
           {!working && conversation.unread > 0 && <span className={`unread-badge ${conversation.muted ? 'muted' : ''}`}>{conversation.unread > 99 ? '99+' : conversation.unread}</span>}
           {working && <span className="conversation-loading" role="status" aria-label={t('Working…')}><LoaderCircle size={13} /></span>}
         </span>
@@ -167,6 +169,7 @@ export function BotInbox({
           <span className="conversation-line">
             <strong>
               {displayName || 'New chat'}
+              <ContactKindBadge human={Boolean(person)} local={conversation.type === 'direct' && Boolean(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId)} />
               {conversation.pinned && <Pin size={11} className="pin-mark" />}
             </strong>
             <time>{new Date(lastMessageAt(conversation)).toDateString() === new Date(now).toDateString() ? formatTime(lastMessageAt(conversation)) : relativeTime(lastMessageAt(conversation), now)}</time>
@@ -229,7 +232,7 @@ export function BotInbox({
           <div className="dropdown-separator" />
           <button role="menuitem" onClick={() => { setContextMenu(null); onOpenWindow(menuTarget) }}>{t('Open in separate window')}</button>
           <button role="menuitem" onClick={() => { setContextMenu(null); onUpdate(menuTarget, { hidden: true }) }}>{t('Hide chat')}</button>
-          <button role="menuitem" onClick={() => { setContextMenu(null); onEdit(menuTarget) }}>{t('Edit')}</button>
+          <button role="menuitem" onClick={() => { setContextMenu(null); onEdit(menuTarget) }}>{t(menuTarget.person ? 'Contact details' : 'Edit')}</button>
           <div className="dropdown-separator" />
           <button role="menuitem" className="danger" onClick={() => { setContextMenu(null); onDelete(menuTarget) }}>{t('Delete')}</button>
         </div>

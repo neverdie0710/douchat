@@ -1,6 +1,9 @@
+import type { SocialSnapshot } from '../../shared/social'
+import { AddFriendModal } from './components/AddFriendModal'
+import { SocialWorkspace } from './components/SocialWorkspace'
 import { X } from 'lucide-react'
 import { resolveInterfaceLanguage, t, tr, usePreferences } from './preferences'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -17,8 +20,9 @@ import { SettingsPanel, type SettingsTab } from './components/SettingsPanel'
 import { AppRail, type AppView } from './components/AppRail'
 import { BotInbox } from './components/BotInbox'
 import { MemberProfilePopover, type ProfileAnchor } from './components/MemberProfilePopover'
-import { ContactCard } from './components/ContactCard'
+import { ContactCard, SelfProfileCard } from './components/ContactCard'
 import { ContactList, type ContactSelection } from './components/ContactList'
+import { isDouchatCreditError } from '../../shared/bot/errors'
 import { ChatPane } from './components/ChatPane'
 import { InspectorRail } from './components/InspectorRail'
 import { AddMembersModal, BotModal, EndpointModal, GroupModal } from './components/dialogs'
@@ -29,10 +33,13 @@ import { isImeCommitEnter } from './ime'
 import { withAccountIdentity } from './accountIdentity'
 
 type Dialog =
+  | { kind: 'self-profile'; anchor: ProfileAnchor }
+  | { kind: 'add-friend' }
+  | { kind: 'friend-profile'; personId: string; anchor: ProfileAnchor }
   | { kind: 'member-profile'; agentId: string; anchor: ProfileAnchor }
   | { kind: 'bot'; agent?: AgentConfig; localAgentId?: string }
   | { kind: 'add-members' | 'remove-members'; conversation: Conversation }
-  | { kind: 'group'; conversation?: Conversation; initialAgentIds?: string[] }
+  | { kind: 'group'; conversation?: Conversation; initialAgentIds?: string[]; initialFriendIds?: string[] }
   | { kind: 'endpoint' }
   | null
 
@@ -52,11 +59,21 @@ function WorkspaceApp(): ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile')
   const [creditsRefreshToken, setCreditsRefreshToken] = useState(0)
+  const [creditsAttention, setCreditsAttention] = useState(false)
+  const knownCreditErrors = useRef<Set<string> | null>(null)
+  const [socialSnapshot, setSocialSnapshot] = useState<SocialSnapshot>()
+  const [socialError, setSocialError] = useState('')
   const [contact, setContact] = useState<ContactSelection>()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [showInspector, setShowInspector] = useState(false)
   const [inspectorAgentId, setInspectorAgentId] = useState<string>()
   const interfaceLanguage = resolveInterfaceLanguage(preferences.language)
+  const openCreditRecovery = useCallback(() => {
+    setSettingsTab('usage')
+    setSettingsOpen(true)
+    setCreditsAttention(true)
+    setCreditsRefreshToken((value) => value + 1)
+  }, [])
   useEffect(() => {
     void window.douchat.setInterfaceLanguage(interfaceLanguage)
   }, [interfaceLanguage])
@@ -81,8 +98,8 @@ function WorkspaceApp(): ReactElement {
     finally { setScanning(false) }
   }
   useEffect(() => {
-    if (authState.status === 'signed-in') void scanAgents()
-  }, [authState.status])
+    void scanAgents()
+  }, [])
 
   useEffect(() => {
     void window.douchat.getAuthState().then(setAuthState)
@@ -95,6 +112,7 @@ function WorkspaceApp(): ReactElement {
         if (!shouldRefresh) return
         setSettingsTab('usage')
         setSettingsOpen(true)
+        setCreditsAttention(false)
         setCreditsRefreshToken((value) => value + 1)
       }).catch(() => {
         // A malformed or stale callback should not interrupt the workspace.
@@ -104,6 +122,21 @@ function WorkspaceApp(): ReactElement {
     consumeCreditsReturn()
     return unsubscribe
   }, [])
+
+  useEffect(() => {
+    if (!snapshot) {
+      knownCreditErrors.current = null
+      return
+    }
+    const next = new Set(snapshot.messages
+      .filter((message) => message.kind === 'system' && isDouchatCreditError(`${message.text}\n${message.detail ?? ''}`))
+      .map((message) => message.id))
+    const previous = knownCreditErrors.current
+    knownCreditErrors.current = next
+    // The first snapshot is history. Only a newly delivered failure should
+    // interrupt the workspace with the recovery panel.
+    if (previous && [...next].some((id) => !previous.has(id))) openCreditRecovery()
+  }, [snapshot, openCreditRecovery])
 
   useEffect(() => {
     if (authState.status !== 'signed-in') return
@@ -140,6 +173,27 @@ function WorkspaceApp(): ReactElement {
     }
   }, [snapshot, activeId])
 
+  useEffect(() => {
+    setSocialSnapshot(undefined)
+    setSocialError('')
+    if (authState.status !== 'signed-in') return
+    const userId = authState.user.id
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    const refresh = async () => {
+      try {
+        const next = await window.douchat.getSocialSnapshot()
+        if (active && next.userId === userId) {
+          setSocialSnapshot(next); setSocialError('')
+
+        }
+      } catch (error) { if (active) setSocialError(error instanceof Error ? error.message : String(error)) }
+      finally { if (active) timer = setTimeout(refresh, 3000) }
+    }
+    void refresh()
+    return () => { active = false; clearTimeout(timer) }
+  }, [authState.status === 'signed-in' ? authState.user.id : ''])
+
   // A newly signed-in account lands directly in its Dr. Dou welcome chat.
   // Detached chat windows keep the explicit conversation from their URL.
   useEffect(() => {
@@ -150,7 +204,7 @@ function WorkspaceApp(): ReactElement {
   }, [detachedId, authState.status === 'signed-in' ? authState.user.id : '', snapshot?.defaultConversationId])
 
   useEffect(() => {
-    if (!snapshot || !contact) return
+    if (!snapshot || !contact || !['bot', 'group'].includes(contact.kind)) return
     const exists =
       contact.kind === 'bot'
         ? snapshot.agents.some((agent) => agent.id === contact.id)
@@ -275,14 +329,23 @@ function WorkspaceApp(): ReactElement {
       .catch((error) => fail(error, 'Chat could not be deleted'))
   }
 
+  async function openFriendChat(id: string): Promise<void> {
+    try {
+      const result = await window.douchat.socialAction({ action: 'create-room', kind: 'direct', friendIds: [id] })
+      if (!result.conversationId) throw new Error('Chat could not be synchronized')
+      await openChat(result.conversationId)
+    } catch (error) { fail(error, 'Chat could not be opened') }
+  }
+
   async function openChat(conversationId: string): Promise<void> {
-    setView('chats')
     try {
       await window.douchat.updateConversation(conversationId, { hidden: false })
       const next = await window.douchat.markConversationRead(conversationId)
+      if (!next.conversations.some((item) => item.id === conversationId)) throw new Error('Chat not found')
       setSnapshot(next)
       setActiveId(conversationId)
       setShowInspector(false)
+      setView('chats')
     } catch (error) {
       fail(error, 'Chat could not be opened')
       throw error
@@ -294,6 +357,10 @@ function WorkspaceApp(): ReactElement {
   }
 
   function editConversation(target: Conversation): void {
+    if (target.person) {
+      setDialog({ kind: 'friend-profile', personId: target.person.id, anchor: { left: 300, right: 320, top: 100 } })
+      return
+    }
     if (target.type === 'group') setDialog({ kind: 'group', conversation: target })
     else {
       const agent = snapshot?.agents.find((item) => item.id === target.agentIds[0])
@@ -344,6 +411,7 @@ function WorkspaceApp(): ReactElement {
       <AppRail
         view={view}
         unread={totalUnread}
+        friendRequests={socialSnapshot?.userId === authState.user.id ? socialSnapshot.friendships.filter((item) => item.status === 'pending' && item.recipientId === authState.user.id).length : 0}
         userName={authState.user.name}
         userAvatar={authState.user.image || ''}
         settingsOpen={settingsOpen}
@@ -362,17 +430,34 @@ function WorkspaceApp(): ReactElement {
           <ContactList
             snapshot={uiSnapshot}
             selected={contact}
+            social={socialSnapshot}
+            socialError={socialError}
             onSelect={setContact}
           />
-          <ContactCard
+          {contact && !['bot', 'group', 'friend'].includes(contact.kind) ? <SocialWorkspace
+            key={`${authState.user.id}:${contact.kind}:${contact.id}`} embedded
+            agents={snapshot.agents} userId={authState.user.id}
+            onOpenDirectChat={(id) => void openChat(id)}
+            friendId={contact.kind === 'friend-chat' ? contact.id : undefined}
+            roomId={contact.kind === 'social-group' ? contact.id : undefined}
+            showRequests={contact.kind === 'friend-requests'} startGroup={contact.kind === 'new-social-group'}
+            onRoomCreated={(id) => setContact({ kind: 'social-group', id })}
+            onAddFriend={() => setDialog({ kind: 'add-friend' })}
+          /> : <ContactCard
+            social={socialSnapshot}
+            onFriendMessage={(id) => void openFriendChat(id)}
+            onRespondRequest={async (id, accept) => {
+              await window.douchat.socialAction({ action: 'respond', id, accept })
+              setSocialSnapshot(await window.douchat.getSocialSnapshot())
+            }}
             snapshot={uiSnapshot}
             selection={contact}
             onMessage={openChat}
             onStartDirect={(agentId) => { void startDirectChat(agentId) }}
             onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
-            onDeleteBot={deleteAgent}
+            onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
             onTogglePin={togglePin}
-          />
+          />}
         </>
       ) : (
         <>
@@ -393,17 +478,19 @@ function WorkspaceApp(): ReactElement {
       />
 
       <div className="chat-stage">
-      <ChatPane key={`${activeId}:${topic?.id}`}
+      <ChatPane person={conversation?.person}
+        onOpenPersonProfile={(anchor) => conversation?.person && setDialog({ kind: 'friend-profile', personId: conversation.person.id, anchor })}
+        key={`${activeId}:${topic?.id}`}
         userName={authState.user.name}
         userAvatar={authState.user.image || ''}
         conversation={conversation}
         topic={topic}
         messages={messages}
         allMessages={snapshot.messages}
-        agents={snapshot.agents}
+        agents={[...snapshot.agents, ...members]}
         members={members}
         activity={activity}
-        offline={snapshot.runtime.mode === 'offline' && !members.some((agent) => agent.localAgentId)}
+        offline={!conversation?.remoteRoomId && snapshot.runtime.mode === 'offline' && !members.some((agent) => agent.localAgentId)}
         onConnect={() => {
           const agent = members.find((member) => member.id === conversation?.leadAgentId) ?? members[0]
           setDialog(agent ? { kind: 'bot', agent } : { kind: 'endpoint' })
@@ -412,54 +499,64 @@ function WorkspaceApp(): ReactElement {
         onToggleInspector={() => setShowInspector((value) => !value)}
         onOpenAgentProfile={(agentId, anchor) => {
           setInspectorAgentId(agentId)
-          setDialog({ kind: 'member-profile', agentId, anchor })
+          setDialog({ kind: 'member-profile', agentId: conversation?.socialRoom?.agents.find((member) => member.id === agentId && member.ownerId === conversation.ownerId)?.localId ?? agentId, anchor })
         }}
-        onOpenUserProfile={() => {
-          setDialog(null)
-          setSettingsTab('profile')
-          setSettingsOpen(true)
-        }}
+        onOpenUserProfile={(anchor) => setDialog({ kind: 'self-profile', anchor })}
+        onOpenCredits={openCreditRecovery}
         onSend={send}
         onStop={() => conversation && void window.douchat.stopConversation(conversation.id)}
       />
 
       <div className={`chat-details-layer ${showInspector && conversation ? 'is-open' : ''}`} inert={!showInspector || !conversation} aria-hidden={!showInspector || !conversation}>
         <button className="chat-details-dismiss" onClick={() => setShowInspector(false)} aria-label={t('Close chat details')} tabIndex={-1} />
-        <InspectorRail
-          snapshot={uiSnapshot}
+        <InspectorRail person={conversation?.person}
+          onSelectPerson={(anchor, personId) => { const id = personId ?? conversation?.person?.id; if (id) setDialog({ kind: 'friend-profile', personId: id, anchor }) }}
+          snapshot={{ ...uiSnapshot, agents: [...uiSnapshot.agents, ...members] }}
           conversation={conversation}
           members={members}
           selectedAgentId={inspectorAgentId}
-          onSelectAgent={(agentId, anchor) => { setInspectorAgentId(agentId); setDialog({ kind: 'member-profile', agentId, anchor }) }}
-          onSelectUser={() => {
-            setDialog(null)
-            setSettingsTab('profile')
-            setSettingsOpen(true)
-          }}
+          onSelectAgent={(agentId, anchor) => { setInspectorAgentId(agentId); setDialog({ kind: 'member-profile', agentId: conversation?.socialRoom?.agents.find((member) => member.id === agentId && member.ownerId === conversation.ownerId)?.localId ?? agentId, anchor }) }}
+          onSelectUser={(anchor) => setDialog({ kind: 'self-profile', anchor })}
           onRemoveMembers={() => conversation && setDialog({ kind: 'remove-members', conversation })}
-          onAddMembers={() => conversation && (conversation.type === 'group' ? setDialog({ kind: 'add-members', conversation }) : setDialog({ kind: 'group', initialAgentIds: conversation.agentIds }))}
+          onAddMembers={() => conversation?.person ? setDialog({ kind: 'group', initialFriendIds: [conversation.person.id] }) : conversation && (conversation.type === 'group' ? setDialog({ kind: 'add-members', conversation }) : setDialog({ kind: 'group', initialAgentIds: conversation.agentIds }))}
+          onDeleteRoutine={async (routineId) => setSnapshot(await window.douchat.deleteRoutine(routineId))}
+          onSetRoutineEnabled={async (routineId, enabled) => setSnapshot(await window.douchat.setRoutineEnabled(routineId, enabled))}
+          onRunRoutineNow={(routineId) => window.douchat.runRoutineNow(routineId)}
         />
       </div>
       </div>
         </>
       )}
 
+      {dialog?.kind === 'self-profile' && <MemberProfilePopover anchor={dialog.anchor} onClose={() => setDialog(null)}>
+        <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
+        <SelfProfileCard name={authState.user.name} email={authState.user.email} avatar={authState.user.image || ''} onEdit={() => { setDialog(null); setSettingsTab('profile'); setSettingsOpen(true) }} />
+      </MemberProfilePopover>}
+      {dialog?.kind === 'friend-profile' && <MemberProfilePopover anchor={dialog.anchor} onClose={() => setDialog(null)}>
+        <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
+        <ContactCard social={socialSnapshot} snapshot={uiSnapshot} selection={{ kind: 'friend', id: dialog.personId }}
+          onFriendMessage={(id) => { setDialog(null); void openFriendChat(id) }}
+          onMessage={openChat} onStartDirect={(id) => void startDirectChat(id)} onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+          onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent} onTogglePin={togglePin} />
+      </MemberProfilePopover>}
       {dialog?.kind === 'member-profile' && (
         <MemberProfilePopover anchor={dialog.anchor} onClose={() => setDialog(null)}>
             <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
-            <ContactCard snapshot={uiSnapshot} selection={{ kind: 'bot', id: dialog.agentId }}
+            <ContactCard snapshot={{ ...uiSnapshot, agents: [...uiSnapshot.agents, ...members.filter((member) => !uiSnapshot.agents.some((agent) => agent.id === member.id))] }} ownerName={conversation?.socialRoom?.members.find((person) => person.id === members.find((agent) => agent.id === dialog.agentId)?.ownerId)?.name} readOnly={!uiSnapshot.agents.some((agent) => agent.id === dialog.agentId)} selection={{ kind: 'bot', id: dialog.agentId }}
               onMessage={(id) => { setDialog(null); openChat(id) }}
               onStartDirect={(agentId) => { setDialog(null); void startDirectChat(agentId) }}
               onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
-              onDeleteBot={deleteAgent}
+              onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
               onTogglePin={togglePin} />
         </MemberProfilePopover>
       )}
+      {dialog?.kind === 'add-friend' && <AddFriendModal onClose={() => setDialog(null)} />}
       {dialog?.kind === 'bot' && (
         <BotModal
           agent={dialog.agent}
           localAgents={localAgents}
           initialLocalAgentId={dialog.localAgentId}
+          onAddFriend={() => setDialog({ kind: 'add-friend' })}
           onSettings={() => { setDialog(null); setSettingsOpen(true) }}
           onClose={() => setDialog(null)}
           onCreate={createAgent}
@@ -467,13 +564,44 @@ function WorkspaceApp(): ReactElement {
         />
       )}
       {(dialog?.kind === 'add-members' || dialog?.kind === 'remove-members') && (
-        <AddMembersModal remove={dialog.kind === 'remove-members'} snapshot={uiSnapshot} conversation={dialog.conversation} onClose={() => setDialog(null)} onUpdate={updateGroup} />
+        <AddMembersModal social={socialSnapshot}
+          onRemoveContacts={dialog.conversation.remoteRoomId ? async (friendIds, agentIds) => {
+            await window.douchat.socialAction({ action: 'remove-members', roomId: dialog.conversation.remoteRoomId!, friendIds, agentIds })
+            setSnapshot(await window.douchat.getSnapshot())
+            setSocialSnapshot(await window.douchat.getSocialSnapshot())
+          } : undefined}
+          onAddContacts={async (friendIds, agentIds) => {
+            if (friendIds.length || dialog.conversation.remoteRoomId) {
+              await window.douchat.socialAction({ action: 'invite-members', conversationId: dialog.conversation.id, friendIds, agentIds })
+              setSnapshot(await window.douchat.getSnapshot())
+              setSocialSnapshot(await window.douchat.getSocialSnapshot())
+            } else await updateGroup(dialog.conversation.id, {
+              name: dialog.conversation.name, description: dialog.conversation.description || '',
+              agentIds: [...new Set([...dialog.conversation.agentIds, ...agentIds])], leadAgentId: dialog.conversation.leadAgentId || dialog.conversation.agentIds[0]
+            })
+          }}
+          remove={dialog.kind === 'remove-members'} snapshot={uiSnapshot} conversation={dialog.conversation} onClose={() => setDialog(null)} onUpdate={updateGroup} />
       )}
       {dialog?.kind === 'group' && (
         <GroupModal
           snapshot={uiSnapshot}
+          social={socialSnapshot}
+          onStartFriend={openFriendChat}
           conversation={dialog.conversation}
           initialAgentIds={dialog.initialAgentIds}
+          initialFriendIds={dialog.initialFriendIds}
+          onCreateSocialGroup={async (friendIds, agentIds, memberOrder = []) => {
+            const people = socialSnapshot?.friendships.filter((friend) => friendIds.includes(friend.person.id)).map((friend) => friend.person.name) ?? []
+            const agentNames = snapshot.agents.filter((agent) => agentIds.includes(agent.id)).map(agentDisplayName)
+            const result = await window.douchat.socialAction({ action: 'create-room', kind: 'group', name: [...agentNames, ...people].join('、'), friendIds, memberOrder })
+            if (!result.roomId) throw new Error('Chat could not be created')
+            for (const localId of agentIds) await window.douchat.socialAction({ action: 'add-agent', roomId: result.roomId, localId, order: memberOrder.indexOf(`agent:${localId}`) + 1 })
+            setSocialSnapshot(await window.douchat.getSocialSnapshot())
+            const next = await window.douchat.getSnapshot()
+            setSnapshot(next)
+            const created = next.conversations.find((conversation) => conversation.remoteRoomId === result.roomId)
+            if (created) await openChat(created.id)
+          }}
           onClose={() => setDialog(null)}
           onCreate={createGroup}
           onStartDirect={startDirectChat}
@@ -499,10 +627,16 @@ function WorkspaceApp(): ReactElement {
         <SettingsPanel
           user={authState.user}
           agents={localAgents}
+          routines={snapshot.routines}
+          runs={snapshot.runs}
+          workspaceAgents={snapshot.agents}
+          conversations={snapshot.conversations}
           scanning={scanning}
           error={scanError}
           tab={settingsTab}
           creditsRefreshToken={creditsRefreshToken}
+          creditsAttention={creditsAttention}
+          onCreditsAvailable={() => setCreditsAttention(false)}
           onTab={setSettingsTab}
           onClose={() => setSettingsOpen(false)}
           onSignOut={async () => {
@@ -516,6 +650,10 @@ function WorkspaceApp(): ReactElement {
             if (next.status !== 'signed-in') setSettingsOpen(false)
           }}
           onDetect={() => void scanAgents()}
+          onRemoveCustom={async (id) => setLocalAgents(await window.douchat.removeCustomLocalAgent(id))}
+          onDeleteRoutine={async (id) => setSnapshot(await window.douchat.deleteRoutine(id))}
+          onSetRoutineEnabled={async (id, enabled) => setSnapshot(await window.douchat.setRoutineEnabled(id, enabled))}
+          onRunRoutineNow={(id) => window.douchat.runRoutineNow(id)}
         />
       )}
       {toast && <div className="toast">{toast}</div>}

@@ -1,6 +1,7 @@
+import type { SocialRoom, SocialMessage } from '../shared/social'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type {
@@ -37,7 +38,9 @@ const RUN_EVENT_LIMIT = 600
 const ACCOUNT_DEFAULT_CONTACTS_META = 'accountDefaultContacts:v1'
 const BUILT_IN_MANIFEST_META_PREFIX = 'builtInAgentManifest:v1:'
 const CURRENT_ACCOUNT_META = 'currentAccountId'
-const CONNECTORS_META = 'connectors:v1'
+const DEMO_ACCOUNT_ID = 'local-demo-account'
+const LEGACY_CONNECTORS_META = 'connectors:v1'
+const ACCOUNT_META_PREFIX = 'account:v1:'
 const LEGACY_DEMO_REMOVED_META = 'legacyDemoRemoved:v1'
 const ATTACHMENT_ID = /^[0-9a-f-]{36}$/i
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -179,6 +182,11 @@ CREATE TABLE IF NOT EXISTS runEvents (
   data      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON runEvents (runId);
+
+CREATE TABLE IF NOT EXISTS attachmentOwners (
+  id      TEXT PRIMARY KEY,
+  ownerId TEXT NOT NULL
+);
 `
 
 function newTopic(title = '', at = Date.now()): Topic {
@@ -235,8 +243,12 @@ export class DouchatStore {
     if (!options.seedDemo) this.removeUnusedLegacyDemo()
     this.backfillSystemAdminRoles()
     this.backfillAgentAvatarSeeds()
+    this.backfillAccountOwnership()
+    this.migrateAccountSensitiveMeta()
+    this.backfillAttachmentOwnership()
     this.backfillMessageSourceContent()
     this.backfillDeliveryReplies()
+    this.recoverInterruptedRuns()
   }
 
   static atUserData(userDataPath: string): DouchatStore {
@@ -247,24 +259,61 @@ export class DouchatStore {
     this.db.close()
   }
 
+  /** A process exit cannot leave work permanently looking active. Scheduled
+   * one-time work is made eligible for one delayed retry on the next launch. */
+  private recoverInterruptedRuns(): void {
+    const interrupted = this.runs.filter((run) => run.status === 'queued' || run.status === 'running')
+    if (!interrupted.length) return
+    const now = Date.now()
+    for (const run of interrupted) {
+      const title = 'Douchat restarted before this task finished'
+      this.updateRun(run.id, {
+        status: 'failed',
+        latestActivity: 'Interrupted',
+        error: title,
+        finishedAt: now
+      })
+      this.addRunEvent({ runId: run.id, type: 'status', label: title, status: 'failed', createdAt: now })
+      if (!run.routineId) continue
+      const routine = this.routine(run.routineId)
+      if (routine?.schedule.kind === 'once' && !routine.enabled) {
+        this.setRoutineEnabled(routine.id, true, now + 60_000)
+      }
+    }
+  }
+
   async saveImageAttachment(input: {
     name: string
     mimeType: MessageAttachment['mimeType']
     data: Uint8Array
-  }): Promise<MessageAttachment> {
+  }, expectedOwnerId?: string): Promise<MessageAttachment> {
+    const ownerId = expectedOwnerId ?? this.currentAccountId
+    if (!ownerId || ownerId !== this.currentAccountId) throw new Error('Account changed while saving the attachment')
     if (!IMAGE_EXTENSION[input.mimeType]) throw new Error('Unsupported image format')
     if (!input.data.byteLength || input.data.byteLength > MAX_IMAGE_BYTES) throw new Error('Each image must be 8 MB or smaller.')
     const id = randomUUID()
     const extension = IMAGE_EXTENSION[input.mimeType]
-    await writeFile(join(this.attachmentDirectory, `${id}.${extension}`), input.data, { flag: 'wx' })
+    const path = join(this.attachmentDirectory, `${id}.${extension}`)
+    await writeFile(path, input.data, { flag: 'wx' })
+    try {
+      if (ownerId !== this.currentAccountId) throw new Error('Account changed while saving the attachment')
+      this.write('INSERT INTO attachmentOwners (id, ownerId) VALUES (?, ?)', id, ownerId)
+    } catch (cause) {
+      await unlink(path).catch(() => undefined)
+      throw cause
+    }
     return { id, kind: 'image', name: input.name, mimeType: input.mimeType, size: input.data.byteLength }
   }
 
   async attachmentDataUrl(id: string): Promise<string> {
     if (!ATTACHMENT_ID.test(id)) throw new Error('Invalid attachment id')
+    const owner = this.stmt('SELECT ownerId FROM attachmentOwners WHERE id = ?').get(id) as { ownerId: string } | undefined
+    const accountId = this.currentAccountId
+    if (!accountId || owner?.ownerId !== accountId) throw new Error('Attachment not found')
     for (const [mimeType, extension] of Object.entries(IMAGE_EXTENSION) as [MessageAttachment['mimeType'], string][]) {
       try {
         const data = await readFile(join(this.attachmentDirectory, `${id}.${extension}`))
+        if (this.currentAccountId !== accountId) throw new Error('Attachment not found')
         return `data:${mimeType};base64,${data.toString('base64')}`
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause
@@ -487,7 +536,7 @@ export class DouchatStore {
         this.setMeta(LEGACY_DEMO_REMOVED_META, '1')
         return
       }
-      const agents = defaultAgents()
+      const agents = defaultAgents().map((agent) => ({ ...agent, ownerId: DEMO_ACCOUNT_ID }))
       const now = Date.now()
       const groupTopic = newTopic('', now)
       const dobiTopic = newTopic('', now)
@@ -495,6 +544,7 @@ export class DouchatStore {
       for (const agent of agents) this.putAgent(agent)
 
       this.putConversation({
+        ownerId: DEMO_ACCOUNT_ID,
         id: 'crew',
         type: 'group',
         name: 'Dobi, Lin',
@@ -509,6 +559,7 @@ export class DouchatStore {
         updatedAt: now
       })
       this.putConversation({
+        ownerId: DEMO_ACCOUNT_ID,
         id: 'direct-dobi',
         type: 'direct',
         name: 'Dobi',
@@ -521,6 +572,7 @@ export class DouchatStore {
         updatedAt: now - 120_000
       })
       this.putConversation({
+        ownerId: DEMO_ACCOUNT_ID,
         id: 'direct-lin',
         type: 'direct',
         name: 'Lin',
@@ -556,6 +608,7 @@ export class DouchatStore {
 
       this.setMeta('seeded', '1')
       this.setMeta('userName', 'You')
+      this.setMeta(CURRENT_ACCOUNT_META, DEMO_ACCOUNT_ID)
     })
   }
 
@@ -688,6 +741,207 @@ export class DouchatStore {
     })
   }
 
+  /** Older releases stored every account in one device-wide workspace without
+   * ownership fields. Recover deterministic ownership from the account's
+   * system contact first, then from group membership and creation order. Data
+   * that still cannot be attributed stays unowned and is hidden from every
+   * signed-in account instead of leaking to whichever account logs in next. */
+  private backfillAccountOwnership(): void {
+    const agents = this.agents
+    const conversations = this.conversations
+    const routines = this.routines
+    const runs = this.runs
+    const agentsById = new Map(agents.map((agent) => [agent.id, agent]))
+    const changedAgents = new Set<AgentConfig>()
+    const accountAnchors = this.accountDefaultContacts().flatMap((record) => {
+      const agent = agentsById.get(record.agentId)
+      if (!agent) return []
+      if (agent.ownerId !== record.accountId) {
+        agent.ownerId = record.accountId
+        changedAgents.add(agent)
+      }
+      return [{ accountId: record.accountId, createdAt: agent.createdAt, agentId: agent.id }]
+    }).sort((left, right) => left.createdAt - right.createdAt)
+
+    for (const agent of agents) {
+      if (agent.ownerId) continue
+      const groupOwners = new Set(conversations
+        .filter((conversation) => conversation.type === 'group' && conversation.agentIds.includes(agent.id))
+        .flatMap((conversation) => conversation.agentIds)
+        .map((agentId) => agentsById.get(agentId)?.ownerId)
+        .filter((ownerId): ownerId is string => Boolean(ownerId)))
+      const groupedOwner = groupOwners.size === 1 ? [...groupOwners][0] : undefined
+      const temporalOwner = [...accountAnchors]
+        .reverse()
+        .find((anchor) => anchor.createdAt <= agent.createdAt)?.accountId
+        ?? (accountAnchors.length === 1 ? accountAnchors[0].accountId : undefined)
+      const ownerId = groupedOwner ?? temporalOwner
+      if (!ownerId) continue
+      agent.ownerId = ownerId
+      changedAgents.add(agent)
+    }
+
+    const changedConversations: Conversation[] = []
+    for (const conversation of conversations) {
+      if (conversation.ownerId) continue
+      const owners = new Set(conversation.agentIds
+        .map((agentId) => agentsById.get(agentId)?.ownerId)
+        .filter((ownerId): ownerId is string => Boolean(ownerId)))
+      if (owners.size !== 1) continue
+      conversation.ownerId = [...owners][0]
+      changedConversations.push(conversation)
+    }
+
+    const conversationsById = new Map(conversations.map((conversation) => [conversation.id, conversation]))
+    const changedRoutines: Routine[] = []
+    for (const routine of routines) {
+      if (routine.ownerId) continue
+      const ownerId = agentsById.get(routine.agentId)?.ownerId
+        ?? conversationsById.get(routine.conversationId)?.ownerId
+      if (!ownerId) continue
+      routine.ownerId = ownerId
+      changedRoutines.push(routine)
+    }
+
+    const routinesById = new Map(routines.map((routine) => [routine.id, routine]))
+    const changedRuns: TaskRun[] = []
+    for (const run of runs) {
+      if (run.ownerId) continue
+      const ownerId = (run.routineId ? routinesById.get(run.routineId)?.ownerId : undefined)
+        ?? agentsById.get(run.agentId)?.ownerId
+        ?? conversationsById.get(run.conversationId)?.ownerId
+      if (!ownerId) continue
+      run.ownerId = ownerId
+      changedRuns.push(run)
+    }
+
+    if (!changedAgents.size && !changedConversations.length && !changedRoutines.length && !changedRuns.length) return
+    this.tx(() => {
+      for (const agent of changedAgents) this.putAgent(agent)
+      for (const conversation of changedConversations) this.putConversation(conversation)
+      for (const routine of changedRoutines) this.putRoutine(routine)
+      for (const run of changedRuns) this.putRun(run)
+    })
+  }
+
+  private accountMetaKey(key: string, accountId = this.currentAccountId): string {
+    return accountId ? `${ACCOUNT_META_PREFIX}${accountId}:${key}` : ''
+  }
+
+  private accountMeta(key: string, accountId = this.currentAccountId): string {
+    const scopedKey = this.accountMetaKey(key, accountId)
+    return scopedKey ? this.meta(scopedKey) : ''
+  }
+
+  private setAccountMeta(key: string, value: string, accountId = this.currentAccountId): void {
+    const scopedKey = this.accountMetaKey(key, accountId)
+    if (!scopedKey) throw new Error('Sign in before changing account data')
+    this.setMeta(scopedKey, value)
+  }
+
+  /** Move settings written by pre-isolation releases into account namespaces.
+   * Connector ownership can usually be recovered from its authorized agents.
+   * Ambiguous profile/endpoint values migrate only when exactly one account is
+   * known; with multiple accounts they remain quarantined and unreadable. */
+  private migrateAccountSensitiveMeta(fallbackAccountId = this.meta(CURRENT_ACCOUNT_META)): void {
+    const knownAccountIds = [...new Set(this.accountDefaultContacts().map((record) => record.accountId))]
+    const unambiguousFallback = knownAccountIds.length <= 1 ? fallbackAccountId : ''
+    const migrateValue = (legacyKey: string, accountKey: string): void => {
+      const value = this.meta(legacyKey)
+      if (!value || !unambiguousFallback) return
+      if (!this.accountMeta(accountKey, unambiguousFallback)) this.setAccountMeta(accountKey, value, unambiguousFallback)
+      this.setMeta(legacyKey, '')
+    }
+    migrateValue('userName', 'userName')
+    migrateValue('userAvatar', 'userAvatar')
+    migrateValue('endpoint', 'endpoint')
+
+    let legacyConnectors: EmailConnectorAccount[] = []
+    try {
+      const value = JSON.parse(this.meta(LEGACY_CONNECTORS_META) || '[]') as unknown
+      if (Array.isArray(value)) {
+        legacyConnectors = value.filter((item): item is EmailConnectorAccount => Boolean(
+          item && typeof item === 'object' && (item as EmailConnectorAccount).kind === 'email'
+        ))
+      }
+    } catch { /* Malformed legacy connector metadata remains quarantined. */ }
+    if (legacyConnectors.length) {
+      const agentsById = new Map(this.agents.map((agent) => [agent.id, agent]))
+      const grouped = new Map<string, EmailConnectorAccount[]>()
+      for (const connector of legacyConnectors) {
+        const owners = new Set(connector.agentIds
+          .map((agentId) => agentsById.get(agentId)?.ownerId)
+          .filter((ownerId): ownerId is string => Boolean(ownerId)))
+        const ownerId = owners.size === 1 ? [...owners][0] : unambiguousFallback
+        if (!ownerId) continue
+        grouped.set(ownerId, [...(grouped.get(ownerId) ?? []), connector])
+      }
+      if (grouped.size) {
+        for (const [ownerId, connectors] of grouped) {
+          let existing: EmailConnectorAccount[] = []
+          try {
+            const value = JSON.parse(this.accountMeta('connectors', ownerId) || '[]') as unknown
+            if (Array.isArray(value)) existing = value as EmailConnectorAccount[]
+          } catch { /* Replace malformed account metadata with the recoverable legacy value. */ }
+          const merged = new Map(existing.map((connector) => [connector.id, connector]))
+          for (const connector of connectors) if (!merged.has(connector.id)) merged.set(connector.id, connector)
+          this.setAccountMeta('connectors', JSON.stringify([...merged.values()]), ownerId)
+        }
+        this.setMeta(LEGACY_CONNECTORS_META, '')
+      }
+    }
+
+    try {
+      const outbox = JSON.parse(this.meta('socialTaskOutbox') || '[]') as Array<{
+        id: string; ownerId: string; claim: string; reply: string; failed: boolean
+      }>
+      if (Array.isArray(outbox) && outbox.length) {
+        const byOwner = new Map<string, typeof outbox>()
+        for (const item of outbox) {
+          if (!item?.ownerId) continue
+          byOwner.set(item.ownerId, [...(byOwner.get(item.ownerId) ?? []), item])
+        }
+        for (const [ownerId, items] of byOwner) {
+          if (!this.accountMeta('socialTaskOutbox', ownerId)) {
+            this.setAccountMeta('socialTaskOutbox', JSON.stringify(items), ownerId)
+          }
+        }
+        this.setMeta('socialTaskOutbox', '')
+      }
+    } catch { /* Malformed legacy outbox data is not exposed to any account. */ }
+
+    for (const conversation of this.conversations) {
+      if (!conversation.ownerId) continue
+      const legacyKey = `socialClearedMessages:${conversation.id}`
+      const value = this.meta(legacyKey)
+      if (!value) continue
+      const accountKey = `socialClearedMessages:${conversation.id}`
+      if (!this.accountMeta(accountKey, conversation.ownerId)) {
+        this.setAccountMeta(accountKey, value, conversation.ownerId)
+      }
+      this.setMeta(legacyKey, '')
+    }
+  }
+
+  /** Older attachment files had no owner table. Their containing conversation
+   * is authoritative, including attachments nested in delivery replies. */
+  private backfillAttachmentOwnership(): void {
+    const conversations = new Map(this.conversations.map((conversation) => [conversation.id, conversation]))
+    for (const message of this.messages) {
+      const ownerId = conversations.get(message.conversationId)?.ownerId
+      if (!ownerId) continue
+      const attachments = [
+        ...(message.attachments ?? []),
+        ...(message.deliveries ?? []).flatMap((delivery) =>
+          (delivery.replies ?? []).flatMap((reply) => reply.attachments ?? [])
+        )
+      ]
+      for (const attachment of attachments) {
+        this.write('INSERT OR IGNORE INTO attachmentOwners (id, ownerId) VALUES (?, ?)', attachment.id, ownerId)
+      }
+    }
+  }
+
   private insertMessage(message: ChatMessage): void {
     this.write(
       'INSERT INTO messages (id, conversationId, topicId, createdAt, data) VALUES (?, ?, ?, ?, ?)',
@@ -729,9 +983,42 @@ export class DouchatStore {
     return this.all<RunEvent>('SELECT data FROM runEvents ORDER BY rowid')
   }
 
+  get currentAccountId(): string {
+    return this.meta(CURRENT_ACCOUNT_META)
+  }
+
+  setCurrentAccountId(accountId: string): void {
+    const normalized = accountId.trim()
+    this.setMeta(CURRENT_ACCOUNT_META, normalized)
+    if (normalized) this.migrateAccountSensitiveMeta(normalized)
+  }
+
+  /** Account-scoped views are the only collections exposed to the renderer or
+   * scheduler. Raw getters remain available for migrations and cascading
+   * database maintenance inside the main process. */
+  get accountAgents(): AgentConfig[] {
+    const accountId = this.currentAccountId
+    return accountId ? this.agents.filter((agent) => agent.ownerId === accountId) : []
+  }
+
+  get accountConversations(): Conversation[] {
+    const accountId = this.currentAccountId
+    return accountId ? this.conversations.filter((conversation) => conversation.ownerId === accountId) : []
+  }
+
+  get accountRoutines(): Routine[] {
+    const accountId = this.currentAccountId
+    return accountId ? this.routines.filter((routine) => routine.ownerId === accountId) : []
+  }
+
+  get accountRuns(): TaskRun[] {
+    const accountId = this.currentAccountId
+    return accountId ? this.runs.filter((run) => run.ownerId === accountId) : []
+  }
+
   get connectors(): EmailConnectorAccount[] {
     try {
-      const value = JSON.parse(this.meta(CONNECTORS_META)) as unknown
+      const value = JSON.parse(this.accountMeta('connectors') || '[]') as unknown
       return Array.isArray(value) ? value.filter((item): item is EmailConnectorAccount => Boolean(
         item && typeof item === 'object' && (item as EmailConnectorAccount).kind === 'email'
       )) : []
@@ -741,17 +1028,17 @@ export class DouchatStore {
   }
 
   setConnectors(connectors: EmailConnectorAccount[]): void {
-    this.setMeta(CONNECTORS_META, JSON.stringify(connectors))
+    this.setAccountMeta('connectors', JSON.stringify(connectors))
   }
 
   // ───────────────────────────── profile & endpoint ─────────────────────────────
 
   get userName(): string {
-    return this.meta('userName') || 'You'
+    return this.accountMeta('userName') || 'You'
   }
 
   get userAvatar(): string {
-    return this.meta('userAvatar')
+    return this.accountMeta('userAvatar')
   }
 
   /** The account administrator survives independently from its deletable chat. */
@@ -772,7 +1059,7 @@ export class DouchatStore {
 
   /** The OpenAI-compatible endpoint saved from the app's own settings. */
   get endpoint(): { baseUrl: string; apiKey: string } | undefined {
-    const raw = this.meta('endpoint')
+    const raw = this.accountMeta('endpoint')
     if (!raw) return undefined
     try {
       const value = JSON.parse(raw) as { baseUrl: string; apiKey: string }
@@ -783,11 +1070,11 @@ export class DouchatStore {
   }
 
   setEndpoint(endpoint: { baseUrl: string; apiKey: string } | undefined): void {
-    this.setMeta('endpoint', endpoint?.baseUrl ? JSON.stringify(endpoint) : '')
+    this.setAccountMeta('endpoint', endpoint?.baseUrl ? JSON.stringify(endpoint) : '')
   }
 
   setUserName(name: string): void {
-    this.setMeta('userName', name.trim() || 'You')
+    this.setAccountMeta('userName', name.trim() || 'You')
   }
 
   /**
@@ -798,7 +1085,7 @@ export class DouchatStore {
   setUserAvatar(dataUrl: string): void {
     const value = dataUrl.trim()
     if (!validAvatar(value)) return
-    this.setMeta('userAvatar', value)
+    this.setAccountMeta('userAvatar', value)
   }
 
   // ───────────────────────────── agents ─────────────────────────────
@@ -827,6 +1114,7 @@ export class DouchatStore {
         const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
         const cloudAgentId = definition.id === 'system-admin-fallback' ? agent.cloudAgentId : definition.id
         Object.assign(agent, {
+          ownerId: normalizedAccountId,
           name: overrides.name ?? definition.name,
           role: definition.role,
           instructions: overrides.instructions ?? definition.instructions,
@@ -846,8 +1134,9 @@ export class DouchatStore {
         })
         this.putAgent(agent)
         const conversation = this.conversation(existing.conversationId)
-        if (conversation && conversation.name !== agent.name) {
+        if (conversation && (conversation.name !== agent.name || conversation.ownerId !== normalizedAccountId)) {
           conversation.name = agent.name
+          conversation.ownerId = normalizedAccountId
           this.putConversation(conversation)
         }
         records[existingIndex] = {
@@ -856,7 +1145,7 @@ export class DouchatStore {
           cloudAgentId
         }
         this.setMeta(ACCOUNT_DEFAULT_CONTACTS_META, JSON.stringify(records))
-        this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
+        this.setCurrentAccountId(normalizedAccountId)
         return {
           agent,
           conversation,
@@ -872,6 +1161,7 @@ export class DouchatStore {
     const now = Date.now()
     const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
     const agent: AgentConfig = {
+      ownerId: normalizedAccountId,
       id,
       name: definition.name,
       systemRole: definition.systemRole,
@@ -892,6 +1182,7 @@ export class DouchatStore {
     }
     const topic = newTopic('', now)
     const conversation: Conversation = {
+      ownerId: normalizedAccountId,
       id: `direct-${id}`,
       type: 'direct',
       name: agent.name,
@@ -916,7 +1207,7 @@ export class DouchatStore {
       if (existingIndex >= 0) records[existingIndex] = record
       else records.push(record)
       this.setMeta(ACCOUNT_DEFAULT_CONTACTS_META, JSON.stringify(records))
-      this.setMeta(CURRENT_ACCOUNT_META, normalizedAccountId)
+      this.setCurrentAccountId(normalizedAccountId)
       return { agent, conversation, created: true }
     })
   }
@@ -929,10 +1220,104 @@ export class DouchatStore {
     return this.one<Conversation>('SELECT data FROM conversations WHERE id = ?', conversationId)
   }
 
+  socialClearedMessageIds(conversationId: string): string[] {
+    try { return JSON.parse(this.accountMeta(`socialClearedMessages:${conversationId}`) || '[]') } catch { return [] }
+  }
+
+  linkSharedGroup(conversationId: string, roomId: string): void {
+    const conversation = this.accountConversations.find((item) => item.id === conversationId)
+    if (!conversation || conversation.type !== 'group') throw new Error('Chat not found')
+    if (conversation.remoteRoomId && conversation.remoteRoomId !== roomId) throw new Error('Chat already shared')
+    conversation.remoteRoomId = roomId
+    this.putConversation(conversation)
+  }
+
+  syncFriendConversation(ownerId: string, room: SocialRoom, incoming: SocialMessage[], attachments = new Map<string, MessageAttachment[]>()): Conversation {
+    if (ownerId !== this.currentAccountId || !room.members.some((member) => member.id === ownerId)) throw new Error('Chat account mismatch')
+    const person = room.members.find((member) => member.id !== ownerId)
+    if (room.kind === 'direct' && !person) throw new Error('Contact not found')
+    const id = this.accountConversations.find((item) => item.remoteRoomId === room.id)?.id ?? `${room.kind === 'direct' ? 'friend' : 'shared'}:${ownerId}:${room.id}`
+    return this.tx(() => {
+      const previous = this.conversation(id)
+      const createdAt = Date.parse(room.createdAt)
+      const conversation: Conversation = previous ?? {
+        id, ownerId, type: room.kind, name: room.kind === 'direct' ? person!.name : room.name, agentIds: [], remoteRoomId: room.id,
+        topics: [{ id: DEFAULT_TOPIC_ID, title: '', createdAt, updatedAt: createdAt }], activeTopicId: DEFAULT_TOPIC_ID,
+        unread: 0, readAt: 0, createdAt, updatedAt: createdAt
+      }
+      conversation.person = room.kind === 'direct' ? person : undefined
+      conversation.name = room.kind === 'direct' ? person!.name : room.name
+      if (room.kind === 'group') {
+        conversation.socialRoom = room
+        conversation.agentIds = room.agents.map((agent) => agent.id)
+      }
+      this.putConversation(conversation)
+      let unread = 0
+      const cleared = new Set(this.socialClearedMessageIds(id))
+      for (const message of [...incoming].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || Number(Boolean(a.parentMessageId)) - Number(Boolean(b.parentMessageId)) || a.id.localeCompare(b.id))) {
+        const messageId = `${id}:${message.id}`
+        if (message.roomId !== room.id || cleared.has(messageId) || (message.parentMessageId && cleared.has(`${id}:${message.parentMessageId}`))) continue
+        if (!message.parentMessageId && !this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', messageId)) {
+        this.insertMessage({ id: messageId, conversationId: id, topicId: conversation.activeTopicId,
+          authorId: message.authorId === ownerId ? 'user' : message.authorId, authorName: message.authorName,
+          text: message.content, attachments: attachments.get(message.id), kind: 'message', createdAt: Date.parse(message.createdAt) })
+        conversation.updatedAt = Math.max(conversation.updatedAt, Date.parse(message.createdAt))
+        if (message.authorId !== ownerId) unread++
+        }
+        if (message.reply) {
+          const replyId = `${messageId}:reply`
+          if (!cleared.has(replyId)) {
+            const existingReply = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', replyId)
+            const reply: ChatMessage = { id: replyId, conversationId: id, topicId: conversation.activeTopicId,
+              authorId: message.agentId || 'system', authorName: message.agentName || '', text: message.reply,
+              kind: 'message', createdAt: Date.parse(message.createdAt), ...(message.status === 'failed' ? { error: message.reply } : {}) }
+            if (existingReply) this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(reply), replyId)
+            else { this.insertMessage(reply); unread++ }
+          }
+        }
+      }
+      this.putConversation(conversation)
+      if (unread) this.addUnread(id, unread)
+      return this.conversation(id)!
+    })
+  }
+
+  socialTaskOutbox(accountId = this.currentAccountId): { id: string; ownerId: string; claim: string; reply: string; failed: boolean }[] {
+    try { return JSON.parse(this.accountMeta('socialTaskOutbox', accountId) || '[]') } catch { return [] }
+  }
+
+  saveSocialTaskResult(result: { id: string; ownerId: string; claim: string; reply: string; failed: boolean }): void {
+    this.setAccountMeta('socialTaskOutbox', JSON.stringify([
+      ...this.socialTaskOutbox(result.ownerId).filter((item) => item.id !== result.id),
+      result
+    ]), result.ownerId)
+  }
+
+  removeSocialTaskResult(id: string, accountId = this.currentAccountId): void {
+    this.setAccountMeta('socialTaskOutbox', JSON.stringify(
+      this.socialTaskOutbox(accountId).filter((item) => item.id !== id)
+    ), accountId)
+  }
+
+  claimSocialAgent(agentId: string, ownerId: string): AgentConfig {
+    const agent = this.agent(agentId)
+    if (!agent || this.currentAccountId !== ownerId || (agent.ownerId && agent.ownerId !== ownerId)) {
+      throw new Error('只能添加和执行自己的 agent。')
+    }
+    if (!agent.ownerId) {
+      agent.ownerId = ownerId
+      this.putAgent(agent)
+    }
+    return agent
+  }
+
   createAgent(input: ResolvedCreateAgentInput): AgentConfig {
+    const ownerId = this.currentAccountId
+    if (!ownerId) throw new Error('Sign in before creating a contact')
     const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${randomUUID().slice(0, 6)}`
     const now = Date.now()
     const {
+      ownerId: _ignoredOwnerId,
       systemRole: _ignoredSystemRole,
       systemKey: _ignoredSystemKey,
       cloudAgentId: _ignoredCloudAgentId,
@@ -945,6 +1330,7 @@ export class DouchatStore {
     const avatar = validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : ''
     const agent: AgentConfig = {
       ...safeInput,
+      ownerId,
       avatar,
       avatarEmoji: avatar ? '' : normalizeAgentEmoji(input.avatarEmoji),
       avatarSeed: !input.localAgentId && input.provider !== 'local' ? randomUUID() : undefined,
@@ -955,6 +1341,7 @@ export class DouchatStore {
     return this.tx(() => {
       this.putAgent(agent)
       this.putConversation({
+        ownerId: agent.ownerId,
         id: `direct-${id}`,
         type: 'direct',
         name: agent.name,
@@ -974,6 +1361,7 @@ export class DouchatStore {
     const agent = this.agent(agentId)
     if (!agent) return undefined
     const {
+      ownerId: _ignoredOwnerId,
       systemRole: _ignoredSystemRole,
       systemKey: _ignoredSystemKey,
       cloudAgentId: _ignoredCloudAgentId,
@@ -1076,6 +1464,7 @@ export class DouchatStore {
     const now = Date.now()
     const topic = newTopic('', now)
     const conversation: Conversation = {
+      ownerId: (agent.ownerId ?? this.currentAccountId) || undefined,
       id: `direct-${agentId}`,
       type: 'direct',
       name: agent.name,
@@ -1092,11 +1481,14 @@ export class DouchatStore {
   }
 
   createGroup(input: CreateGroupInput): Conversation {
+    const ownerId = this.currentAccountId
+    if (!ownerId) throw new Error('Sign in before creating a group')
     const now = Date.now()
-    const known = new Set(this.agents.map((agent) => agent.id))
+    const known = new Set(this.accountAgents.map((agent) => agent.id))
     const agentIds = [...new Set(input.agentIds)].filter((agentId) => known.has(agentId))
     const topic = newTopic('', now)
     const conversation: Conversation = {
+      ownerId,
       id: `group-${randomUUID().slice(0, 8)}`,
       type: 'group',
       name:
@@ -1120,6 +1512,20 @@ export class DouchatStore {
   updateConversation(conversationId: string, input: UpdateConversationInput): Conversation | undefined {
     const conversation = this.conversation(conversationId)
     if (!conversation) return undefined
+    if (conversation.type === 'group') {
+      if (input.avatar !== undefined) {
+        if (!validAvatar(input.avatar)) throw new Error('Invalid group avatar')
+        conversation.avatar = input.avatar || undefined
+        if (input.avatar) conversation.avatarEmoji = undefined
+      }
+      if (input.avatarEmoji !== undefined) {
+        const emoji = normalizeAgentEmoji(input.avatarEmoji)
+        if (input.avatarEmoji && !emoji) throw new Error('Invalid group emoji')
+        conversation.avatarEmoji = emoji || undefined
+        if (emoji) conversation.avatar = undefined
+      }
+    }
+    if (input.savedToContacts !== undefined) conversation.savedToContacts = input.savedToContacts
     if (input.muted !== undefined) conversation.muted = input.muted
     if (input.hidden !== undefined) conversation.hidden = input.hidden
     if (input.manuallyUnread !== undefined) {
@@ -1129,7 +1535,7 @@ export class DouchatStore {
     if (input.name !== undefined) conversation.name = input.name.trim() || conversation.name
     if (input.description !== undefined) conversation.description = input.description.trim() || undefined
     if (input.agentIds && conversation.type === 'group') {
-      const known = new Set(this.agents.map((agent) => agent.id))
+      const known = new Set(this.accountAgents.map((agent) => agent.id))
       conversation.agentIds = [...new Set(input.agentIds)].filter((agentId) => known.has(agentId))
       if (!conversation.agentIds.includes(conversation.leadAgentId ?? '')) {
         conversation.leadAgentId = conversation.agentIds[0]
@@ -1144,6 +1550,12 @@ export class DouchatStore {
   }
 
   deleteConversation(conversationId: string): void {
+    const target = this.conversation(conversationId)
+    if (target?.remoteRoomId || target?.savedToContacts) {
+      this.clearConversation(conversationId)
+      this.updateConversation(conversationId, { hidden: true })
+      return
+    }
     // Messages, private deliveries and routines cascade from the row.
     this.write('DELETE FROM conversations WHERE id = ?', conversationId)
   }
@@ -1167,7 +1579,7 @@ export class DouchatStore {
   markAllConversationsRead(): void {
     const now = Date.now()
     this.tx(() => {
-      for (const conversation of this.conversations) {
+      for (const conversation of this.accountConversations) {
         conversation.manuallyUnread = false
         conversation.unread = 0
         conversation.readAt = now
@@ -1342,6 +1754,15 @@ export class DouchatStore {
 
   clearConversation(conversationId: string, topicId?: string): void {
     this.tx(() => {
+      const remote = this.conversation(conversationId)
+      if (remote?.remoteRoomId) {
+        const cleared = new Set(this.socialClearedMessageIds(conversationId))
+        for (const message of this.topicMessages(conversationId, DEFAULT_TOPIC_ID)) cleared.add(message.id)
+        this.setAccountMeta(`socialClearedMessages:${conversationId}`, JSON.stringify([...cleared]), remote.ownerId)
+        remote.unread = 0
+        remote.manuallyUnread = false
+        this.putConversation(remote)
+      }
       if (topicId === undefined) {
         this.write('DELETE FROM messages WHERE conversationId = ?', conversationId)
         this.write('DELETE FROM privateMessages WHERE conversationId = ?', conversationId)
@@ -1362,8 +1783,11 @@ export class DouchatStore {
 
   createRoutine(input: CreateRoutineInput, nextRunAt: number): Routine {
     const now = Date.now()
+    const ownerId = this.currentAccountId
+    if (!ownerId) throw new Error('Sign in before creating a scheduled task')
     const routine: Routine = {
       ...input,
+      ownerId,
       id: randomUUID(),
       target: 'local',
       enabled: true,
@@ -1406,8 +1830,11 @@ export class DouchatStore {
   createRun(
     input: Omit<TaskRun, 'id' | 'status' | 'createdAt' | 'target'> & { status?: RunStatus; createdAt?: number }
   ): TaskRun {
+    const routineOwnerId = input.routineId ? this.routine(input.routineId)?.ownerId : undefined
+    const agentOwnerId = this.agent(input.agentId)?.ownerId
     const run: TaskRun = {
       ...input,
+      ownerId: (input.ownerId ?? routineOwnerId ?? agentOwnerId ?? this.currentAccountId) || undefined,
       id: randomUUID(),
       target: 'local',
       status: input.status ?? 'queued',

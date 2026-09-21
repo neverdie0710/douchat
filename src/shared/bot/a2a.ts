@@ -105,11 +105,13 @@ export function directA2ASourcePrompt(
   if (!peers.length) return privateContextPrompt || content
   return [
     privateContextPrompt,
+    'Resolve the requested delivery audience before choosing a recipient. Requests to speak IN a group must use send_group_message, never a private A2A envelope, even if a member is mentioned as the reason for the introduction. Only use the private channel when the user wants individual delivery.',
     'You can send a private Agent-to-Agent message to another bot in this workspace.',
     'You—not client-side name-matching rules—must infer which bot the human intends from the complete availableBots list and the conversation context. Names are arbitrary user input: never assume naming patterns, numeric suffixes, aliases, or prefixes.',
     'If exactly one bot is clearly intended, use that entry\'s exact opaque id with this transport syntax: [[a2a:RECIPIENT_ID]]message for that bot[[/a2a]]. Never put a display name, nickname, partial name, or invented value in RECIPIENT_ID.',
     'If the intent is unclear, no bot is a reliable match, or multiple bots could match—including bots with the same display name—do not emit any A2A envelope. Ask the human one concise question identifying the possible bots so they can clarify.',
     'Use A2A only when the human asks you to contact, tell, ask, reply to, or delegate to another bot. Resolve follow-up references from the conversation context. The app hides the envelope; put a short sending confirmation outside it only after choosing one unambiguous bot.',
+    'The recipient’s response is delivered to the human in that recipient’s own private chat with an unread notification. Do not claim it can only reply to you or ask the human to initiate another chat. If message_agent is available, it is an alternative to the A2A envelope: use replyTo=human for delivery and replyTo=caller only for internal consultation. Use one transport, never both for the same message.',
     'Never claim this capability is unavailable. Never expose or quote the transport syntax to the human.',
     JSON.stringify({
       currentBot: { id: source.id, name: source.name },

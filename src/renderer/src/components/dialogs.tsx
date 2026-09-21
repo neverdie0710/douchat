@@ -1,3 +1,5 @@
+import { conversationMembers } from './common'
+import type { SocialSnapshot } from '../../../shared/social'
 import { LocalAgentSelect } from './LocalAgentSelect'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
@@ -18,7 +20,7 @@ import type {
   RoutineSchedule,
   UpdateAgentInput
 } from '../../../shared/types'
-import { AgentAvatar, ConversationAvatar, agentDisplayName, colors, conversationDisplayName } from './common'
+import { AgentAvatar, UserAvatar, ConversationAvatar, agentDisplayName, colors, conversationDisplayName } from './common'
 
 const avatarEmojis = [
   '😀', '😄', '😊', '😌', '😎', '🤓', '🥳', '😂', '😍', '🤔', '🫡', '🤖',
@@ -32,6 +34,7 @@ export function BotModal({
   localAgents,
   initialLocalAgentId,
   onSettings,
+  onAddFriend,
   onClose,
   onCreate,
   onUpdate
@@ -39,6 +42,7 @@ export function BotModal({
   agent?: AgentConfig
   localAgents: LocalAgent[]
   initialLocalAgentId?: string
+  onAddFriend?: () => void
   onSettings: () => void
   onClose: () => void
   onCreate: (input: CreateAgentInput) => Promise<void>
@@ -155,6 +159,7 @@ export function BotModal({
         {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available local agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
+          {onAddFriend && <button type="button" className="create-contact-friend-entry" disabled={saving} onClick={onAddFriend}>{t('Add friend')}</button>}
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
           <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && !localAgent?.installed)}>{t(saving ? 'Saving…' : 'Create agent')}</button>
         </div>
@@ -259,8 +264,14 @@ export function BotModal({
   )
 }
 
-export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, manage = false, remove = false, initialAgentIds, onCreate, onStartDirect, onOpenConversation }: {
+export function AddMembersModal({ onRemoveContacts, onAddContacts, initialFriendIds, onCreateSocialGroup, social, onStartFriend, snapshot, conversation, onClose, onUpdate, manage = false, remove = false, initialAgentIds, onCreate, onStartDirect, onOpenConversation }: {
   snapshot: AppSnapshot
+  onRemoveContacts?: (friendIds: string[], agentIds: string[]) => Promise<void>
+  onAddContacts?: (friendIds: string[], agentIds: string[]) => Promise<void>
+  social?: SocialSnapshot
+  onStartFriend?: (id: string) => Promise<void>
+  initialFriendIds?: string[]
+  onCreateSocialGroup?: (friendIds: string[], agentIds: string[], memberOrder?: string[]) => Promise<void>
   conversation?: Conversation
   remove?: boolean
   manage?: boolean
@@ -273,43 +284,69 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string[]>(manage ? conversation?.agentIds ?? initialAgentIds ?? [] : [])
+  const [selectedFriendIds, setSelectedFriendIds] = useState<string[]>(initialFriendIds ?? [])
+  const [memberOrder, setMemberOrder] = useState<string[]>([...(initialFriendIds ?? []).map((id) => `person:${id}`), ...(initialAgentIds ?? []).map((id) => `agent:${id}`)])
+  const [friendsOpen, setFriendsOpen] = useState(true)
   const [selectedConversationId, setSelectedConversationId] = useState('')
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [contactsOpen, setContactsOpen] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const startMode = manage && !conversation && !(initialAgentIds?.length)
-  const members = new Set(manage || remove ? [] : conversation?.agentIds ?? [])
+  const startMode = manage && !conversation && !(initialAgentIds?.length) && !(initialFriendIds?.length)
+  const members = new Set(manage || remove ? [] : conversation?.socialRoom
+    ? conversation.socialRoom.agents.filter((agent) => agent.ownerId === social?.userId).map((agent) => agent.localId)
+    : conversation?.agentIds ?? [])
+  const humanMembers = new Set(conversation?.socialRoom?.members.map((person) => person.id) ?? [])
   const needle = query.trim().toLocaleLowerCase()
-  const matchingAgents = snapshot.agents.filter((agent) => (!remove || conversation?.agentIds.includes(agent.id)) && `${agent.name} ${agentDisplayName(agent)}`.toLocaleLowerCase().includes(needle))
-    .sort((a, b) => agentDisplayName(a).localeCompare(agentDisplayName(b)))
+  const pickerAgents = remove && conversation?.socialRoom ? conversationMembers(conversation, snapshot.agents).filter((agent) => conversation.socialRoom!.members[0]?.id === social?.userId || agent.ownerId === social?.userId) : snapshot.agents
+  const matchingAgents = pickerAgents.filter((agent) => (!remove || conversation?.agentIds.includes(agent.id)) && `${agent.name} ${agentDisplayName(agent)}`.toLocaleLowerCase().includes(needle))
+    .sort((a, b) => Number(b.systemRole === 'admin') - Number(a.systemRole === 'admin') || agentDisplayName(a).localeCompare(agentDisplayName(b)))
   const matchingGroups = startMode
     ? snapshot.conversations.filter((item) => item.type === 'group' && `${item.name} ${conversationDisplayName(item, snapshot.agents)}`.toLocaleLowerCase().includes(needle))
       .sort((a, b) => conversationDisplayName(a, snapshot.agents).localeCompare(conversationDisplayName(b, snapshot.agents)))
     : []
+  const friends = remove && conversation?.socialRoom ? conversation.socialRoom.members.filter((person) => person.id !== conversation.socialRoom!.members[0]?.id && conversation.socialRoom!.members[0]?.id === social?.userId).map((person) => ({ person })) : (social?.friendships ?? []).filter((item) => item.status === 'accepted')
+  const matchingFriends = friends.filter((item) => `${item.person.name} ${item.person.email}`.toLocaleLowerCase().includes(needle))
+  const selectedFriends = friends.filter((item) => selectedFriendIds.includes(item.person.id))
   const selectedConversation = matchingGroups.find((item) => item.id === selectedConversationId)
     ?? snapshot.conversations.find((item) => item.id === selectedConversationId && item.type === 'group')
   const selectedDirect = selected.length === 1
     ? snapshot.conversations.find((item) => item.type === 'direct' && item.agentIds[0] === selected[0])
     : undefined
   const toggle = (id: string): void => {
+    setMemberOrder((order) => selected.includes(id) ? order.filter((key) => key !== `agent:${id}`) : [...order, `agent:${id}`])
     setSelectedConversationId('')
     setSelected((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id])
   }
   const chooseConversation = (id: string): void => {
+    setSelectedFriendIds([])
     setSelected([])
     setSelectedConversationId((current) => current === id ? '' : id)
   }
-  const selectionCount = selectedConversationId ? 1 : selected.length
-  const invalid = startMode
-    ? selectionCount < 1 || (Boolean(selectedConversationId) && !onOpenConversation) || (selected.length === 1 && !onStartDirect)
-    : selected.length < (manage ? 2 : 1) || (remove && selected.length >= (conversation?.agentIds.length ?? 0))
+  const selectionCount = selectedConversationId ? 1 : selected.length + selectedFriendIds.length
+  const invalid = remove && onRemoveContacts ? selectionCount < 1 : onAddContacts && conversation && !remove ? selectionCount < 1 : selectedFriendIds.length
+    ? selectionCount === 1 && startMode ? !onStartFriend : selectionCount < 2 || !onCreateSocialGroup
+    : startMode
+      ? selectionCount < 1 || (Boolean(selectedConversationId) && !onOpenConversation) || (selected.length === 1 && !onStartDirect)
+      : selected.length < (manage ? 2 : 1) || (remove && selected.length >= (conversation?.agentIds.length ?? 0))
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
     if (invalid || saving) return
     setSaving(true)
     setError('')
     try {
+      if (remove && onRemoveContacts) { await onRemoveContacts(selectedFriendIds, selected); onClose(); return }
+      if (onAddContacts && conversation && !remove) {
+        await onAddContacts(selectedFriendIds, selected)
+        onClose()
+        return
+      }
+      if (selectedFriendIds.length) {
+        if (selectionCount === 1 && startMode && onStartFriend) await onStartFriend(selectedFriendIds[0])
+        else if (onCreateSocialGroup) await onCreateSocialGroup(selectedFriendIds, selected, memberOrder)
+        onClose()
+        return
+      }
       if (startMode && selectedConversationId && onOpenConversation) {
         await onOpenConversation(selectedConversationId)
         onClose()
@@ -330,8 +367,8 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
       if (conversation) await onUpdate(conversation.id, input)
       else if (onCreate) await onCreate(input)
       onClose()
-    } catch {
-      setError(t('Could not save changes'))
+    } catch (error) {
+      setError(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : t('Could not save changes'))
     } finally { setSaving(false) }
   }
   const title = remove
@@ -339,7 +376,7 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
     : manage
       ? conversation
         ? 'Group members'
-        : startMode && selected.length <= 1
+        : startMode && selectionCount <= 1
           ? 'New chat'
           : 'Create group'
       : 'Add group members'
@@ -351,7 +388,7 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
         : startMode
           ? selectedConversationId
             ? 'Open group'
-            : selected.length > 1
+            : selectionCount > 1
               ? 'Create group'
               : selectedDirect
                 ? 'Open chat'
@@ -363,7 +400,7 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
       <form className="agent-modal add-members-modal" role="dialog" aria-modal="true" aria-labelledby="add-members-title" onSubmit={submit}
         onKeyDown={(event) => { if (event.key === 'Escape' && !saving) { event.stopPropagation(); onClose() } }}>
         <section className="member-picker-source">
-          <label className="member-picker-search"><Search size={17} /><input autoFocus aria-label={t('Search agents')} placeholder={t('Search agents')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+          <label className="member-picker-search"><Search size={17} /><input autoFocus aria-label={t('Search')} placeholder={t('Search')} value={query} onChange={(event) => setQuery(event.target.value)} /></label>
           <div className="member-picker-list">
             {startMode && <>
               <button type="button" className="member-picker-folder" aria-expanded={groupsOpen || Boolean(needle)} onClick={() => setGroupsOpen((open) => !open)}>
@@ -394,17 +431,26 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
               </button>
             })}
             {(!startMode || contactsOpen || Boolean(needle)) && !matchingAgents.length && <p className="member-picker-empty">{t('No matching agents')}</p>}
+            {social && <>
+              <button type="button" className="member-picker-folder" aria-expanded={friendsOpen || Boolean(needle)} onClick={() => setFriendsOpen((open) => !open)}><ChevronRight size={15} className={friendsOpen || needle ? 'open' : ''} /><span>{t('Friends')}</span><em>{matchingFriends.length}</em></button>
+              {(friendsOpen || Boolean(needle)) && <div className="member-picker-folder-body">{matchingFriends.map(({ person }) => {
+                const joined = !remove && humanMembers.has(person.id)
+                const checked = joined || selectedFriendIds.includes(person.id)
+                return <button type="button" className={`member-picker-row ${checked ? 'selected' : ''}`} role="checkbox" aria-checked={checked} key={person.id} disabled={saving || joined} onClick={() => { setSelectedConversationId(''); setMemberOrder((order) => checked ? order.filter((key) => key !== `person:${person.id}`) : [...order, `person:${person.id}`]); setSelectedFriendIds((ids) => checked ? ids.filter((id) => id !== person.id) : [...ids, person.id]) }}><span className={`member-picker-check ${checked ? 'checked' : ''}`}><Check size={13} /></span><UserAvatar src={person.image || ''} name={person.name} size={36} /><span className="member-picker-name">{person.name}</span>{joined && <small>{t('Already added')}</small>}</button>
+              })}{!matchingFriends.length && <p className="member-picker-empty compact">{t('No matching friends')}</p>}</div>}
+            </>}
           </div>
         </section>
         <section className="member-picker-selection">
-          <header><h2 id="add-members-title">{t(title)}</h2><span>{t(startMode ? 'Selected' : 'Selected agents')}: {selectionCount}</span></header>
+          <header><h2 id="add-members-title">{t(title)}</h2><span>{t('Selected')}: {selectionCount}</span></header>
           <div className="member-picker-list">
+            {selectedFriends.map((selectedFriend) => <div className="member-picker-chosen" key={selectedFriend.person.id}><UserAvatar src={selectedFriend.person.image || ''} name={selectedFriend.person.name} size={36} /><span className="member-picker-name">{selectedFriend.person.name}</span><button type="button" disabled={saving} onClick={() => setSelectedFriendIds((ids) => ids.filter((id) => id !== selectedFriend.person.id))} aria-label={`${t('Remove')} ${selectedFriend.person.name}`}><X size={13} /></button></div>)}
             {selectedConversation && <div className="member-picker-chosen"><ConversationAvatar conversation={selectedConversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} /><span className="member-picker-name">{conversationDisplayName(selectedConversation, snapshot.agents)}</span><button type="button" disabled={saving} onClick={() => setSelectedConversationId('')} aria-label={`${t('Remove')} ${conversationDisplayName(selectedConversation, snapshot.agents)}`}><X size={13} /></button></div>}
             {selected.map((id) => {
-              const agent = snapshot.agents.find((item) => item.id === id)
+              const agent = pickerAgents.find((item) => item.id === id)
               return agent && <div className="member-picker-chosen" key={id}><AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agentDisplayName(agent)}</span><button type="button" disabled={saving} onClick={() => toggle(id)} aria-label={`${t('Remove')} ${agentDisplayName(agent)}`}><X size={13} /></button></div>
             })}
-            {!selectionCount && <p className="member-picker-empty">{t(remove ? 'Select members to remove' : startMode ? 'Select one agent to chat, several to create a group, or open an existing group.' : 'Select agents to add')}</p>}
+            {!selectionCount && <p className="member-picker-empty">{t(remove ? 'Select members to remove' : startMode ? 'Select a contact to start chatting, or open an existing group.' : 'Select contacts to add')}</p>}
           </div>
           {remove && selected.length >= (conversation?.agentIds.length ?? 0) && <p className="member-picker-error">{t('Keep at least one member')}</p>}
           {error && <p role="alert" className="member-picker-error">{error}</p>}
@@ -417,6 +463,12 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
 
 export function GroupModal(props: {
   snapshot: AppSnapshot
+  onRemoveContacts?: (friendIds: string[], agentIds: string[]) => Promise<void>
+  onAddContacts?: (friendIds: string[], agentIds: string[]) => Promise<void>
+  social?: SocialSnapshot
+  onStartFriend?: (id: string) => Promise<void>
+  initialFriendIds?: string[]
+  onCreateSocialGroup?: (friendIds: string[], agentIds: string[], memberOrder?: string[]) => Promise<void>
   conversation?: Conversation
   initialAgentIds?: string[]
   onClose: () => void

@@ -3,6 +3,7 @@ import type {
   AppSnapshot,
   CodeArtifactInput,
   CreateAgentInput,
+  CustomLocalAgentInput,
   EndpointInput,
   EmailConnectorInput,
   MessageImageInput,
@@ -18,6 +19,8 @@ import type {
 } from '../shared/types'
 
 const api: DouchatApi = {
+  getSocialSnapshot: () => ipcRenderer.invoke('douchat:social-snapshot'),
+  socialAction: (input) => ipcRenderer.invoke('douchat:social-action', input),
   platform: process.platform,
   microphonePermissionOwner: 'Douchat',
   windowAction: (action) => ipcRenderer.send('douchat:window-action', action),
@@ -38,6 +41,9 @@ const api: DouchatApi = {
   checkForUpdates: () => ipcRenderer.invoke('douchat:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('douchat:install-update'),
   detectLocalAgents: () => ipcRenderer.invoke('douchat:detect-local-agents'),
+  openLocalAgentTerminal: (id: 'claude') => ipcRenderer.invoke('douchat:open-local-agent-terminal', id),
+  addCustomLocalAgent: (input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:add-custom-local-agent', input),
+  removeCustomLocalAgent: (id: string) => ipcRenderer.invoke('douchat:remove-custom-local-agent', id),
   searchMessages: (conversationId, query) => ipcRenderer.invoke('douchat:search-messages', conversationId, query),
   getMessagePage: (conversationId, topicId, before) => ipcRenderer.invoke('douchat:message-page', conversationId, topicId, before),
   getAttachmentData: (attachmentId) => ipcRenderer.invoke('douchat:attachment-data', attachmentId),

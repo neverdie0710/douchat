@@ -14,6 +14,9 @@ const developmentAppName = 'Douchat Dev'
 const launchServicesRegister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 const microphoneUsageDescription = 'Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。'
 const speechRecognitionUsageDescription = 'Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。'
+const downloadsUsageDescription = 'Douchat accesses Downloads only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问下载文件夹。'
+const desktopUsageDescription = 'Douchat accesses Desktop only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问桌面文件夹。'
+const documentsUsageDescription = 'Douchat accesses Documents only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问文稿文件夹。'
 const helperBundles = [
   { directory: 'Electron Helper.app', bundleId: `${developmentBundleId}.helper`, name: 'Douchat Helper' },
   { directory: 'Electron Helper (Renderer).app', bundleId: `${developmentBundleId}.helper.Renderer`, name: 'Douchat Helper (Renderer)' },
@@ -64,6 +67,9 @@ function hasPreparedBundleMetadata() {
       || plistValue('CFBundleName') !== developmentAppName
       || plistValue('NSMicrophoneUsageDescription') !== microphoneUsageDescription
       || plistValue('NSSpeechRecognitionUsageDescription') !== speechRecognitionUsageDescription
+      || plistValue('NSDownloadsFolderUsageDescription') !== downloadsUsageDescription
+      || plistValue('NSDesktopFolderUsageDescription') !== desktopUsageDescription
+      || plistValue('NSDocumentsFolderUsageDescription') !== documentsUsageDescription
     ) return false
     return helperBundles.every((helper) => (
       plistValue('CFBundleIdentifier', helper.infoPlist) === helper.bundleId
@@ -111,6 +117,9 @@ setPlistString('CFBundleDisplayName', developmentAppName)
 setPlistString('CFBundleName', developmentAppName)
 setPlistString('NSMicrophoneUsageDescription', microphoneUsageDescription)
 setPlistString('NSSpeechRecognitionUsageDescription', speechRecognitionUsageDescription)
+setPlistString('NSDownloadsFolderUsageDescription', downloadsUsageDescription)
+setPlistString('NSDesktopFolderUsageDescription', desktopUsageDescription)
+setPlistString('NSDocumentsFolderUsageDescription', documentsUsageDescription)
 for (const helper of helperBundles) {
   setPlistString('CFBundleIdentifier', helper.bundleId, helper.infoPlist)
   setPlistString('CFBundleName', helper.name, helper.infoPlist)

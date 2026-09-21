@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codexThreadId, localAgentArgs, localAgentEnvironment, localAgentReply, localAgentText } from './localAgentRuntime'
+import { codexThreadId, localAgentArgs, localAgentEnvironment, localAgentExitError, localAgentReply, localAgentText, shouldRetryClaudeWithAccountLogin } from './localAgentRuntime'
 describe('local agent output', () => {
   it('trusts only the Gemini child workspace without mutating the parent environment', () => {
     const env = { PATH: '/bin' }
@@ -7,6 +7,26 @@ describe('local agent output', () => {
     expect(env).toEqual({ PATH: '/bin' })
     expect(localAgentEnvironment('claude', env)).toBe(env)
     expect(localAgentArgs('gemini', 'Hello', '/tmp/output')).not.toContain('--yolo')
+  })
+
+  it('retries the specific Claude connector conflict with account-login credentials', () => {
+    const env = {
+      PATH: '/bin',
+      ANTHROPIC_API_KEY: 'secret-api-key',
+      ANTHROPIC_AUTH_TOKEN: 'secret-auth-token',
+      CLAUDE_CODE_OAUTH_TOKEN: 'secret-oauth-token',
+      ANTHROPIC_BASE_URL: 'https://proxy.example.com',
+      SAFE_VALUE: 'kept'
+    }
+    const conflict = new Error(
+      'Claude Code: claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set'
+    )
+
+    expect(shouldRetryClaudeWithAccountLogin('claude', conflict, env)).toBe(true)
+    expect(localAgentEnvironment('claude', env, true)).toEqual({ PATH: '/bin', SAFE_VALUE: 'kept' })
+    expect(env.ANTHROPIC_API_KEY).toBe('secret-api-key')
+    expect(shouldRetryClaudeWithAccountLogin('claude', new Error('Credit balance is too low'), env)).toBe(false)
+    expect(shouldRetryClaudeWithAccountLogin('codex', conflict, env)).toBe(false)
   })
   it('extracts final replies without leaking CLI metadata', () => {
     expect(localAgentText('claude', '{"result":"Hello","session_id":"private"}')).toBe('Hello')
@@ -23,6 +43,17 @@ describe('local agent output', () => {
     expect(() => localAgentText('grok', '{"error":"Authentication required"}')).toThrow('Authentication required')
     expect(() => localAgentText('opencode', '{"type":"error","error":{"data":{"message":"No model"}}}')).toThrow('No model')
     expect(() => localAgentText('openclaw', '{"ok":false,"status":"error","error":{"message":"Log in first"}}')).toThrow('Log in first')
+  })
+  it('keeps useful structured stdout when a CLI exits non-zero', () => {
+    expect(localAgentExitError(
+      { id: 'claude', name: 'Claude Code' },
+      1,
+      '{"is_error":true,"result":"Please run /login"}',
+      ''
+    ).message).toBe('Claude Code: Please run /login')
+    expect(localAgentExitError({ id: 'claude', name: 'Claude Code' }, 1, '', '').message).toBe(
+      'Claude Code: Exited with status 1'
+    )
   })
   it('allows built-in web research without bypassing shell permissions', () => {
     expect(localAgentArgs('claude', 'Research', '/tmp/output')).toContain('WebSearch,WebFetch')

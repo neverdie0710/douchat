@@ -13,7 +13,7 @@ import { parsePrivateReply, privateReplyDeliveries } from './privateMessages'
 import { a2aReplyMessages } from './a2a'
 import { latestAssistantPreview, markdownPreview } from './preview'
 import { contactSection, contactSections, matchesContactQuery } from './contacts'
-import { summarizeRuntimeError } from './errors'
+import { isDouchatCreditError, isRetryableRuntimeError, summarizeRuntimeError } from './errors'
 
 const members = [
   { id: 'a', name: 'Ann' },
@@ -86,7 +86,7 @@ describe('group dispatch', () => {
     expect(validateGroupDecision({ mode: 'none', memberIds: [], triggerMessageIds: [] }, group, context).mode).toBe('none')
   })
 
-  it('puts the lead in front of the controller route, then stops on none', async () => {
+  it('lets the lead respond before the dispatched worker', async () => {
     const user: GroupMessage = { id: 'u1', role: 'user', content: 'plan the launch' }
     const spoke: string[] = []
     const decide = vi
@@ -106,6 +106,70 @@ describe('group dispatch', () => {
 
     expect(spoke).toEqual(['a', 'b'])
     expect(result).toEqual({ limited: false, failed: false, unavailableMemberIds: [] })
+  })
+
+  it('returns unaddressed follow-ups to the leader for dispatch', async () => {
+    const user: GroupMessage = { id: 'u2', role: 'user', content: 'and what happened next?' }
+    const decide = vi.fn().mockResolvedValueOnce({ mode: 'single', memberIds: ['b'], triggerMessageIds: ['u2'] })
+      .mockResolvedValue({ mode: 'none', memberIds: [], triggerMessageIds: [] })
+    const spoke: string[] = []
+    const result = await runGroupConversation({
+      group,
+      user,
+      history: [
+        { id: 'u1', role: 'user', content: 'give me the latest' },
+        { id: 'b1', role: 'assistant', sender: { id: 'b', name: 'Anna' }, content: 'Here is the latest.' }
+      ],
+      signal: new AbortController().signal,
+      decide,
+      reply: async (member, turn) => {
+        spoke.push(member.id)
+        return [{ id: `${member.id}:${turn.round}`, role: 'assistant', sender: { id: member.id, name: member.name }, content: 'follow-up' }]
+      }
+    })
+
+    expect(spoke).toEqual(['a', 'b'])
+    expect(decide).toHaveBeenCalledTimes(2)
+    expect(result.failed).toBe(false)
+  })
+
+  it('does not treat a proactive greeting as an established speaker', async () => {
+    const user: GroupMessage = { id: 'u1', role: 'user', content: 'who should take this?' }
+    const decide = vi.fn().mockResolvedValueOnce({ mode: 'single', memberIds: ['b'], triggerMessageIds: ['u1'] })
+      .mockResolvedValue({ mode: 'none', memberIds: [], triggerMessageIds: [] })
+    const spoke: string[] = []
+    await runGroupConversation({
+      group,
+      user,
+      history: [{ id: 'hello', role: 'assistant', sender: { id: 'a', name: 'Ann' }, content: 'Welcome.' }],
+      signal: new AbortController().signal,
+      decide,
+      reply: async (member, turn) => {
+        spoke.push(member.id)
+        return [{ id: `${member.id}:${turn.round}`, role: 'assistant', sender: { id: member.id, name: member.name }, content: 'done' }]
+      }
+    })
+
+    expect(spoke).toEqual(['a', 'b'])
+  })
+
+  it('falls back to the lead when an initial controller decision says none', async () => {
+    const user: GroupMessage = { id: 'u1', role: 'user', content: 'please answer this' }
+    const decide = vi.fn().mockResolvedValue({ mode: 'none', memberIds: [], triggerMessageIds: [] })
+    const spoke: string[] = []
+    const result = await runGroupConversation({
+      group,
+      user,
+      signal: new AbortController().signal,
+      decide,
+      reply: async (member, turn) => {
+        spoke.push(member.id)
+        return [{ id: `${member.id}:${turn.round}`, role: 'assistant', sender: { id: member.id, name: member.name }, content: 'answer' }]
+      }
+    })
+
+    expect(spoke).toEqual(['a'])
+    expect(result.failed).toBe(false)
   })
 
   it('fails over to another member when one cannot reply', async () => {
@@ -247,6 +311,45 @@ describe('summarizeRuntimeError', () => {
     expect(summarizeRuntimeError('ERROR: Reconnecting... 1/5 ERROR: Reconnecting... 2/5').title).toBe(
       'Lost the connection to the model endpoint · after 2 retries'
     )
+    expect(summarizeRuntimeError('Request was aborted').title).toBe('The model connection was interrupted')
+    expect(summarizeRuntimeError('Douchat needs permission to access Downloads. (EPERM)').title).toBe(
+      'Douchat does not have permission to access that local file or folder'
+    )
+  })
+
+  it('turns local Claude failures into an immediate next step', () => {
+    expect(summarizeRuntimeError('Claude Code: Exited with status 1')).toMatchObject({
+      title: 'Claude Code could not start',
+      guidance: 'Open Claude Code in Terminal once. Finish signing in or fix the error shown there, then return to Douchat and try again.'
+    })
+    expect(summarizeRuntimeError('Claude Code: Please run /login')).toMatchObject({
+      title: 'Claude Code is not signed in',
+      guidance: 'Open Claude Code in Terminal and sign in, then return to Douchat and try again.'
+    })
+    expect(summarizeRuntimeError('Claude Code: Credit balance is too low')).toMatchObject({
+      title: 'Claude Code does not have enough credit',
+      guidance: 'Open Claude Code in Terminal and add credit or switch to an account with available usage, then return to Douchat and try again.',
+      action: { kind: 'open-local-agent-terminal', agentId: 'claude', label: 'Open Claude Code' }
+    })
+  })
+
+  it('turns a Douchat credit failure into the top-up recovery path', () => {
+    expect(isDouchatCreditError('429: {"message":"Douchat credit balance is insufficient"}')).toBe(true)
+    expect(isDouchatCreditError('Douchat 点数不足，暂时无法完成此请求。')).toBe(true)
+    expect(summarizeRuntimeError('429: {"message":"Douchat credit balance is insufficient"}')).toMatchObject({
+      title: 'Douchat does not have enough credits',
+      guidance: 'Top up credits to continue.',
+      action: { kind: 'open-douchat-credits', label: 'Top up credits' }
+    })
+  })
+
+  it('retries only transient runtime failures', () => {
+    expect(isRetryableRuntimeError('Request was aborted')).toBe(true)
+    expect(isRetryableRuntimeError('stream_interrupted')).toBe(true)
+    expect(isRetryableRuntimeError('unexpected status 503 Service Unavailable')).toBe(true)
+    expect(isRetryableRuntimeError('context_length_exceeded: too many tokens')).toBe(false)
+    expect(isRetryableRuntimeError('unexpected status 401 Unauthorized')).toBe(false)
+    expect(isRetryableRuntimeError('insufficient_quota')).toBe(false)
   })
 
   it('passes a plain message through and never returns an empty headline', () => {

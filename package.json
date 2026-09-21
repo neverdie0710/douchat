@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -13,7 +13,7 @@
   "type": "module",
   "scripts": {
     "prepare:dev-host": "node scripts/prepare-electron-dev-host.mjs",
-    "dev": "npm run prepare:dev-host && electron-vite dev",
+    "dev": "npm run prepare:dev-host && electron-vite dev --watch",
     "build": "electron-vite build",
     "package": "npm run build && electron-builder --dir --publish never",
     "package:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --x64 --arm64 --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false -c.mac.notarize=false",
@@ -99,7 +99,10 @@
       "icon": "resources/icons/douchat.icns",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。",
-        "NSSpeechRecognitionUsageDescription": "Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。"
+        "NSSpeechRecognitionUsageDescription": "Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。",
+        "NSDownloadsFolderUsageDescription": "Douchat accesses Downloads only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问下载文件夹。",
+        "NSDesktopFolderUsageDescription": "Douchat accesses Desktop only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问桌面文件夹。",
+        "NSDocumentsFolderUsageDescription": "Douchat accesses Documents only when you ask an agent to find or open a local file. / Douchat 仅在你要求智能体查找或打开本地文件时访问文稿文件夹。"
       },
       "hardenedRuntime": true,
       "entitlements": "resources/entitlements.mac.plist",

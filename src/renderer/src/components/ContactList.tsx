@@ -1,19 +1,24 @@
+import type { SocialSnapshot } from '../../../shared/social'
 import { t, tr } from '../preferences'
-import { ChevronRight, Search, Star, X } from 'lucide-react'
+import { ChevronRight, Search, Star, UsersRound, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import { contactSections, matchesContactQuery } from '../../../shared/bot/contacts'
-import { AgentAvatar, ConversationAvatar, SidebarResizer, agentDisplayName, agentSourceLabel } from './common'
+import { AgentAvatar, ConversationAvatar, UserAvatar, SidebarResizer, agentDisplayName, agentSourceLabel } from './common'
 
-export type ContactSelection = { kind: 'bot'; id: string } | { kind: 'group'; id: string }
+export type ContactSelection = { kind: 'bot'; id: string } | { kind: 'group'; id: string } | { kind: 'friend' | 'friend-chat' | 'friend-requests' | 'social-group' | 'new-social-group'; id: string }
 
 export function ContactList({
   snapshot,
   selected,
+  social,
+  socialError,
   onSelect
 }: {
   snapshot: AppSnapshot
+  social?: SocialSnapshot
+  socialError?: string
   selected?: ContactSelection
   onSelect: (selection: ContactSelection) => void
 }): ReactElement {
@@ -21,11 +26,14 @@ export function ContactList({
   const [builtInOpen, setBuiltInOpen] = useState(true)
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [botsOpen, setBotsOpen] = useState(true)
+  const [friendsOpen, setFriendsOpen] = useState(true)
+  const friends = (social?.friendships ?? []).filter((item) => matchesContactQuery(`${item.person.name} ${item.person.email}`, query))
+  const sharedGroups: NonNullable<typeof social>['rooms'] = []
 
   const groups = useMemo(
     () =>
       snapshot.conversations
-        .filter((conversation) => conversation.type === 'group' && matchesContactQuery(conversation.name, query))
+        .filter((conversation) => conversation.type === 'group' && conversation.savedToContacts === true && matchesContactQuery(conversation.name, query))
         .sort((left, right) => left.name.localeCompare(right.name)),
     [snapshot.conversations, query]
   )
@@ -111,11 +119,12 @@ export function ContactList({
         <button className="contact-folder" onClick={() => setGroupsOpen((open) => !open)} aria-expanded={groupsOpen}>
           <ChevronRight size={15} className={groupsOpen ? 'open' : ''} />
           <span>{t('Group chats')}</span>
-          <em>{groups.length}</em>
+          <em>{groups.length + sharedGroups.length}</em>
         </button>
         {groupsOpen && (
           <div className="contact-folder-body">
             {groups.map(groupRow)}
+            {sharedGroups.map((room) => <button key={room.id} className={`contact-row ${selected?.kind === 'social-group' && selected.id === room.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'social-group', id: room.id })}><UsersRound size={28} /><span className="contact-row-copy"><strong>{room.name}</strong><small>{tr('{count} members', { count: room.members.length })}</small></span></button>)}
           </div>
         )}
 
@@ -144,6 +153,19 @@ export function ContactList({
             {!bots.length && <p className="empty-search">{tr('No agents match “{query}”.', { query: query.trim() })}</p>}
           </div>
         )}
+        <button className="contact-folder" onClick={() => setFriendsOpen((open) => !open)} aria-expanded={friendsOpen}>
+          <ChevronRight size={15} className={friendsOpen ? 'open' : ''} /><span>{t('Friends')}</span><em>{friends.length}</em>
+        </button>
+        {friendsOpen && <div className="contact-folder-body contact-friends">
+          {friends.map((friend) => {
+            const status = friend.status === 'accepted' ? t('Added') : friend.status === 'declined' ? t('Declined') : friend.recipientId === social?.userId ? t('Awaiting acceptance') : t('Request sent')
+            const incoming = friend.status === 'pending' && friend.recipientId === social?.userId
+            return <button key={friend.id} className={`contact-row friend-contact-row ${(selected?.kind === 'friend' || selected?.kind === 'friend-chat') && selected.id === friend.person.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'friend', id: friend.person.id })}><UserAvatar src={friend.person.image || ''} name={friend.person.name} size={34} /><span className="contact-row-copy"><span className="friend-contact-title"><strong>{friend.person.name}</strong><small className={`friend-contact-status ${incoming ? 'pending' : ''}`}>{status}</small></span><small>{friend.person.email}</small></span></button>
+          })}
+          {socialError && <p className="empty-search" role="status">{socialError}</p>}
+          {!friends.length && !socialError && <p className="empty-search">{query.trim() ? t('No matching friends') : t('No friends yet')}</p>}
+
+        </div>}
       </div>
     </aside>
   )

@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -57,6 +58,34 @@ async function loginShellValue(expression: string): Promise<string | undefined> 
 }
 
 let cachedPath: Promise<string | undefined> | undefined;
+let cachedCliEnvironment: Promise<NodeJS.ProcessEnv> | undefined;
+
+/**
+ * Finder/Explorer-launched desktop apps do not inherit variables exported by a
+ * terminal startup file. Keep this list deliberately narrow: these are model
+ * CLI configuration values that the same user-owned CLI would already receive
+ * when launched in Terminal. They are passed only to child agent processes and
+ * are never persisted or logged by Douchat.
+ */
+const CLI_ENVIRONMENT_NAMES = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+] as const;
+
+async function loginShellCliEnvironment(): Promise<NodeJS.ProcessEnv> {
+  if (IS_WIN) return {};
+  const entries = await Promise.all(CLI_ENVIRONMENT_NAMES.map(async (name) => {
+    const value = await loginShellValue(`$${name}`);
+    return value ? [name, value] as const : undefined;
+  }));
+  const environment: NodeJS.ProcessEnv = {};
+  for (const entry of entries) {
+    if (entry) environment[entry[0]] = entry[1];
+  }
+  return environment;
+}
 
 /**
  * The PATH a login terminal would see, cached for the life of the process.
@@ -65,7 +94,10 @@ let cachedPath: Promise<string | undefined> | undefined;
  * Finder-launched macOS bundle is the bare launchd PATH — no node, no npx, no
  * user bin directories.
  */
-export function resetShellPath(): void { cachedPath = undefined; }
+export function resetShellPath(): void {
+  cachedPath = undefined;
+  cachedCliEnvironment = undefined;
+}
 
 export function loginShellPath(): Promise<string | undefined> {
   if (IS_WIN) return Promise.resolve(undefined);
@@ -73,10 +105,60 @@ export function loginShellPath(): Promise<string | undefined> {
   return cachedPath;
 }
 
+async function childDirectories(parent: string, suffix: string): Promise<string[]> {
+  try {
+    const entries = await fs.promises.readdir(parent, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .sort((left, right) => right.name.localeCompare(left.name, undefined, { numeric: true }))
+      .map((entry) => path.join(parent, entry.name, suffix));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Finder-launched apps sometimes cannot start an interactive shell at all
+ * (broken rc file, removed shell, or a version manager waiting for a TTY).
+ * These are the conventional executable locations used by the installers we
+ * support. They are fallbacks, not replacements for the user's shell PATH.
+ */
+async function executableSearchPath(): Promise<string> {
+  const shellPath = await loginShellPath();
+  if (IS_WIN) return shellPath || process.env.PATH || "";
+  const home = os.homedir();
+  const nvmBins = await childDirectories(path.join(home, ".nvm", "versions", "node"), "bin");
+  const candidates = [
+    ...(shellPath || "").split(path.delimiter),
+    ...(process.env.PATH || "").split(path.delimiter),
+    path.join(home, ".local", "bin"),
+    path.join(home, ".local", "share", "pnpm"),
+    path.join(home, ".local", "share", "mise", "shims"),
+    path.join(home, ".asdf", "shims"),
+    path.join(home, ".volta", "bin"),
+    path.join(home, ".fnm", "aliases", "default", "bin"),
+    path.join(home, ".npm-global", "bin"),
+    path.join(home, ".bun", "bin"),
+    path.join(home, ".cargo", "bin"),
+    path.join(home, ".opencode", "bin"),
+    path.join(home, ".kimi-code", "bin"),
+    ...nvmBins,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ].filter(Boolean);
+  return [...new Set(candidates)].join(path.delimiter);
+}
+
 /** PATH-repaired environment for a child process spawned outside a PTY. */
 export async function spawnEnvironment(): Promise<NodeJS.ProcessEnv> {
-  const path = await loginShellPath();
-  return path ? { ...process.env, PATH: path } : { ...process.env };
+  const repairedPath = await executableSearchPath();
+  cachedCliEnvironment ??= loginShellCliEnvironment().catch(() => ({}));
+  const cliEnvironment = await cachedCliEnvironment;
+  return repairedPath
+    ? { ...process.env, ...cliEnvironment, PATH: repairedPath }
+    : { ...process.env, ...cliEnvironment };
 }
 
 /**
@@ -122,7 +204,9 @@ export async function resolveExecutable(command: string): Promise<string | undef
   if (IS_WIN) {
     try {
       const { stdout } = await execFileAsync("where.exe", [trimmed], { timeout: 2_500 });
-      return stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+      const matches = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      // npm also installs extensionless POSIX scripts; Windows cannot execute those.
+      return matches.find((file) => /\.(?:exe|com|cmd|bat)$/i.test(file));
     } catch {
       return undefined;
     }

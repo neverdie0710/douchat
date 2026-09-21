@@ -113,6 +113,15 @@ describe('private delivery disclosure', () => {
     container.remove()
   })
 
+  it('shows group delivery receipts without a disclosure control', async () => {
+    await act(async () => root.render(<MessageDeliveries deliveries={[
+      { id: 'secret', recipientId: 'agent-1', recipientName: '拽姐', content: '' }
+    ]} agents={agents} />))
+    expect(container.textContent).toContain('Sent private message to 拽姐')
+    expect(container.querySelector('button')).toBeNull()
+    expect(container.querySelector('.bubble-delivery-details')).toBeNull()
+  })
+
   it('keeps private content sealed until the delivery summary is opened', async () => {
     await act(async () => root.render(<MessageDeliveries deliveries={deliveries} agents={agents} />))
 
@@ -231,6 +240,36 @@ describe('private delivery disclosure', () => {
     expect(container.textContent).toContain('第三段回复')
   })
 
+  it('renders an avatar beside every ordinary bubble from one reply turn', async () => {
+    const replies = ['第一条消息', '第二条消息'].map((text, index): ChatMessage => ({
+      id: `ordinary-reply-${index}`,
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      authorId: 'agent-1',
+      authorName: '拽姐',
+      text,
+      kind: 'message',
+      createdAt: 10,
+      replyGroupId: 'ordinary-reply-group'
+    }))
+
+    await act(async () => root.render(
+      <MessageGroupRow
+        messages={replies}
+        agent={agents[0]}
+        agents={agents}
+        relatedMessages={replies}
+        userName="You"
+        userAvatar=""
+        showAuthor={false}
+      />
+    ))
+
+    expect(container.querySelectorAll('.message-row')).toHaveLength(2)
+    expect(container.querySelectorAll('.message-bubble')).toHaveLength(2)
+    expect(container.querySelectorAll('[data-testid="agent-avatar"]')).toHaveLength(2)
+  })
+
   it('shows a plain-language receipt for a completed local-file tool action', async () => {
     await act(async () => root.render(
       <MessageActions actions={[
@@ -321,6 +360,22 @@ describe('private delivery disclosure', () => {
     expect(openProfile.mock.calls[0][1]).toMatchObject({ left: 0, right: 0, top: 0 })
   })
 
+  it('renders a human friend with the shared incoming bubble and their own profile', async () => {
+    const openProfile = vi.fn()
+    const message: ChatMessage = {
+      id: 'friend-message', conversationId: 'dm', topicId: 'dm',
+      authorId: 'bob', authorName: 'Bob', text: 'Hello', kind: 'message', createdAt: 20
+    }
+    await act(async () => root.render(<MessageRow messages={[message]} agents={[]} relatedMessages={[message]}
+      person={{ id: 'bob', name: 'Bob', email: 'bob@example.com', image: 'bob.png' }}
+      onOpenPersonProfile={openProfile} userName="Alice" userAvatar="" showAuthor={false} />))
+    expect(container.querySelector('.agent-bubble')?.textContent).toContain('Hello')
+    expect(container.querySelector('[data-user-name="Bob"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="empty-avatar"]')).toBeNull()
+    await act(async () => container.querySelector<HTMLButtonElement>('.message-avatar-button')!.click())
+    expect(openProfile).toHaveBeenCalledOnce()
+  })
+
   it('opens profile editing from the user message avatar', async () => {
     const openUserProfile = vi.fn()
     const userMessage: ChatMessage = {
@@ -351,7 +406,7 @@ describe('private delivery disclosure', () => {
     expect(openUserProfile).toHaveBeenCalledOnce()
   })
 
-  it('keeps one reply loader while the current action changes underneath it', async () => {
+  it('shows the current activity inside one reply bubble', async () => {
     const activity: ConversationActivityState = {
       conversationId: directConversation.id,
       topicId: 'topic-2',
@@ -364,8 +419,9 @@ describe('private delivery disclosure', () => {
 
     await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
 
-    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
-    expect(container.querySelector('.typing-activity-detail')?.textContent).toContain('Checking files in Other')
+    expect(container.querySelectorAll('.typing-bubble')).toHaveLength(1)
+    expect(container.querySelector('.typing-activity-text')?.textContent).toContain('Checking files in Other')
+    expect(container.querySelector('.typing-activity-detail')).toBeNull()
 
     await act(async () => root.render(
       <ChatActivity
@@ -377,13 +433,21 @@ describe('private delivery disclosure', () => {
       />
     ))
 
-    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
-    expect(container.querySelector('.typing-activity-detail')?.textContent)
+    expect(container.querySelector('.typing-activity-text')?.textContent)
       .toContain('Opening agreement.docx with the system default app')
 
     await act(async () => root.render(<ChatActivity activity={{ ...activity, action: undefined }} agents={agents} />))
-    expect(container.querySelector('.typing-activity')?.textContent).toBe('Preparing a reply...')
-    expect(container.querySelector('.typing-activity-detail')?.textContent).toBe('Thinking about the next step')
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Thinking about the next step')
+
+    await act(async () => root.render(
+      <ChatActivity
+        activity={{ ...activity, phase: 'planning', agentIds: [], label: 'Coordinating the group', action: undefined }}
+        agents={agents}
+      />
+    ))
+    expect(container.querySelector('.typing-label')?.textContent).toBe('Coordinating the group')
+    expect(container.querySelector('.avatar')).toBeNull()
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Coordinating the group')
 
     await act(async () => root.render(
       <ChatActivity
@@ -394,10 +458,11 @@ describe('private delivery disclosure', () => {
         agents={agents}
       />
     ))
-    expect(container.querySelector('.typing-activity-detail')?.textContent).toBe('Preparing the result')
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Preparing the result')
   })
 
-  it('keeps the specific system error behind a generic disclosure title', async () => {
+  it('shows the specific problem immediately while keeping raw detail folded', async () => {
+    const onOpenCredits = vi.fn()
     const detail = '429: {"message":"Douchat credit balance is insufficient"}'
     const message: ChatMessage = {
       id: 'error-1',
@@ -411,17 +476,90 @@ describe('private delivery disclosure', () => {
       createdAt: 30
     }
 
-    await act(async () => root.render(<SystemMessage message={message} />))
+    await act(async () => root.render(<SystemMessage message={message} onOpenCredits={onOpenCredits} />))
 
     const toggle = container.querySelector<HTMLButtonElement>('.system-toggle')
-    expect(container.textContent).toContain('Something went wrong')
-    expect(container.textContent).not.toContain('rate limiting')
+    expect(container.textContent).toContain('Douchat does not have enough credits')
+    expect(container.textContent).toContain('Top up credits to continue.')
     expect(container.textContent).not.toContain('credit balance')
+
+    const topUp = container.querySelector<HTMLButtonElement>('.system-inline-action')
+    expect(topUp?.parentElement?.classList.contains('system-guidance')).toBe(true)
+    expect(topUp?.querySelector('svg')).toBeNull()
+    await act(async () => topUp?.click())
+    expect(onOpenCredits).toHaveBeenCalledOnce()
 
     await act(async () => toggle?.click())
 
     expect(toggle?.getAttribute('aria-expanded')).toBe('true')
     expect(container.textContent).toContain(detail)
+  })
+
+  it('shows a next step for a local Claude startup failure', async () => {
+    const message: ChatMessage = {
+      id: 'error-2', conversationId: directConversation.id, topicId: 'topic-2',
+      authorId: 'system', authorName: 'Douchat', text: 'Claude Code: Exited with status 1',
+      detail: 'Run ID: run-1\nCause:\nClaude Code: Exited with status 1', kind: 'system', createdAt: 31
+    }
+    await act(async () => root.render(<SystemMessage message={message} />))
+    expect(container.textContent).toContain('Claude Code could not start')
+    expect(container.textContent).toContain('Open Claude Code in Terminal once')
+    expect(container.textContent).not.toContain('Run ID: run-1')
+  })
+
+  it('shows a next step when a local Claude account is out of credit', async () => {
+    const openLocalAgentTerminal = vi.fn(async () => ({ terminal: 'termany' as const }))
+    Object.defineProperty(window, 'douchat', {
+      configurable: true,
+      value: { openLocalAgentTerminal }
+    })
+    const message: ChatMessage = {
+      id: 'error-3', conversationId: directConversation.id, topicId: 'topic-2',
+      authorId: 'system', authorName: 'Douchat', text: 'Claude Code: Credit balance is too low',
+      detail: 'Run ID: run-2\nCause:\nClaude Code: Credit balance is too low', kind: 'system', createdAt: 32
+    }
+    await act(async () => root.render(<SystemMessage message={message} />))
+    expect(container.textContent).toContain('Claude Code does not have enough credit')
+    expect(container.textContent).toContain('add credit or switch to an account with available usage')
+    expect(container.textContent).not.toContain('Run ID: run-2')
+
+    await act(async () => container.querySelector<HTMLButtonElement>('.system-toggle')?.click())
+    const action = [...container.querySelectorAll<HTMLButtonElement>('.system-recovery-action')]
+      .find((button) => button.textContent?.includes('Open Claude Code'))
+    expect(action).toBeTruthy()
+    await act(async () => action?.click())
+    expect(openLocalAgentTerminal).toHaveBeenCalledWith('claude')
+  })
+
+  it('unlocks a stuck Claude terminal action after six seconds', async () => {
+    vi.useFakeTimers()
+    try {
+      const openLocalAgentTerminal = vi.fn(() => new Promise<{ terminal: 'termany' | 'system' }>(() => undefined))
+      Object.defineProperty(window, 'douchat', {
+        configurable: true,
+        value: { openLocalAgentTerminal }
+      })
+      const message: ChatMessage = {
+        id: 'error-4', conversationId: directConversation.id, topicId: 'topic-2',
+        authorId: 'system', authorName: 'Douchat', text: 'Claude Code: Credit balance is too low',
+        detail: 'Cause:\nClaude Code: Credit balance is too low', kind: 'system', createdAt: 33
+      }
+      await act(async () => root.render(<SystemMessage message={message} />))
+      await act(async () => container.querySelector<HTMLButtonElement>('.system-toggle')?.click())
+      const action = container.querySelector<HTMLButtonElement>('.system-recovery-action')
+
+      await act(async () => action?.click())
+      expect(action?.disabled).toBe(true)
+      expect(action?.textContent).toContain('Opening')
+
+      await act(async () => vi.advanceTimersByTimeAsync(6_100))
+
+      expect(action?.disabled).toBe(false)
+      expect(action?.textContent).toContain('Open Claude Code')
+      expect(container.textContent).toContain('Opening Claude Code timed out')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -446,7 +584,7 @@ describe('direct-chat transcript visibility', () => {
     ).map((message) => message.id)).toEqual(['user-1', 'incoming-1'])
   })
 
-  it('groups contiguous bubbles produced by the same reply turn', () => {
+  it('groups contiguous private-reply segments produced by the same turn', () => {
     const source = { kind: 'bot' as const, id: 'sender-1', name: '豆博士', content: '一起打牌吗？' }
     const replies = ['第一段回复', '第二段回复', '第三段回复'].map((text, index): ChatMessage => ({
       id: `reply-${index}`,
@@ -462,6 +600,22 @@ describe('direct-chat transcript visibility', () => {
     }))
 
     expect(groupConversationMessages(replies)).toEqual([replies])
+  })
+
+  it('keeps ordinary bubbles from the same reply turn as separate avatar rows', () => {
+    const replies = ['第一条消息', '第二条消息'].map((text, index): ChatMessage => ({
+      id: `ordinary-${index}`,
+      conversationId: directConversation.id,
+      topicId: 'topic-2',
+      authorId: 'agent-1',
+      authorName: '拽姐',
+      text,
+      kind: 'message',
+      createdAt: 10,
+      replyGroupId: 'reply-group-1'
+    }))
+
+    expect(groupConversationMessages(replies)).toEqual(replies.map((message) => [message]))
   })
 
   it('groups delivery replies from the same recipient turn', () => {

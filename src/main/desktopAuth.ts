@@ -12,7 +12,12 @@ import type {
   UpdateDesktopProfileInput,
   UsageSummary
 } from '../shared/types'
-import { createDesktopLoginUrl, DESKTOP_AUTH_CLIENT_ID, parseDesktopAuthCallback } from './authProtocol'
+import {
+  createDesktopLoginUrl,
+  DESKTOP_AUTH_CLIENT_ID,
+  DOUCHAT_PRODUCTION_ORIGIN,
+  parseDesktopAuthCallback
+} from './authProtocol'
 
 interface StoredCredential {
   version: 1
@@ -33,6 +38,129 @@ interface ApiEnvelope<T> {
 }
 
 const FLOW_MAX_AGE_MS = 10 * 60 * 1000
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024
+
+export function createLoopbackSuccessPage(): string {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录成功 · Douchat</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      color: #111827;
+      background: #f6f8ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at 50% 18%, rgba(31, 99, 255, .12), transparent 38%),
+        #f6f8ff;
+    }
+    main {
+      width: min(100%, 520px);
+      padding: 48px 44px 40px;
+      text-align: center;
+      background: rgba(255, 255, 255, .94);
+      border: 1px solid #dfe5f2;
+      border-radius: 28px;
+      box-shadow: 0 24px 70px rgba(45, 68, 122, .14);
+    }
+    .status {
+      width: 76px;
+      height: 76px;
+      margin: 0 auto 26px;
+      display: grid;
+      place-items: center;
+      color: white;
+      background: #1f63ff;
+      border: 10px solid #e6edff;
+      border-radius: 24px;
+      box-shadow: 0 10px 24px rgba(31, 99, 255, .24);
+    }
+    .status svg { width: 30px; height: 30px; }
+    h1 {
+      margin: 0;
+      font-size: clamp(30px, 7vw, 42px);
+      line-height: 1.12;
+      letter-spacing: -.035em;
+    }
+    p {
+      margin: 18px auto 0;
+      max-width: 390px;
+      color: #667085;
+      font-size: 17px;
+      line-height: 1.7;
+    }
+    .button {
+      width: 100%;
+      min-height: 56px;
+      margin-top: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: white;
+      background: #1f63ff;
+      border-radius: 16px;
+      font-size: 17px;
+      font-weight: 650;
+      text-decoration: none;
+      box-shadow: 0 10px 22px rgba(31, 99, 255, .22);
+      transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+    }
+    .button:hover {
+      background: #1555e8;
+      box-shadow: 0 12px 28px rgba(31, 99, 255, .28);
+      transform: translateY(-1px);
+    }
+    .button:focus-visible {
+      outline: 3px solid rgba(31, 99, 255, .28);
+      outline-offset: 4px;
+    }
+    .button svg { width: 19px; height: 19px; }
+    .hint {
+      margin-top: 18px;
+      color: #98a2b3;
+      font-size: 14px;
+    }
+    @media (max-width: 520px) {
+      body { padding: 16px; }
+      main { padding: 40px 24px 32px; border-radius: 24px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .button { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="status" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m5 12 4.2 4.2L19 6.8" />
+      </svg>
+    </div>
+    <h1>登录成功</h1>
+    <p>账号已连接到 Douchat。你可以回到桌面客户端继续使用。</p>
+    <a class="button" href="${DOUCHAT_PRODUCTION_ORIGIN}">
+      返回 Douchat 官网
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 12h14M13 6l6 6-6 6" />
+      </svg>
+    </a>
+    <div class="hint">也可以直接关闭此页面</div>
+  </main>
+</body>
+</html>`
+}
 
 export class DesktopAuth {
   private readonly credentialPath: string
@@ -157,8 +285,24 @@ export class DesktopAuth {
   async updateProfile(input: UpdateDesktopProfileInput): Promise<DesktopAuthState> {
     if (!this.accessToken) return this.setState({ status: 'signed-out' })
     const changes: UpdateDesktopProfileInput = {}
-    if (typeof input.name === 'string') changes.name = input.name.trim()
-    if (typeof input.image === 'string') changes.image = input.image.trim()
+    if (typeof input.name === 'string') {
+      changes.name = input.name.trim()
+      if (!changes.name) throw new Error('Name cannot be empty.')
+    }
+    if (typeof input.image === 'string') {
+      const image = input.image.trim()
+      try {
+        changes.image = image.startsWith('data:image/')
+          ? await this.uploadAvatarDataUrl(image)
+          : image
+      } catch (error) {
+        if (error instanceof InvalidSessionError) {
+          await this.clearCredential()
+          return this.setState({ status: 'signed-out' })
+        }
+        throw error
+      }
+    }
     let response: Response
     try {
       response = await fetch(new URL('/api/desktop-auth/me', this.webAppUrl), {
@@ -185,6 +329,49 @@ export class DesktopAuth {
       throw new Error(payload?.message || `Login service returned ${response.status}. Try again.`)
     }
     return this.setState({ status: 'signed-in', user: this.requireUser(payload.data.user) })
+  }
+
+  /** Upload a prepared avatar from the main process, where the desktop token
+   * remains private, and return the public CDN URL saved on the account. */
+  private async uploadAvatarDataUrl(dataUrl: string): Promise<string> {
+    const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl)
+    if (!match) throw new Error('This picture could not be prepared for upload.')
+    const bytes = Buffer.from(match[2], 'base64')
+    if (!bytes.length || bytes.length > MAX_AVATAR_BYTES) {
+      throw new Error('This picture is too large. Choose an image under 2 MB.')
+    }
+
+    const mimeType = match[1]
+    const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType.slice('image/'.length)
+    const formData = new FormData()
+    formData.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), `avatar.${extension}`)
+
+    let response: Response
+    try {
+      response = await fetch(new URL('/api/desktop-auth/avatar', this.webAppUrl), {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${this.accessToken}`
+        },
+        body: formData
+      })
+    } catch {
+      throw new Error('Could not upload your picture. Check your connection and try again.')
+    }
+
+    if (response.status === 401 || response.status === 403) throw new InvalidSessionError()
+    const payload = await response.json().catch(() => null) as ApiEnvelope<{ url?: string }> | null
+    if (!response.ok || !payload?.data?.url) {
+      throw new Error(payload?.message || `Picture upload returned ${response.status}. Try again.`)
+    }
+    try {
+      const uploaded = new URL(payload.data.url)
+      if (uploaded.protocol !== 'https:') throw new Error('Avatar URL is not HTTPS')
+      return uploaded.toString()
+    } catch {
+      throw new Error('Picture upload returned an invalid URL.')
+    }
   }
 
   async getUsageSummary(): Promise<UsageSummary> {
@@ -302,8 +489,14 @@ export class DesktopAuth {
           response.writeHead(404).end('Not found')
           return
         }
-        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
-        response.end('<!doctype html><meta charset="utf-8"><title>Douchat</title><style>body{font:16px system-ui;display:grid;min-height:90vh;place-items:center;color:#202124}</style><p>登录成功，可以返回 Douchat 了。</p>')
+        response.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          'Referrer-Policy': 'no-referrer',
+          'X-Content-Type-Options': 'nosniff'
+        })
+        response.end(createLoopbackSuccessPage())
         void this.handleCallback(callbackUrl.toString())
       })
       server.once('error', reject)

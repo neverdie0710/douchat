@@ -58,6 +58,20 @@ function isMissingFile(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
 }
 
+function localFileError(error: unknown, target: string): Error {
+  const code = error && typeof error === 'object' && 'code' in error
+    ? String(error.code)
+    : ''
+  if (code === 'EACCES' || code === 'EPERM') {
+    return new Error(
+      `Douchat needs permission to access ${basename(target) || target}. `
+      + 'Allow Douchat in System Settings → Privacy & Security → Files and Folders, then try again. '
+      + `(${code})`
+    )
+  }
+  return error instanceof Error ? error : new Error(shortDetail(error))
+}
+
 export class LocalComputerProvider implements ComputerProvider {
   private readonly computers = new Map<string, ManagedComputer>()
   private readonly allowedRoots: string[]
@@ -364,7 +378,7 @@ export class LocalComputerProvider implements ComputerProvider {
     const listFilesTool: AgentTool<typeof listFilesParameters> = {
       name: 'computer_list_files',
       label: 'List local files',
-      description: 'List files and folders in Downloads, Desktop, or Documents. Start by omitting path to inspect Downloads, then reuse absolute paths returned by this tool for subfolders. Never invent a local path. This tool only reads metadata.',
+      description: 'List files and folders in Downloads, Desktop, or Documents only after the human explicitly asks to inspect local files. Otherwise ask for permission first. Start by omitting path to inspect Downloads, then reuse absolute paths returned by this tool for subfolders. Never invent a local path. This tool only reads metadata.',
       parameters: listFilesParameters,
       execute: async (_id, params) => {
         const target = this.resolveAllowedPath(params.path ?? this.allowedRoots[0])
@@ -389,7 +403,7 @@ export class LocalComputerProvider implements ComputerProvider {
           }
         } catch (error) {
           this.setFileActivity(agentId, 'Could not read folder', false)
-          throw error
+          throw localFileError(error, target)
         }
       }
     }
@@ -408,9 +422,10 @@ export class LocalComputerProvider implements ComputerProvider {
             details: { path: target, size }
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : shortDetail(error)
+          const failure = localFileError(error, params.path)
+          const message = failure.message
           this.setError(agentId, message)
-          throw error
+          throw failure
         }
       }
     }

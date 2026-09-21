@@ -1,6 +1,8 @@
+import { mentionableAgents } from './common'
+import type { SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
-import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, TriangleAlert, Sparkles, Square, X } from 'lucide-react'
+import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
@@ -17,7 +19,7 @@ import type {
 } from '../../../shared/types'
 import { MessageMarkdown } from './MessageMarkdown'
 import type { ProfileAnchor } from './MemberProfilePopover'
-import { summarizeRuntimeError } from '../../../shared/bot/errors'
+import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
 import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
 import {
@@ -147,6 +149,12 @@ export function messageActionLabel(action: MessageAction): string {
                       succeeded: tr('Updated agent {name}', { name: target }),
                       failed: tr('Could not update agent {name}', { name: target })
                     }
+                  : action.tool === 'create_routine'
+                    ? {
+                        running: tr('Creating routine {name}', { name: target }),
+                        succeeded: tr('Created routine {name}', { name: target }),
+                        failed: tr('Could not create routine {name}', { name: target })
+                      }
               : ['computer_snapshot', 'computer_click', 'computer_type', 'computer_scroll'].includes(action.tool)
                 ? {
                     running: t('Working in the browser'),
@@ -252,12 +260,11 @@ export function ChatActivity({
     <div className="typing-row">
       {activeAgents.map((agent) => <AgentAvatar key={agent.id} agent={agent} size={36} />)}
       <div className="typing-content" role="status" aria-live="polite">
-        <span className="typing-label">{activeAgents.map(agentDisplayName).join('、') || activity.label}</span>
+        <span className="typing-label">{activeAgents.map(agentDisplayName).join('、') || t(activity.label)}</span>
         <span className="typing-bubble typing-activity">
-          <span>{t('Preparing a reply')}</span>
+          <span className="typing-activity-text" key={detail}>{detail}</span>
           <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
         </span>
-        <span className="typing-activity-detail" key={detail}>{detail}</span>
       </div>
     </div>
   )
@@ -362,6 +369,12 @@ export function MessageDeliveries({
   const detailsId = useId()
   const recipientNames = deliveries.map(deliveryRecipientName).join(', ')
   const summary = tr('Sent private message to {names}', { names: recipientNames })
+
+  // Group receipts expose delivery status only. Secret bodies live in the
+  // recipient's private context (or the human's direct inbox).
+  if (deliveries.every((delivery) => !delivery.content && !delivery.replies?.length)) {
+    return <div className="bubble-deliveries"><Lock size={10} /><span>{summary}</span></div>
+  }
 
   return (
     <div className={`bubble-delivery-disclosure ${open ? 'is-open' : ''}`}>
@@ -504,6 +517,8 @@ export function MessageSourceCard({
 }
 
 export function MessageGroupRow({
+  person,
+  onOpenPersonProfile,
   messages,
   agent,
   agents,
@@ -513,6 +528,8 @@ export function MessageGroupRow({
   showAuthor,
   onOpenAgentProfile
 }: {
+  person?: SocialPerson
+  onOpenPersonProfile?: (anchor: ProfileAnchor) => void
   messages: ChatMessage[]
   agent?: AgentConfig
   agents: AgentConfig[]
@@ -533,11 +550,28 @@ export function MessageGroupRow({
       message.source?.id === first.source?.id
     )
   )
+  if (!mergePrivateReply && messages.length > 1) {
+    return <>{messages.map((message) => (
+      <MessageGroupRow
+        key={message.id}
+        person={person}
+        onOpenPersonProfile={onOpenPersonProfile}
+        messages={[message]}
+        agent={agent}
+        agents={agents}
+        relatedMessages={relatedMessages}
+        userName={userName}
+        userAvatar={userAvatar}
+        showAuthor={showAuthor}
+        onOpenAgentProfile={onOpenAgentProfile}
+      />
+    ))}</>
+  }
   const bubbleGroups = mergePrivateReply ? [messages] : messages.map((message) => [message])
   return (
     <div className="message-row agent-message-row">
       <div className="message-avatar-slot">
-        {agent && onOpenAgentProfile ? (
+        {person ? <button type="button" className="message-avatar-button" onClick={(event) => onOpenPersonProfile?.(event.currentTarget.getBoundingClientRect())} aria-label={tr('{name} — view profile', { name: person.name })}><UserAvatar src={person.image || ''} name={person.name} size={36} /></button> : agent && onOpenAgentProfile ? (
           <button
             type="button"
             className="message-avatar-button"
@@ -607,11 +641,13 @@ export function MessageGroupRow({
   )
 }
 
-/** A failure uses one calm, predictable label; the actionable/raw detail stays
- *  one click away rather than filling the thread. */
-export function SystemMessage({ message }: { message: ChatMessage }): ReactElement {
+/** A failure leads with the specific problem and next step; only the raw
+ *  developer diagnostic stays behind a disclosure. */
+export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage; onOpenCredits?: () => void }): ReactElement {
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [launching, setLaunching] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   useEffect(() => {
     if (!copied) return
@@ -621,10 +657,19 @@ export function SystemMessage({ message }: { message: ChatMessage }): ReactEleme
 
   // Messages written before failures were summarised, and any path that still
   // hands over a raw dump, get folded here rather than filling the thread.
-  const summary = message.detail
-    ? { title: message.text, detail: message.detail }
-    : message.text.length > 200
-      ? summarizeRuntimeError(message.text)
+  const shortSummary = summarizeRuntimeError(message.text)
+  const summary: RuntimeErrorSummary | null = message.detail
+    ? (() => {
+        const diagnostic = summarizeRuntimeError(message.detail)
+        return {
+          title: diagnostic.guidance ? diagnostic.title : shortSummary.title,
+          guidance: diagnostic.guidance ?? shortSummary.guidance,
+          action: diagnostic.action ?? shortSummary.action,
+          detail: message.detail
+        }
+      })()
+    : message.text.length > 200 || shortSummary.guidance
+      ? shortSummary
       : null
   if (!summary) return <div className="system-message">{t(message.text)}</div>
 
@@ -632,7 +677,19 @@ export function SystemMessage({ message }: { message: ChatMessage }): ReactEleme
     <div className={`system-message is-error ${open ? 'is-open' : ''}`}>
       <div className="system-line">
         <TriangleAlert size={13} />
-        <span>{t('Something went wrong')}</span>
+        <div className="system-summary">
+          <strong>{t(summary.title)}</strong>
+          {(summary.guidance || summary.action?.kind === 'open-douchat-credits') && (
+            <div className="system-guidance">
+              {summary.guidance ? <span>{t(summary.guidance)}</span> : null}
+              {summary.action?.kind === 'open-douchat-credits' && onOpenCredits && (
+                <button className="system-inline-action" type="button" onClick={onOpenCredits}>
+                  {t(summary.action.label)}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
         <button
           className="system-toggle"
           onClick={() => setOpen((value) => !value)}
@@ -645,15 +702,46 @@ export function SystemMessage({ message }: { message: ChatMessage }): ReactEleme
       {open && (
         <div className="system-detail">
           <pre>{summary.detail}</pre>
-          <button
-            className="system-copy"
-            onClick={() => {
-              void navigator.clipboard.writeText(summary.detail).then(() => setCopied(true))
-            }}
-          >
-            {copied ? <Check size={11} /> : <Copy size={11} />}
-            {t(copied ? 'Copied' : 'Copy')}
-          </button>
+          <div className="system-detail-actions">
+            <button
+              className="system-copy"
+              onClick={() => {
+                void navigator.clipboard.writeText(summary.detail).then(() => setCopied(true))
+              }}
+            >
+              {copied ? <Check size={11} /> : <Copy size={11} />}
+              {t(copied ? 'Copied' : 'Copy')}
+            </button>
+            {summary.action?.kind === 'open-local-agent-terminal' && (
+              <button
+                className="system-copy system-recovery-action"
+                disabled={launching}
+                onClick={() => {
+                  setLaunching(true)
+                  setActionError('')
+                  let timedOut = false
+                  const timeout = window.setTimeout(() => {
+                    timedOut = true
+                    setLaunching(false)
+                    setActionError(t('Opening Claude Code timed out. Try again or run claude in a terminal manually.'))
+                  }, 6_000)
+                  void window.douchat.openLocalAgentTerminal('claude')
+                    .then(() => {
+                      if (timedOut) setActionError('')
+                    })
+                    .catch(() => setActionError(t('Could not open Claude Code. Open a terminal and run claude manually.')))
+                    .finally(() => {
+                      window.clearTimeout(timeout)
+                      setLaunching(false)
+                    })
+                }}
+              >
+                {launching ? <LoaderCircle size={11} className="spin" /> : <SquareTerminal size={11} />}
+                {t(launching ? 'Opening…' : summary.action.label)}
+              </button>
+            )}
+          </div>
+          {actionError ? <p className="system-action-error">{actionError}</p> : null}
         </div>
       )}
     </div>
@@ -661,6 +749,8 @@ export function SystemMessage({ message }: { message: ChatMessage }): ReactEleme
 }
 
 export function MessageRow({
+  person,
+  onOpenPersonProfile,
   messages,
   agent,
   agents,
@@ -669,8 +759,11 @@ export function MessageRow({
   userAvatar,
   showAuthor,
   onOpenAgentProfile,
-  onOpenUserProfile
+  onOpenUserProfile,
+  onOpenCredits
 }: {
+  person?: SocialPerson
+  onOpenPersonProfile?: (anchor: ProfileAnchor) => void
   messages: ChatMessage[]
   agent?: AgentConfig
   agents: AgentConfig[]
@@ -679,7 +772,8 @@ export function MessageRow({
   userAvatar: string
   showAuthor: boolean
   onOpenAgentProfile?: (agentId: string, anchor: ProfileAnchor) => void
-  onOpenUserProfile?: () => void
+  onOpenUserProfile?: (anchor: ProfileAnchor) => void
+  onOpenCredits?: () => void
 }): ReactElement {
   const message = messages[0]
   if (message.kind === 'handoff') {
@@ -694,7 +788,7 @@ export function MessageRow({
       </div>
     )
   }
-  if (message.kind === 'system') return <SystemMessage message={message} />
+  if (message.kind === 'system') return <SystemMessage message={message} onOpenCredits={onOpenCredits} />
   if (message.authorId === 'user') {
     const hasAttachments = Boolean(message.attachments?.length)
     return (
@@ -707,7 +801,7 @@ export function MessageRow({
           <button
             type="button"
             className="message-avatar-button user-profile-avatar-button"
-            onClick={onOpenUserProfile}
+            onClick={(event) => onOpenUserProfile(event.currentTarget.getBoundingClientRect())}
             aria-label={tr('{name} — open your profile', { name: userName })}
             title={userName}
           >
@@ -731,6 +825,8 @@ export function MessageRow({
   }
   return (
     <MessageGroupRow
+      person={person}
+      onOpenPersonProfile={onOpenPersonProfile}
       messages={messages}
       agent={agent}
       agents={agents}
@@ -751,7 +847,7 @@ export function visibleConversationMessages(
   const participantIds = new Set(conversation.agentIds)
   return messages.filter((message) =>
     message.kind !== 'handoff' &&
-    (message.authorId === 'user' || message.authorId === 'system' || participantIds.has(message.authorId))
+    (message.authorId === 'user' || message.authorId === 'system' || message.authorId === conversation.person?.id || participantIds.has(message.authorId))
   )
 }
 
@@ -763,9 +859,12 @@ export function groupConversationMessages(messages: ChatMessage[]): ChatMessage[
     if (
       message.kind === 'message' &&
       message.replyGroupId &&
+      message.source?.kind === 'bot' &&
       previous?.kind === 'message' &&
       previous.replyGroupId === message.replyGroupId &&
-      previous.authorId === message.authorId
+      previous.authorId === message.authorId &&
+      previous.source?.kind === 'bot' &&
+      previous.source.id === message.source.id
     ) {
       previousGroup!.push(message)
     } else {
@@ -776,6 +875,10 @@ export function groupConversationMessages(messages: ChatMessage[]): ChatMessage[
 }
 
 export function ChatPane({
+  person,
+  onOpenPersonProfile,
+  loadMessagePage,
+  initialHasMore,
   userName,
   userAvatar,
   conversation,
@@ -791,9 +894,14 @@ export function ChatPane({
   onToggleInspector,
   onOpenAgentProfile,
   onOpenUserProfile,
+  onOpenCredits,
   onSend,
   onStop
 }: {
+  person?: SocialPerson
+  onOpenPersonProfile?: (anchor: ProfileAnchor) => void
+  loadMessagePage?: (before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
+  initialHasMore?: boolean
   userName: string
   userAvatar: string
   conversation?: Conversation
@@ -808,12 +916,14 @@ export function ChatPane({
   inspectorOpen: boolean
   onToggleInspector: () => void
   onOpenAgentProfile: (agentId: string, anchor: ProfileAnchor) => void
-  onOpenUserProfile: () => void
+  onOpenUserProfile: (anchor: ProfileAnchor) => void
+  onOpenCredits?: () => void
   onSend: (text: string, images?: MessageImageInput[]) => Promise<void>
   onStop: () => void
 }): ReactElement {
-  const [history, setHistory] = useState(() => ({ source: recentMessages, messages: recentMessages.slice(-50) }))
-  const [hasMore, setHasMore] = useState(recentMessages.length > 50)
+  const [history, setHistory] = useState(() => ({ source: recentMessages, messages: loadMessagePage ? recentMessages : recentMessages.slice(-50) }))
+  const [hasMore, setHasMore] = useState(Boolean(initialHasMore) || recentMessages.length > 50)
+  useEffect(() => { if (initialHasMore !== undefined) setHasMore(initialHasMore) }, [initialHasMore])
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [historyError, setHistoryError] = useState(false)
   const loadingRef = useRef(false)
@@ -828,7 +938,7 @@ export function ChatPane({
       ...history.messages.map((message) => updates.get(message.id) ?? message),
       ...recentMessages.slice(lastKnownIndex + 1)
     ] : []
-    if (!history.messages.length) messages = recentMessages.slice(-50)
+    if (!history.messages.length) messages = loadMessagePage ? recentMessages : recentMessages.slice(-50)
     setHistory({ source: recentMessages, messages })
     if (!recentMessages.length) setHasMore(false)
   }
@@ -851,7 +961,7 @@ export function ChatPane({
   const voiceTranscriptRef = useRef('')
   const working = Boolean(activity)
   const conversationName = conversation ? conversationDisplayName(conversation, agents) : ''
-  const timelineMessages = visibleConversationMessages(conversation, messages)
+  const timelineMessages = person ? messages : visibleConversationMessages(conversation, messages)
   const timelineGroups = groupConversationMessages(timelineMessages)
 
   useEffect(() => {
@@ -898,7 +1008,7 @@ export function ChatPane({
     setLoadingHistory(true)
     setHistoryError(false)
     try {
-      const page = await window.douchat.getMessagePage(conversation.id, topic.id, messages[0]?.id)
+      const page = await (loadMessagePage ? loadMessagePage(messages[0]?.id) : window.douchat.getMessagePage(conversation.id, topic.id, messages[0]?.id))
       if (!alive.current) return
       prependPosition.current = { height: node.scrollHeight, top: node.scrollTop }
       setHistory((current) => {
@@ -914,14 +1024,16 @@ export function ChatPane({
     }
   }
 
+  const addressableMembers = useMemo(() => mentionableAgents(conversation, members), [conversation, members])
   const mentionOptions = useMemo(() => {
     if (!mention || conversation?.type !== 'group') return []
     const needle = mention.query.normalize('NFKC').toLocaleLowerCase()
     return [
-      { id: 'all', name: 'all', label: t('Everyone'), agent: undefined as AgentConfig | undefined },
-      ...members.map((member) => ({ id: member.id, name: member.name, label: agentDisplayName(member), agent: member }))
+      { id: 'all', name: 'all', label: t('Everyone'), agent: undefined as AgentConfig | undefined, person: undefined as SocialPerson | undefined },
+      ...addressableMembers.map((member) => ({ id: member.id, name: member.name, label: agentDisplayName(member), agent: member, person: undefined as SocialPerson | undefined })),
+      ...(conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId).map((person) => ({ id: person.id, name: person.name, label: person.name, agent: undefined as AgentConfig | undefined, person })) ?? [])
     ].filter((option) => `${option.label} ${option.name}`.normalize('NFKC').toLocaleLowerCase().includes(needle))
-  }, [mention, members, conversation?.type])
+  }, [mention, addressableMembers, conversation])
 
   useEffect(() => setMentionIndex(0), [mention?.query])
 
@@ -941,7 +1053,7 @@ export function ChatPane({
       setMention(null)
       return
     }
-    setMention(mentionQuery(value, cursor, members.map((member) => ({ id: member.id, name: member.name }))))
+    setMention(mentionQuery(value, cursor, [...addressableMembers.map((member) => ({ id: member.id, name: member.name })), ...(conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId) ?? [])]))
   }
 
   const stopVoiceInput = (): void => {
@@ -1159,7 +1271,7 @@ export function ChatPane({
           <div>
             <strong>
               {conversationName || 'Douchat'}
-              {conversation?.type === 'group' ? ` (${members.length})` : ''}
+              {conversation?.type === 'group' ? ` (${members.length + (conversation.socialRoom?.members.length ?? 0)})` : ''}
             </strong>
           </div>
         </div>
@@ -1190,6 +1302,8 @@ export function ChatPane({
                   </div>
                 )}
                 <MessageRow
+                  person={message.authorId !== 'user' ? person || conversation.socialRoom?.members.find((member) => member.id === message.authorId) : undefined}
+                  onOpenPersonProfile={onOpenPersonProfile}
                   messages={messageGroup}
                   agent={agent}
                   agents={agents}
@@ -1199,6 +1313,7 @@ export function ChatPane({
                   showAuthor={conversation?.type === 'group'}
                   onOpenAgentProfile={onOpenAgentProfile}
                   onOpenUserProfile={onOpenUserProfile}
+                  onOpenCredits={onOpenCredits}
                 />
               </div>
             )
@@ -1235,7 +1350,7 @@ export function ChatPane({
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => applyMention(option.name)}
               >
-                {option.agent ? <AgentAvatar agent={option.agent} size={22} /> : <span className="mention-all"><AtSign size={13} /></span>}
+                {option.agent ? <AgentAvatar agent={option.agent} size={22} /> : option.person ? <UserAvatar src={option.person.image || ''} name={option.person.name} size={22} /> : <span className="mention-all"><AtSign size={13} /></span>}
                 <span>{option.label}</span>
               </button>
             ))}
