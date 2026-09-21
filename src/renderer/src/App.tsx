@@ -26,6 +26,7 @@ import { agentDisplayName, conversationMembers } from './components/common'
 import { LoginScreen } from './components/LoginScreen'
 import { CodeArtifactWindow } from './components/CodeArtifactWindow'
 import { isImeCommitEnter } from './ime'
+import { withAccountIdentity } from './accountIdentity'
 
 type Dialog =
   | { kind: 'member-profile'; agentId: string; anchor: ProfileAnchor }
@@ -50,6 +51,7 @@ function WorkspaceApp(): ReactElement {
   const [view, setView] = useState<AppView>('chats')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile')
+  const [creditsRefreshToken, setCreditsRefreshToken] = useState(0)
   const [contact, setContact] = useState<ContactSelection>()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [showInspector, setShowInspector] = useState(false)
@@ -85,6 +87,22 @@ function WorkspaceApp(): ReactElement {
   useEffect(() => {
     void window.douchat.getAuthState().then(setAuthState)
     return window.douchat.onAuthState(setAuthState)
+  }, [])
+
+  useEffect(() => {
+    const consumeCreditsReturn = (): void => {
+      void window.douchat.consumeCreditsReturn().then((shouldRefresh) => {
+        if (!shouldRefresh) return
+        setSettingsTab('usage')
+        setSettingsOpen(true)
+        setCreditsRefreshToken((value) => value + 1)
+      }).catch(() => {
+        // A malformed or stale callback should not interrupt the workspace.
+      })
+    }
+    const unsubscribe = window.douchat.onCreditsUpdated(consumeCreditsReturn)
+    consumeCreditsReturn()
+    return unsubscribe
   }, [])
 
   useEffect(() => {
@@ -308,6 +326,10 @@ function WorkspaceApp(): ReactElement {
     )
   }
 
+  // Account data is authoritative for presentation. The runtime snapshot may
+  // still contain a legacy local avatar used by older installs.
+  const uiSnapshot = withAccountIdentity(snapshot, authState.user)
+
   return (
     <div
       className={`app-shell messenger with-rail ${detachedId ? 'detached-chat' : ''} ${view === 'chats' && showInspector ? 'with-inspector' : ''}`}
@@ -338,12 +360,12 @@ function WorkspaceApp(): ReactElement {
       {view === 'contacts' ? (
         <>
           <ContactList
-            snapshot={snapshot}
+            snapshot={uiSnapshot}
             selected={contact}
             onSelect={setContact}
           />
           <ContactCard
-            snapshot={snapshot}
+            snapshot={uiSnapshot}
             selection={contact}
             onMessage={openChat}
             onStartDirect={(agentId) => { void startDirectChat(agentId) }}
@@ -355,7 +377,7 @@ function WorkspaceApp(): ReactElement {
       ) : (
         <>
       <BotInbox
-        snapshot={snapshot}
+        snapshot={uiSnapshot}
         activeId={activeId}
         workingIds={workingIds}
         onSelect={openChat}
@@ -404,11 +426,16 @@ function WorkspaceApp(): ReactElement {
       <div className={`chat-details-layer ${showInspector && conversation ? 'is-open' : ''}`} inert={!showInspector || !conversation} aria-hidden={!showInspector || !conversation}>
         <button className="chat-details-dismiss" onClick={() => setShowInspector(false)} aria-label={t('Close chat details')} tabIndex={-1} />
         <InspectorRail
-          snapshot={snapshot}
+          snapshot={uiSnapshot}
           conversation={conversation}
           members={members}
           selectedAgentId={inspectorAgentId}
           onSelectAgent={(agentId, anchor) => { setInspectorAgentId(agentId); setDialog({ kind: 'member-profile', agentId, anchor }) }}
+          onSelectUser={() => {
+            setDialog(null)
+            setSettingsTab('profile')
+            setSettingsOpen(true)
+          }}
           onRemoveMembers={() => conversation && setDialog({ kind: 'remove-members', conversation })}
           onAddMembers={() => conversation && (conversation.type === 'group' ? setDialog({ kind: 'add-members', conversation }) : setDialog({ kind: 'group', initialAgentIds: conversation.agentIds }))}
         />
@@ -420,7 +447,7 @@ function WorkspaceApp(): ReactElement {
       {dialog?.kind === 'member-profile' && (
         <MemberProfilePopover anchor={dialog.anchor} onClose={() => setDialog(null)}>
             <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
-            <ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: dialog.agentId }}
+            <ContactCard snapshot={uiSnapshot} selection={{ kind: 'bot', id: dialog.agentId }}
               onMessage={(id) => { setDialog(null); openChat(id) }}
               onStartDirect={(agentId) => { setDialog(null); void startDirectChat(agentId) }}
               onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
@@ -440,11 +467,11 @@ function WorkspaceApp(): ReactElement {
         />
       )}
       {(dialog?.kind === 'add-members' || dialog?.kind === 'remove-members') && (
-        <AddMembersModal remove={dialog.kind === 'remove-members'} snapshot={snapshot} conversation={dialog.conversation} onClose={() => setDialog(null)} onUpdate={updateGroup} />
+        <AddMembersModal remove={dialog.kind === 'remove-members'} snapshot={uiSnapshot} conversation={dialog.conversation} onClose={() => setDialog(null)} onUpdate={updateGroup} />
       )}
       {dialog?.kind === 'group' && (
         <GroupModal
-          snapshot={snapshot}
+          snapshot={uiSnapshot}
           conversation={dialog.conversation}
           initialAgentIds={dialog.initialAgentIds}
           onClose={() => setDialog(null)}
@@ -475,6 +502,7 @@ function WorkspaceApp(): ReactElement {
           scanning={scanning}
           error={scanError}
           tab={settingsTab}
+          creditsRefreshToken={creditsRefreshToken}
           onTab={setSettingsTab}
           onClose={() => setSettingsOpen(false)}
           onSignOut={async () => {

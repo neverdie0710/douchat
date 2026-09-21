@@ -10,12 +10,12 @@ export const localAgentCatalog = [
   ['gemini', 'Gemini', 'gemini'],
   ['grok', 'Grok Build', 'grok'],
   ['openclaw', 'OpenClaw', 'openclaw'],
-  ['fastclaw', 'FastClaw', 'fastclaw'],
   ['hermes', 'Hermes', 'hermes'],
   ['opencode', 'OpenCode', 'opencode'],
   ['cursor', 'Cursor', 'cursor-agent'],
   ['kimi', 'Kimi', 'kimi'],
-  ['omp', 'OMP', 'omp']
+  ['omp', 'OMP', 'omp'],
+  ['fastclaw', 'FastClaw', 'fastclaw']
 ] as const
 
 export async function detectLocalAgents(): Promise<LocalAgent[]> {

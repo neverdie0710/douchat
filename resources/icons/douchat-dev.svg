@@ -11,14 +11,16 @@
       <rect x="571" y="568" width="95" height="95" rx="24" fill="black"/>
     </mask>
   </defs>
-  <g transform="translate(30.72 30.72) scale(.94)">
-    <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
-    <g transform="translate(512 512) scale(1.1) translate(-512 -512)">
-      <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod-dev)"/>
+  <g transform="translate(512 512) scale(.94) translate(-512 -512)">
+    <g transform="translate(30.72 30.72) scale(.94)">
+      <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
+      <g transform="translate(512 512) scale(1.1) translate(-512 -512)">
+        <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod-dev)"/>
+      </g>
     </g>
-  </g>
-  <g transform="translate(512 512) scale(1.06818) translate(-512 -512)">
-    <rect x="660" y="752" width="272" height="144" rx="36" fill="#FF5A4F" stroke="#FFFFFF" stroke-width="12"/>
-    <text x="796" y="827" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="800" text-anchor="middle" dominant-baseline="central" letter-spacing="2">DEV</text>
+    <g transform="translate(512 512) scale(1.06818) translate(-512 -512)">
+      <rect x="660" y="752" width="272" height="144" rx="36" fill="#FF5A4F" stroke="#FFFFFF" stroke-width="12"/>
+      <text x="796" y="827" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-size="68" font-weight="800" text-anchor="middle" dominant-baseline="central" letter-spacing="2">DEV</text>
+    </g>
   </g>
 </svg>

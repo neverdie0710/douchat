@@ -1,5 +1,7 @@
 export const AUTH_CALLBACK_HOST = 'auth'
 export const AUTH_CALLBACK_PATH = '/callback'
+export const CREDITS_CALLBACK_HOST = 'payment'
+export const CREDITS_CALLBACK_PATH = '/callback'
 export const DESKTOP_AUTH_CLIENT_ID = 'douchat-desktop'
 export const DOUCHAT_PRODUCTION_ORIGIN = 'https://douchat.ai'
 
@@ -64,6 +66,18 @@ export function isDesktopAuthUrl(input: string, scheme: string): boolean {
   try {
     const url = new URL(input)
     return url.protocol === `${scheme}:` && url.hostname === AUTH_CALLBACK_HOST && url.pathname === AUTH_CALLBACK_PATH
+  } catch {
+    return false
+  }
+}
+
+export function isDesktopCreditsUrl(input: string, scheme: string): boolean {
+  try {
+    const url = new URL(input)
+    return url.protocol === `${scheme}:`
+      && url.hostname === CREDITS_CALLBACK_HOST
+      && url.pathname === CREDITS_CALLBACK_PATH
+      && url.searchParams.get('status') === 'paid'
   } catch {
     return false
   }

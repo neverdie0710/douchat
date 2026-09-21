@@ -496,6 +496,7 @@ export interface DouchatApi {
   refreshProfile: () => Promise<DesktopAuthState>
   updateProfile: (input: UpdateDesktopProfileInput) => Promise<DesktopAuthState>
   getUsageSummary: () => Promise<UsageSummary>
+  consumeCreditsReturn: () => Promise<boolean>
   openSubscriptionPlans: () => Promise<void>
   openBillingPortal: () => Promise<void>
   getUpdateState: () => Promise<UpdateState>
@@ -541,6 +542,7 @@ export interface DouchatApi {
   stopComputer: (agentId: string) => Promise<AppSnapshot>
   showComputer: (agentId: string) => Promise<void>
   onAuthState: (listener: (state: DesktopAuthState) => void) => () => void
+  onCreditsUpdated: (listener: () => void) => () => void
   onUpdateState: (listener: (state: UpdateState) => void) => () => void
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => () => void
 }

@@ -22,7 +22,6 @@ describe('usage and billing settings', () => {
   let root: Root
   let getUsageSummary: ReturnType<typeof vi.fn>
   let openSubscriptionPlans: ReturnType<typeof vi.fn>
-  let openBillingPortal: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -31,10 +30,9 @@ describe('usage and billing settings', () => {
     root = createRoot(container)
     getUsageSummary = vi.fn(async () => ({ planName: 'Free', status: 'free', credits: 1611 }))
     openSubscriptionPlans = vi.fn(async () => undefined)
-    openBillingPortal = vi.fn(async () => undefined)
     Object.defineProperty(window, 'douchat', {
       configurable: true,
-      value: { getUsageSummary, openSubscriptionPlans, openBillingPortal } as Partial<DouchatApi>
+      value: { getUsageSummary, openSubscriptionPlans } as Partial<DouchatApi>
     })
   })
 
@@ -43,7 +41,7 @@ describe('usage and billing settings', () => {
     container.remove()
   })
 
-  async function renderUsage(): Promise<void> {
+  async function renderUsage(creditsRefreshToken = 0): Promise<void> {
     await act(async () => root.render(
       <SettingsPanel
         user={{ id: 'user-1', name: 'Ada', email: 'ada@example.com' }}
@@ -51,6 +49,7 @@ describe('usage and billing settings', () => {
         scanning={false}
         error=""
         tab="usage"
+        creditsRefreshToken={creditsRefreshToken}
         onTab={vi.fn()}
         onClose={vi.fn()}
         onSignOut={vi.fn(async () => undefined)}
@@ -68,6 +67,7 @@ describe('usage and billing settings', () => {
         scanning={false}
         error=""
         tab="general"
+        creditsRefreshToken={0}
         onTab={vi.fn()}
         onClose={vi.fn()}
         onSignOut={vi.fn(async () => undefined)}
@@ -88,36 +88,30 @@ describe('usage and billing settings', () => {
     ])
   })
 
-  it('shows the plan, remaining credits, and a billing entry', async () => {
+  it('shows only the credit balance and a top-up action', async () => {
     await renderUsage()
 
     expect(container.querySelector('#usage-tab')?.getAttribute('aria-selected')).toBe('true')
-    expect(container.textContent).toContain('Usage & Billing')
-    expect(container.textContent).toContain('Credits remaining')
+    expect(container.textContent).toContain('Credits')
+    expect(container.textContent).toContain('Credit balance')
     expect(container.textContent).toContain('1,611')
-    expect(container.textContent).toContain('Current plan')
-    expect(container.textContent).toContain('Free')
-    expect(container.textContent).toContain('Billing')
-    expect(container.textContent).toContain('Invoices and payment methods')
+    expect(container.textContent).not.toContain('Current plan')
+    expect(container.textContent).not.toContain('Billing')
+    expect(container.textContent).not.toContain('Invoices and payment methods')
 
-    const upgrade = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('Upgrade plan'))
-    await act(async () => upgrade?.click())
+    const topUp = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('Top up'))
+    await act(async () => topUp?.click())
     expect(openSubscriptionPlans).toHaveBeenCalledOnce()
-
-    const billing = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('Manage billing'))
-    await act(async () => billing?.click())
-    expect(openBillingPortal).toHaveBeenCalledOnce()
   })
 
   it('offers a retry when the usage summary cannot be loaded', async () => {
     getUsageSummary
-      .mockRejectedValueOnce(new Error('Could not load usage and billing. Check your connection and try again.'))
+      .mockRejectedValueOnce(new Error('Could not load credits. Check your connection and try again.'))
       .mockResolvedValueOnce({ planName: 'Pro', status: 'active', credits: 300 })
 
     await renderUsage()
-    expect(container.textContent).toContain('Could not load usage and billing')
+    expect(container.textContent).toContain('Could not load credits')
 
     const retry = [...container.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Try again')
@@ -125,6 +119,17 @@ describe('usage and billing settings', () => {
 
     expect(getUsageSummary).toHaveBeenCalledTimes(2)
     expect(container.textContent).toContain('300')
-    expect(container.textContent).toContain('Pro')
+    expect(container.textContent).not.toContain('Pro')
+  })
+
+  it('reloads the balance after a completed browser top-up returns to the app', async () => {
+    await renderUsage(0)
+    expect(getUsageSummary).toHaveBeenCalledTimes(1)
+
+    getUsageSummary.mockResolvedValueOnce({ planName: 'Free', status: 'free', credits: 2029 })
+    await renderUsage(1)
+
+    expect(getUsageSummary).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('2,029')
   })
 })

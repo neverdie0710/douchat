@@ -3,7 +3,7 @@ import { t } from '../preferences'
 import { ChevronRight, Minus, Pencil, Plus, Search, X } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, ChatMessage, Conversation } from '../../../shared/types'
-import { AgentAvatar, agentDisplayName, agentDisplayRole } from './common'
+import { AgentAvatar, UserAvatar, agentDisplayName, agentDisplayRole } from './common'
 
 export function InspectorRail({
   snapshot,
@@ -11,6 +11,7 @@ export function InspectorRail({
   members,
   selectedAgentId,
   onSelectAgent,
+  onSelectUser,
   onAddMembers,
   onRemoveMembers
 }: {
@@ -19,6 +20,7 @@ export function InspectorRail({
   members: AgentConfig[]
   selectedAgentId?: string
   onSelectAgent: (agentId: string, anchor: ProfileAnchor) => void
+  onSelectUser: () => void
   onAddMembers: () => void
   onRemoveMembers: () => void
 }): ReactElement {
@@ -70,6 +72,10 @@ export function InspectorRail({
   }
   const orderedMembers = [...members].sort((a, b) => Number(b.id === conversation?.leadAgentId) - Number(a.id === conversation?.leadAgentId))
   const agent = members.find((item) => item.id === selectedAgentId) ?? members[0] ?? snapshot.agents[0]
+  const currentUserName = snapshot.userName || t('You')
+  const normalizedMemberQuery = memberQuery.trim().toLocaleLowerCase()
+  const matchingMembers = orderedMembers.filter((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(normalizedMemberQuery))
+  const currentUserMatches = currentUserName.toLocaleLowerCase().includes(normalizedMemberQuery)
   return (
     <aside className="inspector-rail" aria-label={t('Chat details')}>
       <div className="inspector-scroll">
@@ -77,8 +83,9 @@ export function InspectorRail({
           <section className="member-section">
             {conversation.type === 'group' && <label className="group-member-search"><Search size={16} /><input aria-label={t('Search group members')} placeholder={t('Search group members')} value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} />{memberQuery && <button type="button" aria-label={t('Clear search')} onClick={() => setMemberQuery('')}><X size={14} /></button>}</label>}
             {conversation.type === 'group' && memberQuery.trim() ? <div className="group-member-results">
-              {orderedMembers.filter((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())).map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><AgentAvatar agent={member} size={40} /><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
-              {!members.some((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(memberQuery.trim().toLocaleLowerCase())) && <p>{t('No matching agents')}</p>}
+              {matchingMembers.map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><AgentAvatar agent={member} size={40} /><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
+              {currentUserMatches && <button type="button" onClick={onSelectUser} aria-label={`${currentUserName} · ${t('You')}`}><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><span><strong>{highlight(currentUserName)}</strong></span></button>}
+              {!matchingMembers.length && !currentUserMatches && <p>{t('No matching agents')}</p>}
             </div> : <div className="member-grid">
               {orderedMembers.map((member) => (
                 <button
@@ -92,6 +99,10 @@ export function InspectorRail({
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>
               ))}
+              {conversation.type === 'group' && <button type="button" className="member-tile" onClick={onSelectUser} aria-label={`${currentUserName} · ${t('You')}`} title={`${currentUserName} · ${t('You')}`}>
+                <UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} />
+                <span>{currentUserName}</span>
+              </button>}
               {<button className="member-tile add" onClick={onAddMembers} aria-label={t('Add a member')}>
                 <span className="member-add">
                   <Plus size={26} strokeWidth={1.5} />

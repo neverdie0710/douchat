@@ -1,6 +1,6 @@
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, Camera, CircleUserRound, Coins, CreditCard, ExternalLink, Info, LogOut, RefreshCw, ScanSearch, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, Camera, CircleUserRound, Coins, ExternalLink, Info, LogOut, Plus, RefreshCw, ScanSearch, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
@@ -9,12 +9,13 @@ import { UserAvatar } from './common'
 
 export type SettingsTab = 'profile' | 'general' | 'usage' | 'agents' | 'about'
 
-export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClose, onSignOut, onUpdateProfile, onDetect }: {
+export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefreshToken, onTab, onClose, onSignOut, onUpdateProfile, onDetect }: {
   user: DesktopAuthUser
   agents: LocalAgent[]
   scanning: boolean
   error: string
   tab: SettingsTab
+  creditsRefreshToken: number
   onTab: (tab: SettingsTab) => void
   onClose: () => void
   onSignOut: () => Promise<void>
@@ -58,7 +59,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
       <div className="settings-tabs" role="tablist" aria-label={t('Settings')}>
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
-        <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Usage & Billing')}</span></button>
+        <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Credits')}</span></button>
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -78,7 +79,7 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
           </div></label>
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
-      </> : tab === 'usage' ? <UsageTab /> : tab === 'agents'  ? <>
+      </> : tab === 'usage' ? <UsageTab refreshToken={creditsRefreshToken} /> : tab === 'agents'  ? <>
         <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
@@ -93,19 +94,11 @@ export function SettingsPanel({ user, agents, scanning, error, tab, onTab, onClo
   </div>
 }
 
-function usageStatusLabel(status: string): string {
-  if (status === 'active') return t('Active')
-  if (status === 'trialing') return t('Trial')
-  if (status === 'pending_cancel') return t('Ends after this billing period')
-  if (status === 'free') return t('Free plan')
-  return status || t('Free plan')
-}
-
-export function UsageTab(): ReactElement {
+export function UsageTab({ refreshToken = 0 }: { refreshToken?: number }): ReactElement {
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [opening, setOpening] = useState<'plan' | 'billing' | null>(null)
+  const [opening, setOpening] = useState(false)
 
   const load = async (): Promise<void> => {
     setLoading(true)
@@ -115,73 +108,43 @@ export function UsageTab(): ReactElement {
     finally { setLoading(false) }
   }
 
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load() }, [refreshToken])
 
-  const openBilling = async (): Promise<void> => {
-    setOpening('billing')
+  const openTopUp = async (): Promise<void> => {
+    setOpening(true)
     setError('')
-    try { await window.douchat.openBillingPortal() }
+    try { await window.douchat.openSubscriptionPlans() }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setOpening(null) }
-  }
-
-  const freePlan = Boolean(summary && (
-    summary.status === 'free' || summary.planName.trim().toLowerCase() === 'free'
-  ))
-  const openPlan = async (): Promise<void> => {
-    if (!summary) return
-    setOpening('plan')
-    setError('')
-    try {
-      if (freePlan) await window.douchat.openSubscriptionPlans()
-      else await window.douchat.openBillingPortal()
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setOpening(null) }
+    finally { setOpening(false) }
   }
 
   const credits = summary ? new Intl.NumberFormat(document.documentElement.lang || undefined).format(summary.credits) : '—'
   return <>
     <header className="settings-heading usage-heading">
-      <div><h1>{t('Usage & Billing')}</h1><p>{t('Your plan, balance, and billing in one place.')}</p></div>
+      <div><h1>{t('Credits')}</h1><p>{t('Manage your Douchat credit balance.')}</p></div>
       <button className="secondary-button usage-refresh" type="button" disabled={loading} onClick={() => void load()}>
         <RefreshCw className={loading ? 'spin' : ''} size={15} />{t('Refresh')}
       </button>
     </header>
-    <section className="usage-card" aria-label={t('Usage & Billing')} aria-busy={loading}>
-      <div className="usage-credit-row" aria-live="polite">
-        <div className="usage-credit-copy">
-          <span>{t('Credits remaining')}</span>
-          <strong>{loading && !summary ? '—' : credits}</strong>
-          <small>{t('Cloud agent replies use Douchat credits. Local agents do not.')}</small>
-        </div>
+    <section className="usage-card" aria-label={t('Credits')} aria-busy={loading}>
+      <div className="usage-credit-row">
         <span className="usage-credit-icon" aria-hidden="true"><Coins size={23} /></span>
-      </div>
-      <div className="usage-detail-row usage-plan-row">
-        <div className="usage-detail-copy">
-          <span>{t('Current plan')}</span>
-          <strong>{loading && !summary ? '—' : summary?.planName || t('Free')}</strong>
-          {summary && <small>{usageStatusLabel(summary.status)}</small>}
+        <div className="usage-credit-copy">
+          <span>{t('Credit balance')}</span>
+          <strong aria-live="polite">{loading && !summary ? '—' : credits}</strong>
         </div>
         <button
-          className={`${freePlan ? 'primary-button' : 'secondary-button'} usage-plan-button`}
+          className="primary-button usage-top-up-button"
           type="button"
-          disabled={!summary || opening !== null}
-          onClick={() => void openPlan()}
+          disabled={!summary || opening}
+          onClick={() => void openTopUp()}
         >
-          {t(opening === 'plan' ? 'Opening…' : freePlan ? 'Upgrade plan' : 'Manage plan')}
-          <ExternalLink size={14} />
+          <Plus size={16} />{t(opening ? 'Opening…' : 'Top up')}
         </button>
       </div>
-      <div className="usage-detail-row usage-billing-row">
-        <span className="usage-row-icon" aria-hidden="true"><CreditCard size={18} /></span>
-        <div className="usage-detail-copy">
-          <span>{t('Billing')}</span>
-          <strong>{t('Invoices and payment methods')}</strong>
-          <small>{t('Billing is managed securely on douchat.ai.')}</small>
-        </div>
-        <button className="secondary-button usage-manage-button" type="button" disabled={opening !== null} onClick={() => void openBilling()}>
-          {t(opening === 'billing' ? 'Opening…' : 'Manage billing')}<ExternalLink size={14} />
-        </button>
+      <div className="usage-credit-note">
+        <span>{t('Cloud agent replies use Douchat credits. Local agents do not.')}</span>
+        <span>{t('Top up securely in your browser.')}</span>
       </div>
       {error && <div className="usage-error" role="alert"><span>{t(error)}</span><button type="button" onClick={() => void load()}>{t('Try again')}</button></div>}
     </section>

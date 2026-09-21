@@ -188,14 +188,14 @@ export class DesktopAuth {
   }
 
   async getUsageSummary(): Promise<UsageSummary> {
-    if (!this.accessToken) throw new Error('Sign in to view usage and billing.')
+    if (!this.accessToken) throw new Error('Sign in to view credits.')
     let response: Response
     try {
       response = await fetch(new URL('/api/desktop-auth/usage', this.webAppUrl), {
         headers: { Accept: 'application/json', Authorization: `Bearer ${this.accessToken}` }
       })
     } catch {
-      throw new Error('Could not load usage and billing. Check your connection and try again.')
+      throw new Error('Could not load credits. Check your connection and try again.')
     }
     if (response.status === 401 || response.status === 403) {
       await this.clearCredential()
@@ -205,7 +205,7 @@ export class DesktopAuth {
     const payload = await response.json().catch(() => null) as ApiEnvelope<Partial<UsageSummary>> | null
     const credits = Number(payload?.data?.credits)
     if (!response.ok || !payload?.data || !Number.isFinite(credits) || credits < 0) {
-      throw new Error(payload?.message || `Usage service returned ${response.status}. Try again.`)
+      throw new Error(payload?.message || `Credits service returned ${response.status}. Try again.`)
     }
     return {
       planName: typeof payload.data.planName === 'string' && payload.data.planName.trim()
@@ -245,7 +245,7 @@ export class DesktopAuth {
   }
 
   async openSubscriptionPlans(): Promise<void> {
-    await shell.openExternal(new URL('/pricing', this.webAppUrl).toString())
+    await shell.openExternal(new URL('/desktop-credits', this.webAppUrl).toString())
   }
 
   async handleCallback(input: string): Promise<DesktopAuthState> {

@@ -374,7 +374,7 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
                   const checked = selectedConversationId === item.id
                   return <button type="button" key={item.id} className={`member-picker-row ${checked ? 'selected' : ''}`} role="radio" aria-checked={checked} disabled={saving} onClick={() => chooseConversation(item.id)}>
                     <span className={`member-picker-check ${checked ? 'checked' : ''}`}><Check size={13} /></span>
-                    <ConversationAvatar conversation={item} agents={snapshot.agents} size={36} /><span className="member-picker-name">{conversationDisplayName(item, snapshot.agents)}</span>
+                    <ConversationAvatar conversation={item} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} /><span className="member-picker-name">{conversationDisplayName(item, snapshot.agents)}</span>
                   </button>
                 })}
                 {!matchingGroups.length && <p className="member-picker-empty compact">{t('No matching groups')}</p>}
@@ -399,7 +399,7 @@ export function AddMembersModal({ snapshot, conversation, onClose, onUpdate, man
         <section className="member-picker-selection">
           <header><h2 id="add-members-title">{t(title)}</h2><span>{t(startMode ? 'Selected' : 'Selected agents')}: {selectionCount}</span></header>
           <div className="member-picker-list">
-            {selectedConversation && <div className="member-picker-chosen"><ConversationAvatar conversation={selectedConversation} agents={snapshot.agents} size={36} /><span className="member-picker-name">{conversationDisplayName(selectedConversation, snapshot.agents)}</span><button type="button" disabled={saving} onClick={() => setSelectedConversationId('')} aria-label={`${t('Remove')} ${conversationDisplayName(selectedConversation, snapshot.agents)}`}><X size={13} /></button></div>}
+            {selectedConversation && <div className="member-picker-chosen"><ConversationAvatar conversation={selectedConversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} /><span className="member-picker-name">{conversationDisplayName(selectedConversation, snapshot.agents)}</span><button type="button" disabled={saving} onClick={() => setSelectedConversationId('')} aria-label={`${t('Remove')} ${conversationDisplayName(selectedConversation, snapshot.agents)}`}><X size={13} /></button></div>}
             {selected.map((id) => {
               const agent = snapshot.agents.find((item) => item.id === id)
               return agent && <div className="member-picker-chosen" key={id}><AgentAvatar agent={agent} size={36} /><span className="member-picker-name">{agentDisplayName(agent)}</span><button type="button" disabled={saving} onClick={() => toggle(id)} aria-label={`${t('Remove')} ${agentDisplayName(agent)}`}><X size={13} /></button></div>

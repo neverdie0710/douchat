@@ -159,7 +159,7 @@ export function BotInbox({
         }}
       >
         <span className="conversation-avatar">
-          <ConversationAvatar conversation={conversation} agents={snapshot.agents} size={36} />
+          <ConversationAvatar conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} />
           {!working && conversation.unread > 0 && <span className={`unread-badge ${conversation.muted ? 'muted' : ''}`}>{conversation.unread > 99 ? '99+' : conversation.unread}</span>}
           {working && <span className="conversation-loading" role="status" aria-label={t('Working…')}><LoaderCircle size={13} /></span>}
         </span>

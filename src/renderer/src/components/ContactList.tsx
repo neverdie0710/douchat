@@ -71,10 +71,10 @@ export function ContactList({
       className={`contact-row ${selected?.kind === 'group' && selected.id === conversation.id ? 'active' : ''}`}
       onClick={() => onSelect({ kind: 'group', id: conversation.id })}
     >
-      <ConversationAvatar conversation={conversation} agents={snapshot.agents} size={34} />
+      <ConversationAvatar conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={34} />
       <span className="contact-row-copy">
         <strong>{conversation.name}</strong>
-        <small>{conversation.agentIds.length} members</small>
+        <small>{conversation.agentIds.length + 1} members</small>
       </span>
     </button>
   )

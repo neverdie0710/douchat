@@ -31,6 +31,7 @@ const api: DouchatApi = {
   refreshProfile: () => ipcRenderer.invoke('douchat:refresh-profile'),
   updateProfile: (input: UpdateDesktopProfileInput) => ipcRenderer.invoke('douchat:update-profile', input),
   getUsageSummary: (): Promise<UsageSummary> => ipcRenderer.invoke('douchat:get-usage-summary'),
+  consumeCreditsReturn: (): Promise<boolean> => ipcRenderer.invoke('douchat:consume-credits-return'),
   openSubscriptionPlans: () => ipcRenderer.invoke('douchat:open-subscription-plans'),
   openBillingPortal: () => ipcRenderer.invoke('douchat:open-billing-portal'),
   getUpdateState: () => ipcRenderer.invoke('douchat:get-update-state'),
@@ -85,6 +86,11 @@ const api: DouchatApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: DesktopAuthState): void => listener(state)
     ipcRenderer.on('douchat:auth-state', handler)
     return () => ipcRenderer.removeListener('douchat:auth-state', handler)
+  },
+  onCreditsUpdated: (listener: () => void) => {
+    const handler = (): void => listener()
+    ipcRenderer.on('douchat:credits-updated', handler)
+    return () => ipcRenderer.removeListener('douchat:credits-updated', handler)
   },
   onUpdateState: (listener: (state: UpdateState) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: UpdateState): void => listener(state)

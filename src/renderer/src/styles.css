@@ -1018,6 +1018,23 @@ select:focus-visible {
   to { transform: translateY(0) scale(1); opacity: 1; }
 }
 
+/* Electron on Windows can fail to composite children of a fixed, filtered
+   backdrop, leaving only an apparently blank overlay. Keep dialogs on the
+   normal paint path there; the slightly stronger tint preserves separation
+   from the workspace without relying on GPU backdrop blur. Animating opacity
+   and transforms on the same layers can trigger the same compositor path, so
+   Windows dialogs appear immediately and reliably. */
+html[data-platform='win32'] .modal-backdrop {
+  background: rgba(22, 30, 44, 0.38);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: none;
+}
+
+html[data-platform='win32'] :is(.agent-modal, .settings-modal) {
+  animation: none;
+}
+
 .identity-preview {
   display: flex;
   align-items: center;
@@ -2604,31 +2621,26 @@ select:focus-visible {
 .spin { animation: settings-spin 850ms linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 
-.usage-heading { align-items: flex-start; }
+.usage-heading { width: 100%; max-width: 720px; align-items: flex-start; }
 .usage-refresh { margin-top: 2px; }
-.settings-modal .settings-content .usage-card { max-width: 720px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 1px 2px rgba(20, 28, 42, .03); }
-.usage-credit-row { display: flex; min-height: 132px; align-items: center; justify-content: space-between; gap: 28px; padding: 26px; background: color-mix(in srgb, var(--accent-100) 32%, var(--surface)); }
-.usage-credit-copy { display: grid; min-width: 0; gap: 4px; }
-.usage-credit-copy > span, .usage-detail-copy > span { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); font-weight: 550; }
-.usage-credit-copy > strong { font-size: calc(34px * var(--font-scale, 0.92)); font-variant-numeric: tabular-nums; letter-spacing: -.045em; line-height: 1.1; }
-.usage-credit-copy > small, .usage-detail-copy > small { color: var(--muted); font-size: calc(11.5px * var(--font-scale, 0.92)); line-height: 1.5; }
+.settings-modal .settings-content .usage-card { max-width: 720px; margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 1px 2px rgba(20, 28, 42, .03); }
+.usage-credit-row { display: grid; min-height: 132px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 28px; background: color-mix(in srgb, var(--accent-100) 28%, var(--surface)); }
+.usage-credit-copy { display: grid; min-width: 0; gap: 5px; }
+.usage-credit-copy > span { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); font-weight: 550; }
+.usage-credit-copy > strong { color: var(--ink); font-size: calc(36px * var(--font-scale, 0.92)); font-variant-numeric: tabular-nums; letter-spacing: -.045em; line-height: 1.05; }
 .usage-credit-icon { display: grid; width: 52px; height: 52px; flex: 0 0 52px; place-items: center; border-radius: 15px; background: var(--accent-100); color: var(--brand-ink); }
-.usage-detail-row { display: flex; min-height: 96px; align-items: center; gap: 14px; padding: 20px 26px; border-top: 1px solid var(--line); }
-.usage-detail-copy { display: grid; min-width: 0; flex: 1; gap: 5px; }
-.usage-detail-copy > strong { color: var(--ink); font-size: calc(15px * var(--font-scale, 0.92)); font-weight: 650; }
-.usage-detail-copy > small { justify-self: start; }
-.usage-detail-row:not(.usage-billing-row) .usage-detail-copy > small { border-radius: 999px; padding: 3px 8px; background: var(--accent-100); color: var(--brand-ink); font-size: calc(10.5px * var(--font-scale, 0.92)); font-weight: 650; }
-.usage-row-icon { display: grid; width: 36px; height: 36px; flex: 0 0 36px; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--muted); }
-.usage-plan-button, .usage-manage-button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 8px; flex: 0 0 auto; }
-.usage-plan-button.primary-button { border-radius: 8px; padding: 8px 13px; font-size: calc(12px * var(--font-scale, 0.92)); }
+.usage-top-up-button { display: inline-flex; min-width: 112px; min-height: 42px; align-items: center; justify-content: center; gap: 7px; flex: 0 0 auto; }
+.usage-credit-note { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 16px 28px; border-top: 1px solid var(--line); color: var(--muted); font-size: calc(11.5px * var(--font-scale, 0.92)); line-height: 1.5; }
+.usage-credit-note span:last-child { flex: 0 0 auto; }
 .usage-error { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 26px; border-top: 1px solid color-mix(in srgb, #b83d32 20%, var(--line)); background: color-mix(in srgb, #b83d32 6%, transparent); color: #a8382a; font-size: calc(12px * var(--font-scale, 0.92)); }
 .usage-error button { border: 0; background: none; padding: 3px 0; color: inherit; font: inherit; font-weight: 650; cursor: pointer; }
 
 @media (max-width: 640px) {
   .about-row { align-items: flex-start; flex-direction: column; gap: 16px; }
   .about-action, .about-action :is(.primary-button, .secondary-button) { width: 100%; }
-  .usage-plan-row, .usage-billing-row { align-items: flex-start; flex-wrap: wrap; }
-  .usage-plan-button, .usage-manage-button { width: 100%; }
+  .usage-credit-row { grid-template-columns: auto minmax(0, 1fr); }
+  .usage-top-up-button { grid-column: 1 / -1; width: 100%; }
+  .usage-credit-note { align-items: flex-start; flex-direction: column; gap: 5px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -5034,7 +5046,7 @@ select:focus-visible {
   padding: 2px;
   background: var(--line);
 }
-.messenger .group-mosaic > .agent-avatar { border-radius: 2px; }
+.messenger .group-mosaic > :is(.agent-avatar, .user-avatar) { border-radius: 2px; }
 .messenger .group-mosaic .avatar-eyes { gap: calc(var(--avatar-size) * .1); }
 .messenger .group-mosaic .avatar-eyes i { width: calc(var(--avatar-size) * .12); height: calc(var(--avatar-size) * .28); border-radius: 2px; }
 

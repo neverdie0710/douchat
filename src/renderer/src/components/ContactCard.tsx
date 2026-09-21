@@ -125,7 +125,7 @@ export function ContactCard({
     <main className="workspace contact-card-pane group-profile-pane">
       <div className="group-profile-layout">
         <section className="group-profile-main" aria-labelledby="group-profile-name">
-          <ConversationAvatar conversation={group!} agents={snapshot.agents} size={88} />
+          <ConversationAvatar conversation={group!} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={88} />
           <h1 id="group-profile-name">{group!.name}</h1>
           <button className="group-profile-primary" onClick={() => onMessage(group!.id)}>
             <MessageSquare size={17} />

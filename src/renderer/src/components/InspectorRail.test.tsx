@@ -11,6 +11,7 @@ vi.mock('../preferences', () => ({
 
 vi.mock('./common', () => ({
   AgentAvatar: ({ agent }: { agent: AgentConfig }) => <span data-agent-avatar={agent.id} />,
+  UserAvatar: ({ name }: { name: string }) => <span data-user-avatar={name} />,
   agentDisplayName: (agent: AgentConfig) => agent.name,
   agentDisplayRole: (agent: AgentConfig) => agent.role
 }))
@@ -32,7 +33,8 @@ const direct: Conversation = {
 }
 
 const snapshot = {
-  agents: [agent], conversations: [group, direct], messages: [], agentStatuses: { alpha: 'idle' }
+  agents: [agent], conversations: [group, direct], messages: [], agentStatuses: { alpha: 'idle' },
+  userName: 'Dobi', userAvatar: 'data:image/png;base64,avatar'
 } as unknown as AppSnapshot
 
 describe('chat details rail', () => {
@@ -59,18 +61,32 @@ describe('chat details rail', () => {
     container.remove()
   })
 
-  async function renderRail(conversation: Conversation = group): Promise<void> {
+  async function renderRail(conversation: Conversation = group, onSelectUser = vi.fn()): Promise<void> {
     await act(async () => root.render(
       <InspectorRail
         snapshot={snapshot}
         conversation={conversation}
         members={[agent]}
         onSelectAgent={vi.fn()}
+        onSelectUser={onSelectUser}
         onAddMembers={vi.fn()}
         onRemoveMembers={vi.fn()}
       />
     ))
   }
+
+  it('places the current user after the agents and opens their profile settings', async () => {
+    const onSelectUser = vi.fn()
+    await renderRail(group, onSelectUser)
+
+    const memberTiles = [...container.querySelectorAll<HTMLButtonElement>('.member-grid > .member-tile:not(.add)')]
+    expect(memberTiles).toHaveLength(2)
+    expect(memberTiles[0].querySelector('[data-agent-avatar="alpha"]')).not.toBeNull()
+    expect(memberTiles[1].querySelector('[data-user-avatar="Dobi"]')).not.toBeNull()
+
+    await act(async () => memberTiles[1].click())
+    expect(onSelectUser).toHaveBeenCalledOnce()
+  })
 
   it('renames a group inline when Enter is pressed', async () => {
     await renderRail()

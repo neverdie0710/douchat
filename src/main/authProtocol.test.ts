@@ -4,6 +4,7 @@ import {
   createDesktopLoginUrl,
   desktopAuthScheme,
   isDesktopAuthUrl,
+  isDesktopCreditsUrl,
   normalizeWebAppUrl,
   parseDesktopAuthCallback
 } from './authProtocol'
@@ -40,5 +41,14 @@ describe('desktop auth protocol', () => {
     expect(parseDesktopAuthCallback(url, 'douchat://auth/callback', 'nonce-1')).toEqual({ code })
     expect(() => parseDesktopAuthCallback(url, 'douchat://auth/callback', 'nonce-2')).toThrow(/verified/)
     expect(() => parseDesktopAuthCallback(url, 'douchat-dev://auth/callback', 'nonce-1')).toThrow(/Unexpected/)
+  })
+
+  it('accepts only the fixed credits-updated callback', () => {
+    expect(isDesktopCreditsUrl('douchat://payment/callback?status=paid', 'douchat')).toBe(true)
+    expect(isDesktopCreditsUrl('douchat://payment/callback?status=pending', 'douchat')).toBe(false)
+    expect(isDesktopCreditsUrl('douchat://payment/callback?status=failed', 'douchat')).toBe(false)
+    expect(isDesktopCreditsUrl('douchat://payment/updated?status=paid', 'douchat')).toBe(false)
+    expect(isDesktopCreditsUrl('douchat-dev://payment/callback?status=paid', 'douchat')).toBe(false)
+    expect(isDesktopCreditsUrl('https://douchat.ai/payment/callback?status=paid', 'douchat')).toBe(false)
   })
 })

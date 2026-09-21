@@ -25,9 +25,10 @@ import { DouchatStore } from './store'
 import { detectLocalAgents, validateLocalAgent } from './localAgents'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
-import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, normalizeWebAppUrl } from './authProtocol'
+import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, normalizeWebAppUrl } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
+import { userDataDirectoryName } from './userData'
 
 const development = !app.isPackaged
 const appIcon = join(app.getAppPath(), 'resources/icons', development ? 'douchat-dev.png' : 'douchat.png')
@@ -38,15 +39,11 @@ const webAppUrl = normalizeWebAppUrl(
 )
 
 /**
- * The data directory is pinned by hand rather than derived from `app.name`.
- *
- * Electron resolves userData as `appData/<app.name>`, and `app.name` follows
- * `productName` — which packaging tools routinely set, and which designers
- * routinely rename. That would silently move every transcript to a second
- * directory while the app looked perfectly healthy. The display name may
- * change; where the data lives may not.
+ * Keep packaged user data stable across display-name changes, while isolating
+ * local development so test logins, screenshots and database resets cannot
+ * overwrite a user's installed Douchat data.
  */
-app.setPath('userData', join(app.getPath('appData'), 'douchat'))
+app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 
 let mainWindow: BrowserWindow | null = null
 let store: DouchatStore
@@ -57,6 +54,7 @@ let auth: DesktopAuth
 let updater: DesktopUpdater
 let emailConnectors: EmailConnectorManager
 let pendingAuthUrl = ''
+let pendingCreditsRefresh = false
 let cloudSessionActive = false
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -71,10 +69,16 @@ function focusMainWindow(): void {
 }
 
 function callbackUrlFromArgs(args: string[]): string | undefined {
-  return args.find((arg) => isDesktopAuthUrl(arg, authScheme))
+  return args.find((arg) => isDesktopAuthUrl(arg, authScheme) || isDesktopCreditsUrl(arg, authScheme))
 }
 
-function receiveAuthUrl(url: string): void {
+function receiveAppUrl(url: string): void {
+  if (isDesktopCreditsUrl(url, authScheme)) {
+    pendingCreditsRefresh = true
+    focusMainWindow()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('douchat:credits-updated')
+    return
+  }
   if (!isDesktopAuthUrl(url, authScheme)) return
   focusMainWindow()
   if (!auth) {
@@ -87,17 +91,20 @@ function receiveAuthUrl(url: string): void {
 if (hasSingleInstanceLock) {
   app.on('second-instance', (_event, commandLine) => {
     const url = callbackUrlFromArgs(commandLine)
-    if (url) receiveAuthUrl(url)
+    if (url) receiveAppUrl(url)
     else focusMainWindow()
   })
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    receiveAuthUrl(url)
+    receiveAppUrl(url)
   })
 }
 
-const initialAuthUrl = callbackUrlFromArgs(process.argv)
-if (initialAuthUrl) pendingAuthUrl = initialAuthUrl
+const initialAppUrl = callbackUrlFromArgs(process.argv)
+if (initialAppUrl) {
+  if (isDesktopCreditsUrl(initialAppUrl, authScheme)) pendingCreditsRefresh = true
+  else pendingAuthUrl = initialAppUrl
+}
 
 function broadcast(snapshot: AppSnapshot): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:snapshot', snapshot)
@@ -370,7 +377,7 @@ app.whenReady().then(() => {
   auth = new DesktopAuth(webAppUrl, authScheme, development, app.getPath('userData'), (state) => {
     broadcastAuth(state)
     // The development flow returns through a loopback HTTP server instead of
-    // the custom protocol, so it does not pass through receiveAuthUrl(). Bring
+    // the custom protocol, so it does not pass through receiveAppUrl(). Bring
     // Douchat forward as soon as either callback path finishes signing in.
     if (state.status === 'signed-in') focusMainWindow()
   })
@@ -402,6 +409,12 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:refresh-profile', () => auth.refreshProfile())
   ipcMain.handle('douchat:update-profile', (_event, input: UpdateDesktopProfileInput) => auth.updateProfile(input))
   ipcMain.handle('douchat:get-usage-summary', () => auth.getUsageSummary())
+  ipcMain.handle('douchat:consume-credits-return', (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return false
+    const shouldRefresh = pendingCreditsRefresh
+    pendingCreditsRefresh = false
+    return shouldRefresh
+  })
   ipcMain.handle('douchat:open-subscription-plans', () => auth.openSubscriptionPlans())
   ipcMain.handle('douchat:open-billing-portal', () => auth.openBillingPortal())
   ipcMain.handle('douchat:get-update-state', () => updater.state())

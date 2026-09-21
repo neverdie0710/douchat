@@ -3,12 +3,13 @@
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentConfig, Conversation } from '../../../shared/types'
 
 vi.mock('../preferences', () => ({
   t: (text: string) => text
 }))
 
-import { AgentAvatar, UserAvatar, agentSourceLabel } from './common'
+import { AgentAvatar, ConversationAvatar, UserAvatar, agentSourceLabel } from './common'
 
 describe('user avatar', () => {
   let container: HTMLDivElement
@@ -72,6 +73,41 @@ describe('user avatar', () => {
 
     expect(container.querySelector('.emoji-agent-avatar')?.textContent).toBe('🧠')
     expect(container.querySelector('.generated-agent-avatar-art')).toBeNull()
+  })
+
+  it('keeps the current user as the last tile in a group avatar', async () => {
+    const agents: AgentConfig[] = Array.from({ length: 9 }, (_, index) => ({
+      id: `agent-${index}`,
+      name: `Agent ${index}`,
+      role: 'Assistant',
+      instructions: '',
+      color: '#7C6CF2',
+      provider: 'gateway',
+      model: 'default',
+      createdAt: 1
+    }))
+    const conversation: Conversation = {
+      id: 'group',
+      type: 'group',
+      name: 'Team',
+      agentIds: agents.map((agent) => agent.id),
+      topics: [],
+      activeTopicId: '',
+      unread: 0,
+      readAt: 0,
+      createdAt: 1,
+      updatedAt: 1
+    }
+
+    await act(async () => root.render(
+      <ConversationAvatar conversation={conversation} agents={agents} userName="Dobi" userAvatar="" />
+    ))
+
+    const mosaic = container.querySelector<HTMLElement>('.group-mosaic')!
+    expect(mosaic.dataset.count).toBe('9')
+    expect(mosaic.children).toHaveLength(9)
+    expect(mosaic.lastElementChild?.classList.contains('user-avatar')).toBe(true)
+    expect(mosaic.lastElementChild?.getAttribute('aria-label')).toBe('Dobi')
   })
 
   it('uses the same compact source label across contact surfaces', () => {

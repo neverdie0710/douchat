@@ -134,10 +134,14 @@ export function EmptyAvatar({ size = 36, group = false }: { size?: number; group
 export function ConversationAvatar({
   conversation,
   agents,
+  userName,
+  userAvatar,
   size = 38
 }: {
   conversation: Conversation
   agents: AgentConfig[]
+  userName: string
+  userAvatar: string
   size?: number
 }): ReactElement {
   const members = conversation.agentIds
@@ -146,20 +150,23 @@ export function ConversationAvatar({
   if (conversation.type === 'direct') {
     return members[0] ? <AgentAvatar agent={members[0]} size={size} /> : <EmptyAvatar size={size} />
   }
-  if (!members.length) return <EmptyAvatar size={size} group />
-  const tiles = members.slice(0, 9)
-  const columns = tiles.length === 1 ? 1 : tiles.length <= 4 ? 2 : 3
+  // The person is a member of every group too. Reserve the last mosaic tile
+  // for them so they stay visible even when a room has many agents.
+  const visibleAgents = members.slice(0, 8)
+  const tileCount = visibleAgents.length + 1
+  const columns = tileCount === 1 ? 1 : tileCount <= 4 ? 2 : 3
   const tileSize = (size - 4 - (columns - 1) * 1.5) / columns
   return (
     <span
-      className={`agent-avatar group-mosaic ${tiles.length > 4 ? 'dense' : ''}`}
+      className={`agent-avatar group-mosaic ${tileCount > 4 ? 'dense' : ''}`}
       style={{ '--avatar-size': `${size}px` } as CSSProperties}
-      data-count={tiles.length}
+      data-count={tileCount}
       title={conversation.name}
     >
-      {tiles.map((member) => (
+      {visibleAgents.map((member) => (
         <AgentAvatar key={member.id} agent={member} size={tileSize} />
       ))}
+      <UserAvatar src={userAvatar} name={userName || t('You')} size={tileSize} />
     </span>
   )
 }

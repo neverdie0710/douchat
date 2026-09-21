@@ -12,6 +12,7 @@ describe('local agent discovery', () => {
     expect(agents.find((agent) => agent.id === 'grok')).toMatchObject({ installed: true, chatSupported: true, path: '/local/bin/grok' })
     expect(agents.find((agent) => agent.id === 'openclaw')).toMatchObject({ installed: true, chatSupported: true })
     expect(agents.find((agent) => agent.id === 'claude')?.installed).toBe(false)
+    expect(agents.at(-1)?.id).toBe('fastclaw')
   })
   it('rejects stale installation state and unknown commands', async () => {
     await expect(validateLocalAgent('codex')).rejects.toThrow('not installed')
