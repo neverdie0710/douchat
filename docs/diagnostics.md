@@ -29,3 +29,24 @@
 最新交互：联系人资料恢复锚点浮动卡片；其他原生弹窗统一 820px 宽（小屏幕会缩窄），测量内容自动调节高度并居中。整体隐藏系统窗口按钮及标题栏，禁用最小化、最大化和手动缩放；主窗口背景轻微虚化，点击外部或 Esc 关闭。原生控件外观由操作系统决定。
 
 尺寸同步使用有回执的 `douchat:resize-dialog` IPC。窗口先隐藏，等待子文档样式加载、尺寸测量和系统窗口调整成功后再显示；后续内容变化由子文档 ResizeObserver 触发。宽度按内容布局选取（设置 980px、联系人选择/记录 820px、简单表单 560px），高度按实际内容测量并受屏幕可用空间限制。关闭时立即关闭原生窗口，主页面虚化在 120ms 内淡出；macOS 主窗口接受首次点击。
+
+### Windows file-input crash (0.1.9)
+
+Four Windows x64 dumps from 0.1.9 / Electron 43.4.0 matched the official
+`electron.exe.pdb` identifier `D5D3A821705385C24C4C44205044422E1`.
+All reported `0xC0000005`, reading address `0x8`, at executable offset
+`0x81CECBB` inside `blink::LCIDFromLocaleInternal` (`0x81CEAC0 + 0x1FB`).
+Settings and agent editing both mount a file input for avatar uploads.
+
+Electron's upstream Chromium patch explains that an empty default locale can
+produce a null string, which Windows dereferences when constructing a file input's
+shadow tree. This matches the dumps; it is not a React exception or a window-size
+failure. Disabling GPU acceleration does not prevent it.
+
+Electron is pinned to 43.7.3, which includes the null-locale guard:
+https://github.com/electron/electron/blob/v43.7.3/patches/chromium/cherry-pick-4b33582833e5.patch
+
+Windows verification must use a rebuilt installer (hot reload cannot replace
+Electron): repeatedly open Settings and Edit agent, then select an avatar file.
+Also check ordinary dialogs and native file-picker cancellation. macOS regression
+checks cannot establish that the affected Windows environment is fixed.

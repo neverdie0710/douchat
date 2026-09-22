@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -44,7 +44,7 @@
     "@types/react-dom": "^19.1.7",
     "@vitejs/plugin-react": "^5.0.1",
     "dompurify": "^3.4.15",
-    "electron": "^43.4.0",
+    "electron": "43.7.3",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "jsdom": "^27.3.0",
