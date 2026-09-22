@@ -700,6 +700,16 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
           {(summary.guidance || summary.action?.kind === 'open-douchat-credits') && (
             <div className="system-guidance">
               {summary.guidance ? <span>{t(summary.guidance)}</span> : null}
+              {summary.action?.kind === 'update-local-agent' && (
+                <button className="system-inline-action" type="button" disabled={launching} onClick={() => {
+                  setLaunching(true)
+                  setActionError('')
+                  void window.douchat.maintainLocalAgent('grok')
+                    .catch(() => setActionError(t('Could not open the updater. Try Settings → Local agents.')))
+                    .finally(() => setLaunching(false))
+                }}>{t(launching ? 'Opening…' : 'Update Grok')}</button>
+              )}
+              {summary.action?.kind === 'update-local-agent' && actionError && <span role="alert">{actionError}</span>}
               {summary.action?.kind === 'open-douchat-credits' && onOpenCredits && (
                 <button className="system-inline-action" type="button" onClick={onOpenCredits}>
                   {t(summary.action.label)}

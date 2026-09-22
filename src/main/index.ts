@@ -1,3 +1,6 @@
+import { configureManagedNode, ensureManagedNode } from './managedNode'
+import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
+import { mkdirSync } from 'node:fs'
 import { DiagnosticLog } from './diagnostics'
 import { release as osRelease } from 'node:os'
 import { notifyWindows } from './windowNotifications'
@@ -6,7 +9,7 @@ import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -31,11 +34,12 @@ import { DouchatStore } from './store'
 import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, validateLocalAgent } from './localAgents'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
-import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, normalizeWebAppUrl } from './authProtocol'
+import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
-import { openLocalAgentTerminal } from './terminalLauncher'
+import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
+import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLauncher'
 
 // Use the software compositor on Windows: modal layers can blank the entire
 // window on affected GPU/driver combinations. Must run before app readiness.
@@ -60,7 +64,18 @@ const webAppUrl = normalizeWebAppUrl(
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
+configureManagedNode(app.getPath('userData'))
 const diagnostics = new DiagnosticLog(join(app.getPath('userData'), 'logs'))
+try {
+  const crashDirectory = join(diagnostics.directory, 'crashes')
+  mkdirSync(crashDirectory, { recursive: true })
+  app.setPath('crashDumps', crashDirectory)
+  crashReporter.start({ uploadToServer: false })
+  diagnostics.write('crash-reporter.ready', 'Local dumps: logs/crashes; upload disabled')
+} catch (error) {
+  diagnostics.write('crash-reporter.failed', error instanceof Error ? error.message : String(error))
+}
+
 diagnostics.write('app.start', JSON.stringify({ version: app.getVersion(), platform: process.platform, arch: process.arch, os: osRelease(), electron: process.versions.electron, chrome: process.versions.chrome, hardwareAccelerationDisabled: process.platform === 'win32' }))
 process.on('uncaughtExceptionMonitor', (error) => diagnostics.write('main.uncaughtException', error.stack || error.message))
 const settingsTimers = new Map<number, ReturnType<typeof setTimeout>>()
@@ -79,10 +94,29 @@ async function openDiagnosticLogs(): Promise<void> {
 app.on('browser-window-created', (_event, window) => {
   const contents = window.webContents
   const id = contents.id
+  configureNativeDialogWindows(window)
   const record = (event: string, detail = '') => diagnostics.write(event, `window=${id} ${detail}`)
   contents.on('preload-error', (_event, _path, error) => record('preload.error', error.stack || error.message))
   contents.on('did-fail-load', (_event, code, description, _url, mainFrame) => record('window.load-failed', JSON.stringify({ code, description, mainFrame })))
-  contents.on('render-process-gone', (_event, details) => record('renderer.gone', JSON.stringify(details)))
+  let showingCrashDialog = false
+  contents.on('render-process-gone', (_event, details) => {
+    record('renderer.gone', JSON.stringify({ ...details, settingsPending: settingsTimers.has(id) }))
+    clearSettingsTimer(id)
+    if (details.reason === 'clean-exit' || showingCrashDialog || window.isDestroyed()) return
+    showingCrashDialog = true
+    // Native UI remains usable after the renderer (including its React boundaries) exits.
+    void dialog.showMessageBox(window, {
+      type: 'error', title: 'Douchat', message: '界面进程意外退出',
+      detail: `请将日志目录中的 diagnostics.log 和 crashes 文件夹发给开发者。\n错误：${details.reason} (${details.exitCode})`,
+      buttons: ['打开日志目录并重新加载', '重新加载', '关闭窗口'], defaultId: 0, cancelId: 2
+    }).then(async ({ response }) => {
+      if (response === 0) await openDiagnosticLogs()
+      if (window.isDestroyed() || contents.isDestroyed()) return
+      if (response === 2) window.close()
+      else contents.reload()
+    }).catch((error) => record('crash-dialog.failed', String(error)))
+      .finally(() => { showingCrashDialog = false })
+  })
   window.on('unresponsive', () => record('window.unresponsive'))
   window.on('responsive', () => record('window.responsive'))
   window.on('closed', () => clearSettingsTimer(id))
@@ -94,8 +128,19 @@ app.on('browser-window-created', (_event, window) => {
   })
 })
 app.on('child-process-gone', (_event, details) => diagnostics.write('child-process.gone', JSON.stringify(details)))
+ipcMain.handle('douchat:resize-dialog', (event, name: unknown, width: unknown, height: unknown) => {
+  if (typeof name !== 'string' || typeof width !== 'number' || typeof height !== 'number') return false
+  return resizeNativeDialog(event.sender, name, height, width)
+})
 ipcMain.on('douchat:diagnostic', (event, name: unknown, detail: unknown) => {
   if (!isDouchatRenderer(event.sender) || typeof name !== 'string' || typeof detail !== 'string' || name.length > 100 || detail.length > 16000) return
+  if (name === 'native-dialog.resize') {
+    try {
+      const request = JSON.parse(detail)
+      if (typeof request.name === 'string' && typeof request.height === 'number') resizeNativeDialog(event.sender, request.name, request.height)
+    } catch { /* Ignore malformed resize requests. */ }
+    return
+  }
   const id = event.sender.id
   diagnostics.write(name, `window=${id} ${detail}`)
   if (name === 'settings.open-request') {
@@ -120,6 +165,8 @@ let scheduler: RoutineScheduler
 let auth: DesktopAuth
 let updater: DesktopUpdater
 let emailConnectors: EmailConnectorManager
+let pendingGroupRoom = ''
+let openingGroupRoom = false
 let pendingAuthUrl = ''
 let pendingCreditsRefresh = false
 let cloudSessionActive = false
@@ -128,7 +175,11 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 function focusMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (quitting) return
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady() && runtime) createWindow()
+    return
+  }
   if (mainWindow.isMinimized()) mainWindow.restore()
   if (process.platform === 'darwin') app.focus({ steal: true })
   mainWindow.show()
@@ -136,10 +187,35 @@ function focusMainWindow(): void {
 }
 
 function callbackUrlFromArgs(args: string[]): string | undefined {
-  return args.find((arg) => isDesktopAuthUrl(arg, authScheme) || isDesktopCreditsUrl(arg, authScheme))
+  return args.find((arg) => isDesktopAuthUrl(arg, authScheme) || isDesktopCreditsUrl(arg, authScheme) || Boolean(parseDesktopGroupUrl(arg)))
+}
+
+async function openPendingGroup(): Promise<void> {
+  if (!pendingGroupRoom || openingGroupRoom || !social || auth?.getState().status !== 'signed-in') return
+  openingGroupRoom = true
+  const roomId = pendingGroupRoom
+  try {
+    await social.syncInbox(true)
+    const conversation = store.accountConversations.find((item) => item.remoteRoomId === roomId)
+    if (!conversation) throw new Error('请使用加入群聊的同一账号登录。')
+    if (conversation.hidden) store.updateConversation(conversation.id, { hidden: false })
+    openChatWindow(conversation.id)
+  } catch (error) {
+    await dialog.showMessageBox({ type: 'info', message: '无法打开群聊', detail: error instanceof Error ? error.message : '请稍后重试。' })
+  } finally {
+    if (pendingGroupRoom === roomId) pendingGroupRoom = ''
+    openingGroupRoom = false
+  }
 }
 
 function receiveAppUrl(url: string): void {
+  const roomId = parseDesktopGroupUrl(url)
+  if (roomId) {
+    pendingGroupRoom = roomId
+    focusMainWindow()
+    void openPendingGroup()
+    return
+  }
   if (isDesktopCreditsUrl(url, authScheme)) {
     pendingCreditsRefresh = true
     focusMainWindow()
@@ -169,13 +245,15 @@ if (hasSingleInstanceLock) {
 
 const initialAppUrl = callbackUrlFromArgs(process.argv)
 if (initialAppUrl) {
-  if (isDesktopCreditsUrl(initialAppUrl, authScheme)) pendingCreditsRefresh = true
+  if (parseDesktopGroupUrl(initialAppUrl)) pendingGroupRoom = parseDesktopGroupUrl(initialAppUrl)!
+  else if (isDesktopCreditsUrl(initialAppUrl, authScheme)) pendingCreditsRefresh = true
   else pendingAuthUrl = initialAppUrl
 }
 
 let localWorkBlocker: number | undefined
 let quitting = false
 function broadcast(snapshot: AppSnapshot): void {
+  if (quitting) return
   const localWork = !quitting && snapshot.agents.some((agent) => agent.localAgentId && snapshot.agentStatuses[agent.id] === 'thinking')
   if (localWork && localWorkBlocker === undefined) localWorkBlocker = powerSaveBlocker.start('prevent-app-suspension')
   if (!localWork && localWorkBlocker !== undefined) {
@@ -275,11 +353,10 @@ const chatWindows = new Map<string, BrowserWindow>()
 function openChatWindow(conversationId: string): void {
   const existing = chatWindows.get(conversationId)
   if (existing && !existing.isDestroyed()) { existing.show(); existing.focus(); return }
-  const window = new BrowserWindow({ icon: appIcon, width: 820, height: 720, minWidth: 480, minHeight: 480, title: store.conversation(conversationId)?.name,
+  const window = new BrowserWindow({ acceptFirstMouse: true, icon: appIcon, width: 820, height: 720, minWidth: 480, minHeight: 480, title: store.conversation(conversationId)?.name,
     webPreferences: { preload: join(__dirname, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } })
   chatWindows.set(conversationId, window)
   window.on('closed', () => chatWindows.delete(conversationId))
-  window.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url); return { action: 'deny' } })
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   if (process.env.ELECTRON_RENDERER_URL) {
     const url = new URL(process.env.ELECTRON_RENDERER_URL)
@@ -303,7 +380,7 @@ function validateCodeArtifact(input: CodeArtifactInput): CodeArtifactInput {
 function openCodeArtifactWindow(input: CodeArtifactInput): void {
   const artifact = validateCodeArtifact(input)
   const artifactId = randomUUID()
-  const window = new BrowserWindow({
+  const window = new BrowserWindow({ acceptFirstMouse: true,
     icon: appIcon,
     width: 1120,
     height: 760,
@@ -326,7 +403,6 @@ function openCodeArtifactWindow(input: CodeArtifactInput): void {
     codeArtifactWindows.delete(artifactId)
     codeArtifacts.delete(artifactId)
   })
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   // The preview iframe may run the supplied page's scripts, but it may not
   // navigate itself to a remote document (which would discard our CSP).
@@ -343,7 +419,7 @@ function openCodeArtifactWindow(input: CodeArtifactInput): void {
 }
 
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({ acceptFirstMouse: true,
     icon: appIcon,
     width: 1240,
     height: 800,
@@ -366,10 +442,6 @@ function createWindow(): void {
   if (process.platform === 'darwin') mainWindow.setWindowButtonVisibility(false)
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
-    return { action: 'deny' }
-  })
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault())
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -454,7 +526,7 @@ app.whenReady().then(() => {
   store.setCurrentAccountId('')
   emailConnectors = new EmailConnectorManager(store, app.getPath('userData'))
   computer = new LocalComputerProvider(
-    () => runtime && broadcast(runtime.snapshot()),
+    () => !quitting && runtime && broadcast(runtime.snapshot()),
     [app.getPath('downloads'), app.getPath('desktop'), app.getPath('documents')],
     (path) => shell.openPath(path)
   )
@@ -482,7 +554,7 @@ app.whenReady().then(() => {
   scheduler = new RoutineScheduler(
     store,
     runtime,
-    () => broadcast(runtime.snapshot()),
+    () => { if (!quitting) broadcast(runtime.snapshot()) },
     async () => (await auth.getUsageSummary()).credits
   )
   runtime.setRoutineCreator((input) => scheduler.createRoutine(input))
@@ -501,10 +573,10 @@ app.whenReady().then(() => {
     // The development flow returns through a loopback HTTP server instead of
     // the custom protocol, so it does not pass through receiveAppUrl(). Bring
     // Douchat forward as soon as either callback path finishes signing in.
-    if (state.status === 'signed-in') focusMainWindow()
+    if (state.status === 'signed-in') { focusMainWindow(); void openPendingGroup() }
   })
 
-  social = new SocialClient(webAppUrl, auth, store, runtime, () => broadcast(runtime.snapshot()))
+  social = new SocialClient(webAppUrl, auth, store, runtime, () => { if (!quitting) broadcast(runtime.snapshot()) })
   runtime.setHumanSender((id, text, images) => social!.sendMessage(id, text, images))
   ipcMain.handle('douchat:social-snapshot', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
@@ -553,6 +625,22 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:get-update-state', () => updater.state())
   ipcMain.handle('douchat:check-for-updates', () => updater.checkForUpdates())
   ipcMain.handle('douchat:install-update', () => updater.installUpdate())
+  ipcMain.handle('douchat:maintain-local-agent', async (event, id: unknown) => {
+    if (!isDouchatRenderer(event.sender) || typeof id !== 'string') throw new Error('Invalid local agent request')
+    const agent = (await detectLocalAgents({ version: async () => undefined }, id))[0]
+    if (!agent) throw new Error('Unknown local agent')
+    const plan = await prepareNpmMaintenance(await resolveMaintenancePlan(agent))
+    if (!plan.command) {
+      await dialog.showMessageBox({ type: 'info', message: '请按该工具原有的安装方式安装或更新。', detail: '自定义工具或未确认来源的工具不会自动运行安装命令。' })
+      return false
+    }
+    const result = await dialog.showMessageBox({ type: 'question', message: `${agent.installed ? '更新' : '安装'} ${agent.name}`, detail: `${plan.needsDownload ? '首次使用，需要先下载并校验运行环境，可能需要几分钟。\n\n' : ''}将在系统终端执行以下命令。请在终端完成提示，返回后会自动检测。\n\n${plan.command}`, buttons: ['取消', '在终端执行'], defaultId: 1, cancelId: 0 })
+    if (result.response !== 1) return false
+    if (plan.needsDownload) await ensureManagedNode()
+    resetShellPath()
+    await openMaintenanceTerminal(plan.command)
+    return true
+  })
   ipcMain.handle('douchat:detect-local-agents', () => { resetShellPath(); return detectLocalAgents() })
   ipcMain.handle('douchat:open-local-agent-terminal', (event, id: unknown) => {
     if (!isDouchatRenderer(event.sender) || id !== 'claude') throw new Error('Invalid local agent terminal request')
@@ -842,9 +930,7 @@ app.whenReady().then(() => {
   updateTimer.unref()
   scheduler.start()
   powerMonitor.on('resume', () => scheduler.checkNow())
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', () => focusMainWindow())
 })
 
 app.on('window-all-closed', () => {
@@ -852,11 +938,16 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  if (quitting) return
   quitting = true
+  social?.stop()
   if (localWorkBlocker !== undefined) { powerSaveBlocker.stop(localWorkBlocker); localWorkBlocker = undefined }
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)
   scheduler?.dispose()
   computer?.dispose()
+})
+
+app.on('will-quit', () => {
   // Closing checkpoints the WAL, so the next launch opens a single tidy file.
   store?.close()
 })

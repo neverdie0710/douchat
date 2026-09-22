@@ -602,6 +602,22 @@ describe('private delivery disclosure', () => {
     expect(container.textContent).not.toContain('Run ID: run-1')
   })
 
+  it('offers a Grok update without expanding raw sandbox diagnostics', async () => {
+    const maintainLocalAgent = vi.fn(async () => true)
+    Object.defineProperty(window, 'douchat', { configurable: true, value: { maintainLocalAgent } })
+    const message: ChatMessage = {
+      id: 'grok-error', conversationId: directConversation.id, topicId: 'topic-2',
+      authorId: 'system', authorName: 'Douchat', text: 'could not apply strict sandbox',
+      detail: 'Grok Build: sandbox could not be applied: socket deny resolution failed: /var/run/docker.sock: endpoint is a symlink',
+      kind: 'system', createdAt: 31
+    }
+    await act(async () => root.render(<SystemMessage message={message} />))
+    expect(container.textContent).toContain('Grok cannot start with the current Docker socket setup')
+    expect(container.querySelector('pre')).toBeNull()
+    await act(async () => container.querySelector<HTMLButtonElement>('.system-inline-action')?.click())
+    expect(maintainLocalAgent).toHaveBeenCalledWith('grok')
+  })
+
   it('shows a next step when a local Claude account is out of credit', async () => {
     const openLocalAgentTerminal = vi.fn(async () => ({ terminal: 'termany' as const }))
     Object.defineProperty(window, 'douchat', {

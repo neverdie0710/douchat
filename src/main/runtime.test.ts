@@ -599,7 +599,7 @@ describe('DouchatRuntime', () => {
     expect(request).toHaveBeenCalledTimes(2)
   })
 
-  it('resumes one empty model turn after a transient stream interruption', async () => {
+  it.each([['Request was aborted', false], ['Request aborted', false], ['Request aborted', true]] as const)('resumes an interrupted tool turn without replaying tools: %s, thrown=%s', async (errorMessage, thrown) => {
     vi.useFakeTimers()
     try {
       const directory = mkdtempSync(join(tmpdir(), 'douchat-runtime-stream-retry-'))
@@ -611,8 +611,14 @@ describe('DouchatRuntime', () => {
       const prompt = vi.fn(async (input: string) => {
         state.messages = [
           { role: 'user', content: [{ type: 'text', text: input }] },
-          { role: 'assistant', content: [], errorMessage: 'Request was aborted' }
+          { role: 'assistant', content: [{ type: 'toolCall', id: 'create-1', name: 'create_group', arguments: {} }] },
+          { role: 'toolResult', toolCallId: 'create-1', toolName: 'create_group', content: [{ type: 'text', text: 'Group created' }] },
+          { role: 'assistant', content: [], errorMessage }
         ]
+        if (thrown) {
+          state.messages.pop()
+          throw new Error(errorMessage)
+        }
       })
       const resume = vi.fn(async () => {
         state.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Recovered reply' }] })
@@ -644,7 +650,8 @@ describe('DouchatRuntime', () => {
       await expect(replyPromise).resolves.toEqual({ text: 'Recovered reply', retryCount: 1 })
       expect(prompt).toHaveBeenCalledOnce()
       expect(resume).toHaveBeenCalledOnce()
-      expect(state.messages.some((message) => message.errorMessage === 'Request was aborted')).toBe(false)
+      expect(state.messages.filter((message) => message.role === 'toolResult')).toHaveLength(1)
+      expect(state.messages.some((message) => message.errorMessage === errorMessage)).toBe(false)
     } finally {
       vi.useRealTimers()
     }

@@ -1,7 +1,8 @@
+import { managedSearchPaths } from './managedNode'
 import { execFile, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { access, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { findDesktopApp, validateLocalAgent } from './localAgents'
@@ -178,6 +179,57 @@ export async function openLocalAgentTerminal(
     if (!terminal) continue
     await spawnDetached(terminal, args)
     return { terminal: 'system' }
+  }
+  throw new Error('No terminal application was found.')
+}
+
+/** Show the exact approved command as data; never evaluate it while printing. */
+export function maintenanceShellBody(command: string): string {
+  return [
+    ...(managedSearchPaths().length ? [`export PATH=${shellQuote(managedSearchPaths().join(':'))}:\"$PATH\"`] : []),
+    "printf '\x1b[2J\x1b[H'",
+    "printf '%s\n' '本地智能体安装与更新' '即将执行（与确认窗口一致）：'",
+    `printf '\n  %s\n\n' ${shellQuote(command)}`,
+    command,
+    'result=$?',
+    'if [ "$result" -eq 0 ]; then',
+    "  printf '\n%s\n' '命令执行成功。返回 Douchat 后会重新检测版本。'",
+    'else',
+    "  printf '\n执行未成功（退出码 %s），请查看上方工具输出。\n' \"$result\"",
+    'fi',
+    "printf '%s' '按回车关闭此窗口…'",
+    'read -r _',
+    'exit "$result"'
+  ].join('\n')
+}
+
+/** Only call with a trusted maintenance command constructed in the main process. */
+export async function openMaintenanceTerminal(command: string, dependencies: TerminalLauncherDependencies = {}): Promise<void> {
+  const platform = dependencies.platform ?? process.platform
+  const execute = dependencies.execute ?? defaultExecute
+  const launch = dependencies.spawnDetached ?? defaultSpawnDetached
+  if (platform === 'darwin') {
+    // Open a private .command file via Launch Services; no Apple Events automation permission.
+    const directory = await mkdtemp(join(tmpdir(), 'douchat-maintenance-'))
+    const script = join(directory, 'Douchat-Agent-Maintenance.command')
+    try {
+      await writeFile(script, `#!/bin/bash\ntrap ${shellQuote(`/bin/rm -rf -- ${shellQuote(directory)}`)} EXIT\n${maintenanceShellBody(command)}\n`, { mode: 0o700 })
+      await execute('/usr/bin/open', ['-a', 'Terminal', script])
+    } catch {
+      await rm(directory, { recursive: true, force: true }).catch(() => {})
+      throw new Error('无法打开系统终端。请打开 Terminal 后重试，或复制确认窗口中的命令手动执行。')
+    }
+    return
+  }
+  if (platform === 'win32') {
+    await launch('powershell.exe', ['-NoProfile', '-NoExit', '-EncodedCommand', Buffer.from(`$env:Path = ${powershellQuote(managedSearchPaths().join(';') + ';')} + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + $env:Path\nClear-Host\nWrite-Host '本地智能体安装与更新'\nWrite-Host '即将执行（与确认窗口一致）：'\nWrite-Host ${powershellQuote(command)}\n$global:LASTEXITCODE = 0\n${command}\n$douchatSucceeded = $?\nif ($douchatSucceeded -and $LASTEXITCODE -eq 0) { Write-Host '命令执行成功。返回 Douchat 后会重新检测版本。' } else { Write-Host '执行未成功，请查看上方工具输出。' }`, 'utf16le').toString('base64')])
+    return
+  }
+  for (const name of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm']) {
+    const executable = await (dependencies.resolveCommand ?? resolveExecutable)(name)
+    if (!executable) continue
+    await launch(executable, [name === 'gnome-terminal' ? '--' : '-e', 'bash', '-lc', maintenanceShellBody(command)])
+    return
   }
   throw new Error('No terminal application was found.')
 }

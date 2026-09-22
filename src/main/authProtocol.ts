@@ -82,3 +82,12 @@ export function isDesktopCreditsUrl(input: string, scheme: string): boolean {
     return false
   }
 }
+
+export function parseDesktopGroupUrl(input: string): string | undefined {
+  try {
+    const url = new URL(input)
+    const room = url.searchParams.get('room') ?? ''
+    if (url.protocol === 'douchat:' && url.hostname === 'group' && url.pathname === '/open' && !url.username && !url.password && !url.port && /^[A-Za-z0-9_-]{1,200}$/.test(room)) return room
+  } catch { /* Ignore unrelated app links. */ }
+  return undefined
+}

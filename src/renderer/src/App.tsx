@@ -2,7 +2,7 @@ import { reportDiagnostic } from './diagnostics'
 import { ChatErrorBoundary } from './components/ChatErrorBoundary'
 import { AgentPermissionsDialog, AgentPermissionPrompt } from './components/AgentPermissions'
 import { DialogErrorBoundary } from './components/DialogErrorBoundary'
-import { MessageQueue, type QueuedMessage } from './messageQueue'
+import { messageSendError, MessageQueue, type QueuedMessage } from './messageQueue'
 import type { SocialSnapshot } from '../../shared/social'
 import { AddFriendModal } from './components/AddFriendModal'
 import { SocialWorkspace } from './components/SocialWorkspace'
@@ -105,12 +105,19 @@ function WorkspaceApp(): ReactElement {
   const [localAgents, setLocalAgents] = useState<LocalAgent[]>([])
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
+  const scanInFlight = useRef(false)
   async function scanAgents(): Promise<void> {
+    if (scanInFlight.current) return
+    scanInFlight.current = true
+    let scanTimer: ReturnType<typeof setTimeout> | undefined
     setScanning(true)
     setScanError('')
-    try { setLocalAgents(await window.douchat.detectLocalAgents()) }
-    catch (error) { setScanError(error instanceof Error ? error.message : 'Could not detect local agents. Try Detect again.') }
-    finally { setScanning(false) }
+    try { setLocalAgents(await Promise.race([
+      window.douchat.detectLocalAgents(),
+      new Promise<LocalAgent[]>((_, reject) => { scanTimer = setTimeout(() => reject(new Error('检测暂未完成，请稍后点击检测重试。')), 20000) })
+    ])) }
+    catch (error) { setScanError(messageSendError(error)) }
+    finally { clearTimeout(scanTimer); scanInFlight.current = false; setScanning(false) }
   }
   useEffect(() => {
     void scanAgents()
@@ -486,6 +493,7 @@ function WorkspaceApp(): ReactElement {
         workingIds={workingIds}
         onSelect={openChat}
         onCreateBot={() => setDialog({ kind: 'bot' })}
+        onAddFriend={() => setDialog({ kind: 'add-friend' })}
         onCreateGroup={() => setDialog({ kind: 'group' })}
         onUpdate={(target, input) => {
           void window.douchat.updateConversation(target.id, input).then(setSnapshot).catch((error) => fail(error, 'Chat could not be updated'))
@@ -587,7 +595,6 @@ function WorkspaceApp(): ReactElement {
           agent={dialog.agent}
           localAgents={localAgents}
           initialLocalAgentId={dialog.localAgentId}
-          onAddFriend={() => setDialog({ kind: 'add-friend' })}
           onSettings={() => { setDialog(null); setSettingsOpen(true) }}
           onClose={() => setDialog(null)}
           onCreate={createAgent}

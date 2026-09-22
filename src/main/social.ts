@@ -247,8 +247,21 @@ export class SocialClient {
     void this.syncInbox().catch(() => { /* The next inbox poll recovers confirmed delivery. */ })
   }
   async action(input: SocialAction): Promise<SocialResult> {
-    const allowed = ['rename-room', 'remove-members', 'invite-members', 'add-members', 'lookup', 'request', 'respond', 'create-room', 'add-agent', 'remove-agent', 'messages', 'send']
+    const allowed = ['group-invite', 'rename-room', 'remove-members', 'invite-members', 'add-members', 'lookup', 'request', 'respond', 'create-room', 'add-agent', 'remove-agent', 'messages', 'send']
     if (!input || !allowed.includes(input.action)) throw new Error('不支持的操作。')
+    if (input.action === 'group-invite') {
+      const conversation = this.store.accountConversations.find((item) => item.id === input.conversationId)
+      if (!conversation || conversation.type !== 'group') throw new Error('Chat not found')
+      if (!conversation.remoteRoomId) await this.action({ action: 'invite-members', conversationId: conversation.id, friendIds: [], agentIds: [] })
+      const roomId = this.store.accountConversations.find((item) => item.id === conversation.id)?.remoteRoomId
+      if (!roomId) throw new Error('Chat could not be shared')
+      const result = await this.request<SocialResult>({ action: 'group-invite', roomId, regenerate: Boolean(input.regenerate) })
+      if (!result.invite) throw new Error('Invitation could not be created')
+      const url = new URL('/join-group', this.url)
+      url.searchParams.set('room', roomId)
+      url.searchParams.set('token', result.invite.token)
+      return { ...result, invite: { ...result.invite, url: url.toString() } }
+    }
     if (input.action === 'remove-members' || input.action === 'rename-room') {
       const result = await this.request<SocialResult>(input)
       await this.syncInbox(true)

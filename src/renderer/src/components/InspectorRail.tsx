@@ -1,3 +1,5 @@
+import { NativeDialog } from './NativeDialog'
+import { GroupInviteDialog } from './GroupInviteDialog'
 import { ContactKindBadge } from './ContactKindBadge'
 import type { SocialPerson } from '../../../shared/social'
 import type { ProfileAnchor } from './MemberProfilePopover'
@@ -40,7 +42,7 @@ export function InspectorRail({
   onRunRoutineNow?: (routineId: string) => Promise<void>
 }): ReactElement {
   const [memberQuery, setMemberQuery] = useState('')
-  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | null>(null)
+  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | null>(null)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
@@ -71,12 +73,6 @@ export function InspectorRail({
     }, 200)
     return () => { cancelled = true; clearTimeout(timer) }
   }, [recordsDialog, query, conversation?.id, snapshot.messages])
-  useEffect(() => {
-    if (!recordsDialog) return
-    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape') setRecordsDialog(null) }
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  }, [recordsDialog])
   async function update(action: () => Promise<unknown>): Promise<boolean> {
     setBusy(true); setError('')
     try { await action(); setConfirmClear(false); return true }
@@ -161,6 +157,7 @@ export function InspectorRail({
                   <span>{conversation.name}</span><Pencil size={15} />
                 </button>}
               </section>
+              <button className="detail-search-button" onClick={() => setRecordsDialog('invite')}>{t('Invite to group')} <ChevronRight size={16} /></button>
               <div className="detail-toggles">
                 <label>{t('Save to contacts')}<button type="button" className="detail-switch" role="switch" aria-label={t('Save to contacts')} aria-checked={!!conversation.savedToContacts} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { savedToContacts: !conversation.savedToContacts }))} /></label>
                 <label>{t('Mute notifications')}<button type="button" className="detail-switch" role="switch" aria-label={t('Mute notifications')} aria-checked={!!conversation.muted} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { muted: !conversation.muted }))} /></label>
@@ -183,6 +180,7 @@ export function InspectorRail({
 
       </div>
     </aside>
+    {conversation && recordsDialog === 'invite' && createPortal(<GroupInviteDialog key={conversation.id} conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} onClose={() => setRecordsDialog(null)} />, document.body)}
     {conversation && recordsDialog === 'history' && createPortal(<ChatHistoryDialog
       conversation={conversation}
       messages={results}
@@ -218,8 +216,8 @@ function ChatHistoryDialog({ conversation, messages, agents, userName, userAvata
   onQuery: (query: string) => void
   onClose: () => void
 }): ReactElement {
-  return <div className="modal-backdrop conversation-records-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <section className="conversation-records-modal" role="dialog" aria-modal="true" aria-labelledby="chat-history-title">
+  return <NativeDialog className="modal-backdrop conversation-records-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={640} height={720}>
+    <section className="conversation-records-modal chat-history-modal" role="dialog" aria-modal="true" aria-labelledby="chat-history-title">
       <header className="records-header">
         <div className="records-title-spacer" />
         <div><h1 id="chat-history-title">{t('Chat history with {name}').replace('{name}', conversation.name)} <span>({messages.length})</span></h1></div>
@@ -241,7 +239,7 @@ function ChatHistoryDialog({ conversation, messages, agents, userName, userAvata
         {messages.length === 100 && <p className="records-limit">{t('Showing latest 100 matches')}</p>}
       </div>
     </section>
-  </div>
+  </NativeDialog>
 }
 
 function routineScheduleLabel(schedule: RoutineSchedule): string {
@@ -277,6 +275,7 @@ function ConversationRoutinesDialog({ conversation, routines, runs, agents, onDe
   onRunNow?: (routineId: string) => Promise<void>
   onClose: () => void
 }): ReactElement {
+  const [query, setQuery] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const perform = async (key: string, action: () => Promise<void>): Promise<void> => {
@@ -289,27 +288,32 @@ function ConversationRoutinesDialog({ conversation, routines, runs, agents, onDe
     if (!onDelete || !window.confirm(t('Delete this automation?'))) return
     await perform(`delete:${routine.id}`, () => onDelete(routine.id))
   }
-  const ordered = [...routines].sort((left, right) => Number(right.enabled) - Number(left.enabled) || left.nextRunAt - right.nextRunAt)
-  return <div className="modal-backdrop conversation-records-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <section className="conversation-records-modal routine-records-modal" role="dialog" aria-modal="true" aria-labelledby="routine-records-title">
+  const keyword = query.trim().toLocaleLowerCase()
+  const filtered = routines.filter((routine) => {
+    const agent = agents.find((item) => item.id === routine.agentId)
+    return !keyword || [routine.name, routine.prompt, agent ? agentDisplayName(agent) : '', routineScheduleLabel(routine.schedule)].join(' ').toLocaleLowerCase().includes(keyword)
+  })
+  const ordered = [...filtered].sort((left, right) => Number(right.enabled) - Number(left.enabled) || left.nextRunAt - right.nextRunAt)
+  return <NativeDialog className="modal-backdrop conversation-records-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={640} height={720}>
+    <section className="conversation-records-modal routine-records-modal scheduled-tasks-modal" role="dialog" aria-modal="true" aria-labelledby="routine-records-title">
       <header className="records-header">
         <div className="records-title-spacer" />
         <div><h1 id="routine-records-title">{t('Scheduled tasks for {name}').replace('{name}', conversation.name)} <span>({routines.length})</span></h1></div>
         <button type="button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={18} /></button>
       </header>
+      <label className="records-search"><Search size={18} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} aria-label={t('Search')} /></label>
       {error && <p className="records-error" role="alert">{t(error)}</p>}
       <div className="records-list routine-records-list">
-        {!ordered.length && <div className="records-empty"><CalendarClock size={30} /><strong>{t('No scheduled tasks in this chat')}</strong><p>{t('Ask this contact to remind you later or run something on a schedule.')}</p></div>}
+        {!ordered.length && <div className="records-empty"><CalendarClock size={30} /><strong>{t(keyword ? 'No matching tasks' : 'No scheduled tasks in this chat')}</strong><p>{t(keyword ? 'Try another keyword.' : 'Ask this contact to remind you later or run something on a schedule.')}</p></div>}
         {ordered.map((routine) => {
           const agent = agents.find((item) => item.id === routine.agentId)
           const lastRun = runs.filter((run) => run.routineId === routine.id).sort((left, right) => right.createdAt - left.createdAt)[0]
           const expiredOnce = routine.schedule.kind === 'once' && routine.schedule.runAt <= Date.now()
           return <article className="routine-record" key={routine.id}>
-            <div className="routine-record-mark"><CalendarClock size={18} /></div>
             <div className="routine-record-copy">
               <header><strong>{routine.name}</strong><span data-status={lastRun?.status ?? (routine.enabled ? 'active' : 'paused')}>{routineStatus(routine, lastRun)}</span></header>
               <p>{routine.prompt}</p>
-              <div><span>{agent?.name ?? t('Unknown agent')}</span><span>{routineScheduleLabel(routine.schedule)}</span>{routine.enabled && <span>{t('Next run: {time}').replace('{time}', new Date(routine.nextRunAt).toLocaleString())}</span>}</div>
+              <div><span className="routine-contact">{agent && <AgentAvatar agent={agent} size={20} />}{agent ? agentDisplayName(agent) : t('Unknown agent')}</span><span>{routineScheduleLabel(routine.schedule)}</span>{routine.enabled && <span>{t('Next run: {time}').replace('{time}', new Date(routine.nextRunAt).toLocaleString())}</span>}</div>
             </div>
             <div className="routine-record-actions">
               <button type="button" disabled={!onRunNow || Boolean(busy)} aria-label={t('Run now')} title={t('Run now')} onClick={() => onRunNow && void perform(`run:${routine.id}`, () => onRunNow(routine.id))}><Play size={16} /></button>
@@ -320,5 +324,5 @@ function ConversationRoutinesDialog({ conversation, routines, runs, agents, onDe
         })}
       </div>
     </section>
-  </div>
+  </NativeDialog>
 }

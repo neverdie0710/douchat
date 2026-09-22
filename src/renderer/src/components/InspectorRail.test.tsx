@@ -158,7 +158,13 @@ describe('chat details rail', () => {
 
     await act(async () => options[1].click())
     expect(document.querySelector('[aria-labelledby="routine-records-title"]')?.textContent).toContain('Say hello')
-    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-labelledby="routine-records-title"] button[aria-label="Close"]')!.click())
     expect(document.querySelector('[aria-labelledby="routine-records-title"]')).toBeNull()
   })
+})
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
 })

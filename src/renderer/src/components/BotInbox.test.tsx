@@ -29,7 +29,7 @@ it('shows human DMs alongside agent chats, ordered by latest message, and opens 
   ] } as unknown as AppSnapshot
   try {
     await act(async () => root.render(<BotInbox snapshot={snapshot} activeId="dm" workingIds={new Set()} onSelect={onSelect}
-      onCreateBot={vi.fn()} onCreateGroup={vi.fn()} onEdit={vi.fn()} onTogglePin={vi.fn()} onDelete={vi.fn()} onUpdate={vi.fn()} onOpenWindow={vi.fn()}
+      onCreateBot={vi.fn()} onAddFriend={vi.fn()} onCreateGroup={vi.fn()} onEdit={vi.fn()} onTogglePin={vi.fn()} onDelete={vi.fn()} onUpdate={vi.fn()} onOpenWindow={vi.fn()}
  />))
     const rows = host.querySelectorAll<HTMLButtonElement>('.conversation-item')
     expect(rows).toHaveLength(2)

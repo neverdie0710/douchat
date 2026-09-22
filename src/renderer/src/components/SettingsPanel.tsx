@@ -1,3 +1,5 @@
+import { messageSendError } from '../messageQueue'
+import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
@@ -33,13 +35,28 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   onSetRoutineEnabled?: (id: string, enabled: boolean) => Promise<void>
   onRunRoutineNow?: (id: string) => Promise<void>
 }): ReactElement {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    // Avoid a synchronous focus/layout flush in React's initial DOM commit on Windows.
+    // Keep keyboard focus in the dialog, and restore it to the opener when dismissed.
+    const opener = document.activeElement
+    const timer = window.setTimeout(() => {
+      reportDiagnostic('settings.focus-start')
+      closeRef.current?.focus({ preventScroll: true })
+      reportDiagnostic('settings.focus-complete')
+    }, 300)
+    return () => {
+      window.clearTimeout(timer)
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [])
   useEffect(() => {
     reportDiagnostic('settings.mounted')
     const timer = window.setTimeout(() => {
-      const element = document.querySelector('.settings-modal')
+      const element = closeRef.current?.ownerDocument.querySelector('.settings-modal')
       const bounds = element?.getBoundingClientRect()
       const style = element ? getComputedStyle(element) : undefined
-      reportDiagnostic('settings.layout', JSON.stringify({ tab, width: bounds?.width, height: bounds?.height, display: style?.display, visibility: style?.visibility, opacity: style?.opacity, viewport: [window.innerWidth, window.innerHeight] }))
+      reportDiagnostic('settings.layout', JSON.stringify({ tab, width: bounds?.width, height: bounds?.height, display: style?.display, visibility: style?.visibility, opacity: style?.opacity, viewport: [element?.ownerDocument.defaultView?.innerWidth, element?.ownerDocument.defaultView?.innerHeight] }))
     }, 250)
     return () => window.clearTimeout(timer)
   }, [tab])
@@ -50,13 +67,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   const installed = agents.filter((agent) => agent.installed)
   const desktopOnly = agents.filter((agent) => agent.status === 'desktop-only')
   const missing = agents.filter((agent) => agent.status === 'not-found')
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [onClose])
+
 
   const signOut = async (): Promise<void> => {
     setSigningOut(true)
@@ -73,6 +84,19 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
     try { await onRemoveCustom(agent.id) }
     catch (cause) { setCustomError(cause instanceof Error ? cause.message : 'Could not remove custom local agent.') }
   }
+  const [maintaining, setMaintaining] = useState('')
+  const refreshAfterTerminal = useRef(false)
+  useEffect(() => {
+    const focus = () => { if (refreshAfterTerminal.current) { refreshAfterTerminal.current = false; onDetect() } }
+    window.addEventListener('focus', focus)
+    return () => window.removeEventListener('focus', focus)
+  }, [onDetect])
+  const maintain = async (agent: LocalAgent): Promise<void> => {
+    setMaintaining(agent.id); setCustomError('')
+    try { refreshAfterTerminal.current = await window.douchat.maintainLocalAgent(agent.id) }
+    catch (cause) { setCustomError(messageSendError(cause)) }
+    finally { setMaintaining('') }
+  }
   const row = (agent: LocalAgent): ReactElement => {
     const version = agent.custom ? '' : agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
     return <article className="local-agent-row" key={agent.id}>
@@ -81,13 +105,14 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           <strong>{agent.name}</strong>
           <code title={agent.path || agent.desktopPath}>{agent.path || agent.desktopPath || agent.command}</code>
         </div>
-        {(version || agent.custom) && <div className="local-agent-row-aside">
+        <div className="local-agent-row-aside">
           {version && <span className="local-agent-version" title={agent.version}>{version}</span>}
+          <button type="button" className="secondary-button" disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{maintaining === agent.id ? '正在准备…' : agent.custom ? '安装说明' : agent.installed ? '更新' : '安装'}</button>
           {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
-        </div>}
+        </div>
       </article>
   }
-  return <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+  return <NativeDialog className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={980} height={720}>
     <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <aside className="settings-sidebar">
       <div className="settings-modal-title"><div id="settings-title" className="wordmark">{t('Settings')}</div></div>
@@ -101,7 +126,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
       </div>
     </aside>
     <main id="settings-content" role="tabpanel" aria-labelledby={`${tab}-tab`} className="settings-content">
-      <button autoFocus className="settings-close" onClick={onClose} aria-label={t('Close')} title={t('Close')}><X size={18} /></button>
+      <button ref={closeRef} className="settings-close" onClick={onClose} aria-label={t('Close')} title={t('Close')}><X size={18} /></button>
       {tab === 'profile' ? (
         <ProfileTab user={user} signingOut={signingOut} signOutError={signOutError} onSignOut={() => void signOut()} onUpdateProfile={onUpdateProfile} />
       ) : tab === 'general' ? <>
@@ -130,6 +155,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
+        {maintaining && <p role="status">正在准备安装或更新，首次下载运行环境可能需要几分钟，请稍候。</p>}
         {customError && <p className="settings-error" role="alert">{t(customError)}</p>}
         <section aria-label={t('Installed agents')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
           {installed.map(row)}
@@ -140,7 +166,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
       </> : <AboutTab />}
     </main>
     </section>
-  </div>
+  </NativeDialog>
 }
 
 function routineScheduleLabel(schedule: RoutineSchedule): string {

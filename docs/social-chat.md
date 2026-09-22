@@ -167,3 +167,34 @@ the separate snapshot and message HTTP round trips. Cursor mismatches, extra
 pages, periodic reconciliation, and older servers fall back to ordinary sync.
 This is an optimization of the existing long-poll protocol, not a WebSocket
 migration. Multi-instance immediate fanout would require a shared event bus.
+
+## Shareable group invitations
+
+Group details → **Invite to group** opens a dialog with a seven-day invitation link. The dialog can copy the link or regenerate the invitation
+after confirmation. QR codes and image exports are deferred. Regeneration revokes
+the previous link. Any current member can share; a link issued by a member who
+has since left is invalid. Opening the dialog reuses an unexpired invitation.
+
+The desktop `group-invite` action promotes a local group through the existing
+shared-group flow before requesting an invitation. The service allows a shared
+group initially containing only its creator. It stores one expiring invitation
+per room in the existing `verification` table (`group-invite:<roomId>`); no schema
+migration is required. Tokens contain 32 random bytes and are never included in
+normal room snapshots. Public previews expose only the name, member count and
+expiry, not member identities or chat messages.
+
+The web `/join-group` page preserves the invitation through login, requires an
+explicit Join action and offers `douchat://group/open?room=...` after joining.
+The app verifies membership through its authenticated inbox before opening the
+room. If signed out, it waits for login; opening a link never silently joins a
+room. The web and desktop accounts must match. Download links go to the website's
+download section; after installation, users can reopen the invitation.
+
+Joining is idempotent and respects the 50-person room limit. A server-controlled
+`joinedAt` field on link-invited members limits history, cursor paging and pending
+message updates to messages created after joining. Existing members keep their
+history. Group revisions serialize membership changes against invite rotation.
+
+Release both repositories together: the `douchat-tanstack` service/routes must be
+deployed before the desktop invitation entry can work against production. The
+local implementation and tests do not deploy the server or publish the desktop.

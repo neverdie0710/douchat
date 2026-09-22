@@ -537,6 +537,7 @@ export interface UpdateState {
 }
 
 export interface DouchatApi {
+  resizeDialog: (name: string, width: number, height: number) => Promise<boolean>
   reportDiagnostic: (event: string, detail: string) => void
   openDiagnosticLogs: () => Promise<void>
   copyText: (text: string) => Promise<void>
@@ -564,6 +565,7 @@ export interface DouchatApi {
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<UpdateState>
   detectLocalAgents: () => Promise<LocalAgent[]>
+  maintainLocalAgent: (id: string) => Promise<boolean>
   openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>
   addCustomLocalAgent: (input: CustomLocalAgentInput) => Promise<LocalAgent[]>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>

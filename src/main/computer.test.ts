@@ -70,3 +70,29 @@ describe('computer_open_file', () => {
     )
   })
 })
+
+it('suppresses late activity callbacks after disposal while a file action completes', async () => {
+  const { root } = await setup()
+  const path = join(root, 'late.txt')
+  await writeFile(path, 'hello')
+  let finish!: (value: string) => void
+  let started!: () => void
+  const opened = new Promise<void>((resolve) => { started = resolve })
+  const onChange = vi.fn()
+  const provider = new LocalComputerProvider(onChange, [root], () => {
+    started()
+    return new Promise<string>((resolve) => { finish = resolve })
+  })
+  const tool = provider.createTools('agent').find((entry) => entry.name === 'computer_open_file')!
+  const pending = tool.execute('late', { path })
+  await opened
+  expect(onChange).toHaveBeenCalled()
+  provider.dispose()
+  onChange.mockClear()
+  finish('')
+  await pending
+  await provider.stop('agent')
+  provider.dispose()
+  expect(onChange).not.toHaveBeenCalled()
+  await expect(provider.start('agent')).rejects.toThrow('Computer provider is closed')
+})

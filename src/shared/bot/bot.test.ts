@@ -278,6 +278,15 @@ describe('contact index', () => {
 })
 
 describe('summarizeRuntimeError', () => {
+  it('explains Grok socket sandbox failures without losing diagnostics', () => {
+    const raw = 'Grok Build: sandbox could not be applied: socket deny resolution failed: /var/run/docker.sock: endpoint is a symlink'
+    expect(summarizeRuntimeError(raw)).toMatchObject({
+      title: 'Grok cannot start with the current Docker socket setup',
+      action: { kind: 'update-local-agent', agentId: 'grok' },
+      detail: raw
+    })
+    expect(isRetryableRuntimeError(raw)).toBe(false)
+  })
   const codexDump =
     'Codex: :"ef5a1e03","to":"everyone","content":"Hey"}],"completedTurns":[] ' +
     'ERROR: Reconnecting... 1/5 ERROR: Reconnecting... 2/5 ERROR: Reconnecting... 3/5 ' +

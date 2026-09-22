@@ -133,6 +133,23 @@ describe('usage and billing settings', () => {
     ))
   }
 
+  it('defers dialog focus until after mount and restores the opener on dismissal', async () => {
+    vi.useFakeTimers()
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    try {
+      await renderGeneral()
+      expect(document.activeElement).toBe(opener)
+      await act(async () => { vi.advanceTimersByTime(300) })
+      expect(document.activeElement).toBe(container.querySelector('.settings-close'))
+      await act(async () => root.render(null))
+      expect(document.activeElement).toBe(opener)
+      await act(async () => { vi.runAllTimers() })
+      expect(document.activeElement).toBe(opener)
+    } finally { opener.remove(); vi.useRealTimers() }
+  })
+
   it('offers follow-system alongside the explicit interface languages', async () => {
     await renderGeneral()
 
@@ -319,4 +336,10 @@ describe('usage and billing settings', () => {
     expect(getUsageSummary).toHaveBeenCalledTimes(2)
     expect(container.textContent).toContain('2,029')
   })
+})
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
 })

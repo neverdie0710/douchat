@@ -1737,21 +1737,32 @@ export class DouchatRuntime {
         }
       }
       signal?.addEventListener('abort', abort, { once: true })
+      let responseFailure: string | undefined
+      const requestResponse = async (operation: () => Promise<void>): Promise<void> => {
+        responseFailure = undefined
+        try { await waitForResponse(operation) }
+        catch (cause) {
+          // Cancellation/deadlines dispose the session; never resume those runs.
+          if (signal?.aborted || this.sessions.get(sessionKey)?.agent !== session) throw cause
+          responseFailure = cause instanceof Error ? cause.message : String(cause)
+        }
+      }
       try {
-        await waitForResponse(() => session.prompt(prompt, images))
+        await requestResponse(() => session.prompt(prompt, images))
         for (let retries = 0; retries < MAX_TRANSIENT_REPLY_RETRIES; retries += 1) {
           const messages = session.state.messages
           const failed = messages[messages.length - 1]
           const failedText = failed && failed.role === 'assistant' && 'content' in failed
             ? this.readText(failed.content)
             : ''
-          const failedError = failed && failed.role === 'assistant' && 'errorMessage' in failed
+          const failedError = responseFailure ?? (failed && failed.role === 'assistant' && 'errorMessage' in failed
             ? (failed.errorMessage as string | undefined)
-            : undefined
-          const resumable = messages[messages.length - 2]
+            : undefined)
+          const hasFailedPlaceholder = failed?.role === 'assistant' && !failedText.trim()
+            && 'errorMessage' in failed && Boolean(failed.errorMessage)
+          const resumable = hasFailedPlaceholder ? messages[messages.length - 2] : failed
           if (
             signal?.aborted
-            || failed?.role !== 'assistant'
             || failedText.trim()
             || !isRetryableRuntimeError(failedError)
             || (resumable?.role !== 'user' && resumable?.role !== 'toolResult')
@@ -1780,13 +1791,14 @@ export class DouchatRuntime {
             if (signal?.aborted) done()
           })
           if (signal?.aborted) break
-          session.state.messages = messages.slice(0, -1)
+          session.state.messages = hasFailedPlaceholder ? messages.slice(0, -1) : messages
           retryCount += 1
-          await waitForResponse(() => session.continue())
+          await requestResponse(() => session.continue())
         }
       } finally {
         signal?.removeEventListener('abort', abort)
       }
+      if (responseFailure) return finish({ text: '', error: responseFailure, retryCount })
       const lastMessage = [...session.state.messages].reverse().find((message) => message.role === 'assistant')
       const text = lastMessage && 'content' in lastMessage ? this.readText(lastMessage.content) : ''
       const error = lastMessage && 'errorMessage' in lastMessage ? (lastMessage.errorMessage as string) : undefined

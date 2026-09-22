@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  parseDesktopGroupUrl,
   chatApiBaseUrl,
   createDesktopLoginUrl,
   desktopAuthScheme,
@@ -10,6 +11,14 @@ import {
 } from './authProtocol'
 
 describe('desktop auth protocol', () => {
+  it('accepts only valid group open links', () => {
+    expect(parseDesktopGroupUrl('douchat://group/open?room=group-123')).toBe('group-123')
+    expect(parseDesktopGroupUrl('https://group/open?room=group-123')).toBeUndefined()
+    expect(parseDesktopGroupUrl('douchat://group/join?room=group-123')).toBeUndefined()
+    expect(parseDesktopGroupUrl('douchat://group/open?room=../secret')).toBeUndefined()
+    expect(parseDesktopGroupUrl('douchat://group/open')).toBeUndefined()
+  })
+
   it('uses the Douchat scheme and environment-specific web origin', () => {
     expect(desktopAuthScheme()).toBe('douchat')
     expect(normalizeWebAppUrl(undefined, true)).toBe('http://localhost:3000')

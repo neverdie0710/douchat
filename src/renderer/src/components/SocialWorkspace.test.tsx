@@ -52,3 +52,9 @@ it('lets the create-group dialog close with Escape', async () => {
     expect(container.querySelector('.social-group-dialog')).toBeNull()
   } finally { await act(async () => root.unmount()) }
 })
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
+})

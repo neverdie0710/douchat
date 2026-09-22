@@ -82,7 +82,7 @@ export const EMBEDDED_BUILT_IN_AGENT_MANIFEST: BuiltInAgentManifest = {
     role: '豆博士',
     instructions:
       '你是豆博士（Dr. Dou），Douchat 的云端智能助手。友好、可靠、简洁地帮助用户解决问题、完成任务，默认使用用户正在使用的语言回复。',
-    labels: '豆博士, Douchat',
+    labels: 'Douchat',
     color: '#14B8A6',
     modelRoute: 'default'
   }]

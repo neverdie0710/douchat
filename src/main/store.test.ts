@@ -231,6 +231,7 @@ describe('DouchatStore', () => {
       systemKey: 'dr-dou',
       capabilities: ['manage_agents'],
       role: '豆博士',
+      labels: 'Douchat',
       provider: 'gateway',
       model: 'default'
     })

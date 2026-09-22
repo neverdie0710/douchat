@@ -73,6 +73,11 @@ function localFileError(error: unknown, target: string): Error {
 }
 
 export class LocalComputerProvider implements ComputerProvider {
+  private disposed = false
+  private notifyChange(): void {
+    if (!this.disposed) this.onChange()
+  }
+
   private readonly computers = new Map<string, ManagedComputer>()
   private readonly allowedRoots: string[]
   private readonly allowedRealRoots: string[]
@@ -93,6 +98,7 @@ export class LocalComputerProvider implements ComputerProvider {
   }
 
   async start(agentId: string): Promise<ComputerSession> {
+    if (this.disposed) throw new Error('Computer provider is closed')
     const computer = this.getOrCreate(agentId)
     if (computer.browser && !computer.browser.isDestroyed()) return { ...computer.snapshot }
 
@@ -100,7 +106,7 @@ export class LocalComputerProvider implements ComputerProvider {
     computer.snapshot.error = undefined
     computer.snapshot.lastAction = 'Starting private browser'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
 
     const browser = new BrowserWindow({
       width: 1280,
@@ -151,16 +157,18 @@ export class LocalComputerProvider implements ComputerProvider {
       computer.snapshot.status = 'stopped'
       computer.snapshot.lastAction = 'Computer stopped'
       computer.snapshot.updatedAt = Date.now()
-      this.onChange()
+      this.notifyChange()
     })
 
     await browser.loadURL('about:blank')
+    if (this.disposed) return { ...computer.snapshot }
     computer.snapshot.status = 'ready'
     computer.snapshot.lastAction = 'Ready for a task'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
     await this.capture(agentId, true)
 
+    if (this.disposed) return { ...computer.snapshot }
     computer.captureTimer = setInterval(() => void this.capture(agentId), 1_500)
     return { ...computer.snapshot }
   }
@@ -175,7 +183,7 @@ export class LocalComputerProvider implements ComputerProvider {
     computer.snapshot.status = 'stopped'
     computer.snapshot.lastAction = 'Computer stopped'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
   }
 
   async show(agentId: string): Promise<void> {
@@ -490,6 +498,8 @@ export class LocalComputerProvider implements ComputerProvider {
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
     for (const agentId of this.computers.keys()) void this.stop(agentId)
   }
 
@@ -544,7 +554,7 @@ export class LocalComputerProvider implements ComputerProvider {
     computer.snapshot.title = computer.browser.webContents.getTitle()
     if (computer.snapshot.status !== 'working') computer.snapshot.status = 'ready'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
   }
 
   private setActivity(agentId: string, label: string, status: ComputerSession['status']): void {
@@ -553,7 +563,7 @@ export class LocalComputerProvider implements ComputerProvider {
     computer.snapshot.status = status
     computer.snapshot.error = undefined
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
   }
 
   private setError(agentId: string, message: string): void {
@@ -562,7 +572,7 @@ export class LocalComputerProvider implements ComputerProvider {
     computer.snapshot.error = message
     computer.snapshot.lastAction = 'Action failed'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
   }
 
   private setFileActivity(agentId: string, label: string, working: boolean): void {
@@ -572,7 +582,7 @@ export class LocalComputerProvider implements ComputerProvider {
       ? (working ? 'working' : 'ready')
       : 'stopped'
     computer.snapshot.updatedAt = Date.now()
-    this.onChange()
+    this.notifyChange()
   }
 
   private resolveAllowedPath(input: string): string {
@@ -619,7 +629,7 @@ export class LocalComputerProvider implements ComputerProvider {
       computer.lastFrame = jpeg
       computer.snapshot.previewDataUrl = `data:image/jpeg;base64,${jpeg.toString('base64')}`
       computer.snapshot.updatedAt = Date.now()
-      this.onChange()
+      this.notifyChange()
     } catch {
       // The page may be between navigations; the next capture will retry.
     } finally {

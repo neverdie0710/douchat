@@ -7,7 +7,7 @@ import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
-import { resolveExecutable } from './shellPath'
+import { resolveExecutable, executableEnvironment } from './shellPath'
 
 const execFileAsync = promisify(execFile)
 let customRegistryPath: string | undefined
@@ -112,7 +112,9 @@ async function executableVersion(path: string): Promise<string | undefined> {
   try {
     const command = await executableCommand(path)
     const { stdout, stderr } = await execFileAsync(command.file, [...command.prefix, '--version'], {
+      env: await executableEnvironment(),
       timeout: 1_000,
+      killSignal: 'SIGKILL',
       maxBuffer: 256 * 1024,
       windowsHide: true
     })
@@ -131,7 +133,20 @@ interface DetectionDependencies {
   version?: (path: string) => Promise<string | undefined>
 }
 
-export async function detectLocalAgents(dependencies: DetectionDependencies = {}, onlyId?: string): Promise<LocalAgent[]> {
+async function detectionDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('本地智能体检测超时，请检查终端启动配置后重试。')), ms)
+    })])
+  } finally { clearTimeout(timer) }
+}
+
+export function detectLocalAgents(dependencies: DetectionDependencies = {}, onlyId?: string): Promise<LocalAgent[]> {
+  return detectionDeadline(detectLocalAgentsInternal(dependencies, onlyId), 15000)
+}
+
+async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {}, onlyId?: string): Promise<LocalAgent[]> {
   const resolveCommand = dependencies.executable ?? resolveExecutable
   const resolveApp = dependencies.desktopApp ?? findDesktopApp
   const readVersion = dependencies.version ?? executableVersion
@@ -142,7 +157,7 @@ export async function detectLocalAgents(dependencies: DetectionDependencies = {}
   ]
   return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
-    const version = path && !isCustom ? await readVersion(path) : undefined
+    const version = path && !isCustom ? await detectionDeadline(readVersion(path), 2000).catch(() => undefined) : undefined
     const status = path ? 'ready' : desktopPath ? 'desktop-only' : 'not-found'
     return {
       id,

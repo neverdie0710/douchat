@@ -19,6 +19,7 @@ import type {
 } from '../shared/types'
 
 const api: DouchatApi = {
+  resizeDialog: (name, width, height) => ipcRenderer.invoke('douchat:resize-dialog', name, width, height),
   reportDiagnostic: (event, detail) => ipcRenderer.send('douchat:diagnostic', event, detail),
   openDiagnosticLogs: () => ipcRenderer.invoke('douchat:open-diagnostic-logs'),
   copyText: (text) => ipcRenderer.invoke('douchat:copy-text', text),
@@ -44,6 +45,7 @@ const api: DouchatApi = {
   getUpdateState: () => ipcRenderer.invoke('douchat:get-update-state'),
   checkForUpdates: () => ipcRenderer.invoke('douchat:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('douchat:install-update'),
+  maintainLocalAgent: (id: string) => ipcRenderer.invoke('douchat:maintain-local-agent', id),
   detectLocalAgents: () => ipcRenderer.invoke('douchat:detect-local-agents'),
   openLocalAgentTerminal: (id: 'claude') => ipcRenderer.invoke('douchat:open-local-agent-terminal', id),
   addCustomLocalAgent: (input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:add-custom-local-agent', input),

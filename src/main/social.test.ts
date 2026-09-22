@@ -14,6 +14,26 @@ function setup() {
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('social IPC and task execution', () => {
+  it('creates invite URLs on the configured origin and promotes local groups before sharing', async () => {
+    const { client, store } = setup()
+    const conversation = { id: 'local-group', type: 'group', name: 'Team', agentIds: [] as string[], remoteRoomId: undefined as string | undefined }
+    Object.defineProperty(store, 'accountConversations', { value: [conversation] })
+    const promote = vi.spyOn(client, 'syncInbox').mockResolvedValue({ userId: 'alice', friendships: [], rooms: [] })
+    Object.assign(store, { linkSharedGroup: (_id: string, roomId: string) => { conversation.remoteRoomId = roomId } })
+    Object.assign((client as unknown as { runtime: object }).runtime, { snapshot: () => ({ activity: [] }) })
+    const calls: Record<string, unknown>[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+      const body = JSON.parse(options.body); calls.push(body)
+      const data = body.action === 'create-room' ? { roomId: 'shared-room' } : { invite: { roomId: 'shared-room', name: 'Team', token: 'a'.repeat(43), expiresAt: '2030-01-01T00:00:00Z', url: 'https://untrusted.example' } }
+      return new Response(JSON.stringify({ data }))
+    }))
+    const result = await client.action({ action: 'group-invite', conversationId: conversation.id })
+    expect(calls.map((body) => body.action)).toEqual(['create-room', 'group-invite'])
+    expect(calls[0].friendIds).toEqual([])
+    expect(result.invite?.url).toBe(`https://example.com/join-group?room=shared-room&token=${'a'.repeat(43)}`)
+    expect(promote).toHaveBeenCalled()
+  })
+
   it('keeps email addresses only for the signed-in user and accepted friends', () => {
     const snapshot = privacySafeSocialSnapshot({
       userId: 'alice',

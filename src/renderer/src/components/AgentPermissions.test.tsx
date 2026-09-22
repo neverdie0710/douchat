@@ -35,3 +35,9 @@ it('shows requester and exact operation, with explicit single-operation approval
   await act(async () => [...node.querySelectorAll('button')].find((b) => b.textContent === 'Allow once')!.click())
   expect(resolve).toHaveBeenCalledExactlyOnceWith(true)
 })
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
+})

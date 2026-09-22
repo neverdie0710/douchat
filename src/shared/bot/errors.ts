@@ -15,6 +15,7 @@ export interface RuntimeErrorSummary {
   action?:
     | { kind: 'open-local-agent-terminal'; agentId: 'claude'; label: 'Open Claude Code' }
     | { kind: 'open-douchat-credits'; label: 'Top up credits' }
+    | { kind: 'update-local-agent'; agentId: 'grok'; label: 'Update Grok' }
   /** The untouched original, for the details disclosure. */
   detail: string
 }
@@ -42,7 +43,7 @@ export function isRetryableRuntimeError(raw: string | undefined): boolean {
   if (/\b(?:400|401|403|404|409|413|422)\b|context(?:_| )length|too many tokens|request body exceeds|insufficient_quota|quota exceeded|billing/i.test(raw)) {
     return false
   }
-  return /request was aborted|stream_interrupted|upstream_unreachable|stream ended without|fetch failed|network.?error|connection (?:reset|lost|closed)|socket hang up|econnreset|enotfound|eai_again|etimedout|timed? out|\b(?:429|500|502|503|504|524)\b/i.test(raw)
+  return /request (?:was )?aborted|stream_interrupted|upstream_unreachable|stream ended without|fetch failed|network.?error|connection (?:reset|lost|closed)|socket hang up|econnreset|enotfound|eai_again|etimedout|timed? out|\b(?:429|500|502|503|504|524)\b/i.test(raw)
 }
 
 export function summarizeRuntimeError(raw: string): RuntimeErrorSummary {
@@ -91,6 +92,16 @@ export function isDouchatCreditError(raw: string | undefined): boolean {
 }
 
 function localAgentFailure(source: string): Omit<RuntimeErrorSummary, 'detail'> | undefined {
+  if (/grok|runtime-socket deny|socket deny resolution/i.test(source) && /sandbox|runtime-socket deny/i.test(source)) {
+    const socket = /socket.*symlink|runtime-socket deny.*symlink/i.test(source)
+    return {
+      title: socket ? 'Grok cannot start with the current Docker socket setup' : 'Grok could not start its sandbox',
+      guidance: socket
+        ? 'Grok’s sandbox rejected a Docker socket link before the conversation started. Try updating Grok. If it still fails, use another agent while this compatibility issue is resolved.'
+        : 'Grok stopped before the conversation started because its sandbox could not be applied. Try updating Grok; technical details are available below.',
+      action: { kind: 'update-local-agent', agentId: 'grok', label: 'Update Grok' }
+    }
+  }
   const claude = /\bClaude Code\b/i.test(source)
   if (!claude) return undefined
 
@@ -136,7 +147,7 @@ function describe(source: string, status: number | undefined, retries: number): 
   if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|socket hang up|fetch failed/i.test(source)) {
     return 'Could not reach the model endpoint'
   }
-  if (/request was aborted|stream_interrupted/i.test(source)) return 'The model connection was interrupted'
+  if (/request (?:was )?aborted|stream_interrupted/i.test(source)) return 'The model connection was interrupted'
   if (!source && retries) return 'Lost the connection to the model endpoint'
   return firstSentence(source) || 'The conversation could not finish'
 }

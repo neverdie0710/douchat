@@ -19,3 +19,9 @@ it('keeps the workspace mounted when a dialog throws and allows closing it', asy
     expect(close).toHaveBeenCalledOnce()
   } finally { await act(async () => root.unmount()); log.mockRestore() }
 })
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
+})

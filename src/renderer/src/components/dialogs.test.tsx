@@ -331,3 +331,9 @@ describe('create agent terminology', () => {
     expect(options).not.toContain('Missing')
   })
 })
+
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
+})

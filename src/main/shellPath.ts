@@ -1,3 +1,4 @@
+import { managedSearchPaths } from './managedNode';
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,6 +46,7 @@ async function loginShellValue(expression: string): Promise<string | undefined> 
     try {
       const { stdout } = await execFileAsync(shell, [flags, script], {
         timeout: 5_000,
+        killSignal: "SIGKILL",
         // An interactive rc file can print a banner; keep it from blowing up.
         maxBuffer: 1_024 * 1_024,
       });
@@ -125,12 +127,19 @@ async function childDirectories(parent: string, suffix: string): Promise<string[
  */
 async function executableSearchPath(): Promise<string> {
   const shellPath = await loginShellPath();
-  if (IS_WIN) return shellPath || process.env.PATH || "";
+  if (IS_WIN) return [...managedSearchPaths(), process.env.PATH || ""].join(path.delimiter);
   const home = os.homedir();
+  // A custom npm prefix can disappear from PATH when shell startup times out.
+  // Read only its location; never run npm or load registry credentials here.
+  const npmrc = await fs.promises.readFile(path.join(home, ".npmrc"), "utf8").catch(() => "");
+  const configuredPrefix = npmrc.match(/^\s*prefix\s*=\s*(.+?)\s*$/m)?.[1]?.replace(/^['"]|['"]$/g, "");
+  const npmPrefix = configuredPrefix?.replace(/^~(?=\/)/, home);
   const nvmBins = await childDirectories(path.join(home, ".nvm", "versions", "node"), "bin");
   const candidates = [
+    ...managedSearchPaths(),
     ...(shellPath || "").split(path.delimiter),
     ...(process.env.PATH || "").split(path.delimiter),
+    ...(npmPrefix && path.isAbsolute(npmPrefix) ? [path.join(npmPrefix, "bin")] : []),
     path.join(home, ".local", "bin"),
     path.join(home, ".local", "share", "pnpm"),
     path.join(home, ".local", "share", "mise", "shims"),
@@ -152,13 +161,16 @@ async function executableSearchPath(): Promise<string> {
 }
 
 /** PATH-repaired environment for a child process spawned outside a PTY. */
-export async function spawnEnvironment(): Promise<NodeJS.ProcessEnv> {
+export async function executableEnvironment(): Promise<NodeJS.ProcessEnv> {
   const repairedPath = await executableSearchPath();
+  return { ...process.env, PATH: repairedPath };
+}
+
+export async function spawnEnvironment(): Promise<NodeJS.ProcessEnv> {
+  const environment = await executableEnvironment();
   cachedCliEnvironment ??= loginShellCliEnvironment().catch(() => ({}));
   const cliEnvironment = await cachedCliEnvironment;
-  return repairedPath
-    ? { ...process.env, ...cliEnvironment, PATH: repairedPath }
-    : { ...process.env, ...cliEnvironment };
+  return { ...environment, ...cliEnvironment };
 }
 
 /**
@@ -202,18 +214,39 @@ export async function resolveExecutable(command: string): Promise<string | undef
     return await isRunnable(trimmed) ? trimmed : undefined;
   }
   if (IS_WIN) {
+    for (const directory of managedSearchPaths()) {
+      for (const extension of /\.(exe|com|cmd|bat)$/i.test(trimmed) ? [''] : ['.exe', '.cmd', '.bat']) {
+        const candidate = path.join(directory, trimmed + extension);
+        if (await isRunnable(candidate)) return candidate;
+      }
+    }
     try {
-      const { stdout } = await execFileAsync("where.exe", [trimmed], { timeout: 2_500 });
+      const { stdout } = await execFileAsync("where.exe", [trimmed], { timeout: 2_500, killSignal: "SIGKILL" });
       const matches = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       // npm also installs extensionless POSIX scripts; Windows cannot execute those.
-      return matches.find((file) => /\.(?:exe|com|cmd|bat)$/i.test(file));
+      const match = matches.find((file) => /\.(?:exe|com|cmd|bat)$/i.test(file));
+      if (match) return match;
     } catch {
-      return undefined;
+      // An installer may have changed PATH since the desktop app started.
     }
+    const home = os.homedir();
+    const npmrc = await fs.promises.readFile(path.join(home, '.npmrc'), 'utf8').catch(() => '');
+    const prefix = npmrc.match(/^\s*prefix\s*=\s*(.+?)\s*$/m)?.[1]?.replace(/^['"]|['"]$/g, '');
+    const directories = [prefix, process.env.APPDATA && path.join(process.env.APPDATA, 'npm'),
+      path.join(home, '.local', 'bin'), path.join(home, '.bun', 'bin'), path.join(home, '.kimi-code', 'bin'),
+      process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'nodejs')].filter((value): value is string => Boolean(value));
+    const extensions = /\.(exe|com|cmd|bat)$/i.test(trimmed) ? [''] : ['.exe', '.cmd', '.bat', '.com'];
+    for (const directory of directories) {
+      for (const extension of extensions) {
+        const candidate = path.join(directory, trimmed + extension);
+        if (await isRunnable(candidate)) return candidate;
+      }
+    }
+    return undefined;
   }
   // Search the same PATH passed to child processes. `command -v` can return
   // alias/function descriptions, which cannot be launched with execFile.
-  const env = await spawnEnvironment();
+  const env = await executableEnvironment();
   for (const directory of (env.PATH ?? "").split(path.delimiter)) {
     const candidate = path.resolve(directory || ".", trimmed);
     if (await isRunnable(candidate)) return candidate;

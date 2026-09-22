@@ -1,3 +1,4 @@
+import { NativeDialog } from './NativeDialog'
 import { useState, type ReactElement } from 'react'
 import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
 import type { AgentConfig } from '../../../shared/types'
@@ -23,7 +24,7 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
       </select>
     </div>
   )
-  return <div className="modal-backdrop" onClick={() => !saving && onClose()}>
+  return <NativeDialog className="modal-backdrop" onClick={() => !saving && onClose()} onClose={onClose}>
     <form className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Agent permissions')}
       onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape' && !saving) { e.stopPropagation(); onClose() } }}
       onSubmit={async (e) => { e.preventDefault(); setSaving(true); setError(''); try { await onSave(value); onClose() } catch { setError(t('Could not save changes')); setSaving(false) } }}>
@@ -40,14 +41,14 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
       {error && <p role="alert">{error}</p>}
       </div><footer className="edit-contact-footer"><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={saving}>{t('Done')}</button></footer>
     </form>
-  </div>
+  </NativeDialog>
 }
 
 export function AgentPermissionPrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (allow: boolean) => Promise<void> }): ReactElement {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const resolve = async (allow: boolean) => { setBusy(true); try { await onResolve(allow) } catch { setError(t('Could not save changes')); setBusy(false) } }
-  return <div className="modal-backdrop permission-approval-backdrop">
+  return <NativeDialog className="modal-backdrop permission-approval-backdrop" onClose={() => { if (!busy) void resolve(false) }}>
     <section className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Permission required')} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) void resolve(false) } }}>
       <header className="edit-contact-heading"><h2>{t('Permission required')}</h2></header><div className="permission-body">
       <p><strong>{request.agentName}</strong> · {t(permissionLabels[request.capability])}</p>
@@ -60,5 +61,5 @@ export function AgentPermissionPrompt({ request, onResolve }: { request: Permiss
       {error && <p role="alert">{error}</p>}
       </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button></footer>
     </section>
-  </div>
+  </NativeDialog>
 }

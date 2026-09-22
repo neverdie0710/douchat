@@ -63,19 +63,15 @@ it('shows no-result and already-friends states without allowing requests', async
   expect((container.querySelector('.friend-result-action button') as HTMLButtonElement).disabled).toBe(true)
 })
 
-it('can always close from the button, native cancel event, and backdrop', async () => {
+it('closes from the content button (system close and Escape belong to NativeDialog)', async () => {
   const onClose = vi.fn()
   await act(async () => root.render(<AddFriendModal onClose={onClose} />))
-  const dialog = container.querySelector('dialog')!
-
   await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click())
-  expect(onClose).toHaveBeenCalledTimes(1)
+  expect(onClose).toHaveBeenCalledOnce()
+})
 
-  const cancel = new Event('cancel', { cancelable: true })
-  await act(async () => dialog.dispatchEvent(cancel))
-  expect(cancel.defaultPrevented).toBe(true)
-  expect(onClose).toHaveBeenCalledTimes(2)
-
-  await act(async () => dialog.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 10, clientY: 10 })))
-  expect(onClose).toHaveBeenCalledTimes(3)
+// Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
+vi.mock('./NativeDialog', async () => {
+  const { createElement } = await import('react')
+  return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
 })

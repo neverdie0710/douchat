@@ -6,7 +6,9 @@ export interface SocialRoom { revision?: string; id: string; name: string; kind:
 export interface SocialFriendship { id: string; senderId: string; recipientId: string; status: 'pending' | 'accepted' | 'declined'; person: SocialPerson }
 export interface SocialSnapshot { permissionsVersion?: number; syncVersion?: number; userId: string; friendships: SocialFriendship[]; rooms: SocialRoom[] }
 export interface SocialMessage { parentMessageId?: string; id: string; roomId: string; authorId: string; authorName: string; content: string; images?: SocialImage[]; agentId?: string; agentName?: string; status: 'sent' | 'pending' | 'running' | 'succeeded' | 'failed'; reply?: string; replyImages?: SocialImage[]; createdAt: string }
+export interface GroupInvite { roomId: string; name: string; token: string; expiresAt: string; url: string }
 export type SocialAction =
+  | { action: 'group-invite'; conversationId: string; regenerate?: boolean }
   | { action: 'rename-room'; roomId: string; name: string }
   | { action: 'remove-members'; roomId: string; friendIds: string[]; agentIds: string[] }
   | { action: 'invite-members'; conversationId: string; friendIds: string[]; agentIds: string[] }
@@ -19,7 +21,7 @@ export type SocialAction =
   | { action: 'messages'; roomId: string; before?: string }
   | { action: 'send'; roomId: string; id: string; content: string; images?: SocialImage[]; agentId?: string }
 export type SocialRelationship = 'none' | 'self' | 'accepted' | 'outgoing' | 'incoming'
-export interface SocialResult { conversationId?: string; person?: SocialPerson | null; relationship?: SocialRelationship; friendshipId?: string; roomId?: string; messages?: SocialMessage[]; updates?: SocialMessage[]; hasMore?: boolean }
+export interface SocialResult { invite?: GroupInvite; conversationId?: string; person?: SocialPerson | null; relationship?: SocialRelationship; friendshipId?: string; roomId?: string; messages?: SocialMessage[]; updates?: SocialMessage[]; hasMore?: boolean }
 export interface SocialTask extends SocialMessage { requesterAgentId?: string; roomName?: string; context?: string; claim: string; agent: SocialAgent; ownerId: string }
 
 export interface SocialTaskReply { text: string; images?: SocialImage[] }

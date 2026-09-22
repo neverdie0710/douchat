@@ -2,6 +2,7 @@ import { ContactKindBadge } from './ContactKindBadge'
 import { t, tr } from '../preferences'
 import {
   BellOff,
+  Bot,
   LoaderCircle,
   UserPlus,
   MessageSquare,
@@ -29,6 +30,7 @@ export function BotInbox({
   workingIds,
   onSelect,
   onCreateBot,
+  onAddFriend,
   onCreateGroup,
   onEdit,
   onTogglePin,
@@ -41,6 +43,7 @@ export function BotInbox({
   workingIds: Set<string>
   onSelect: (conversationId: string) => void
   onCreateBot: () => void
+  onAddFriend: () => void
   onCreateGroup: () => void
   onEdit: (conversation: Conversation) => void
   onTogglePin: (conversation: Conversation) => void
@@ -200,12 +203,15 @@ export function BotInbox({
               <CirclePlus size={21} strokeWidth={1.7} />
             </button>
             {createOpen && (
-              <div className="dropdown-menu" role="menu">
+              <div className="dropdown-menu inbox-create-menu" role="menu">
                 <button role="menuitem" onClick={() => { setCreateOpen(false); onCreateGroup() }}>
                   <MessageSquare size={14} /><span>{t('Start chat')}</span>
                 </button>
                 <button role="menuitem" onClick={() => { setCreateOpen(false); onCreateBot() }}>
-                  <UserPlus size={14} /><span>{t('Create agent')}</span>
+                  <Bot size={14} /><span>{t('Create agent')}</span>
+                </button>
+                <button role="menuitem" onClick={() => { setCreateOpen(false); onAddFriend() }}>
+                  <UserPlus size={14} /><span>{t('Add friend')}</span>
                 </button>
               </div>
             )}

@@ -1,3 +1,4 @@
+import { NativeDialog } from './NativeDialog'
 import { conversationMembers } from './common'
 import type { SocialSnapshot } from '../../../shared/social'
 import { LocalAgentSelect } from './LocalAgentSelect'
@@ -34,7 +35,6 @@ export function BotModal({
   localAgents,
   initialLocalAgentId,
   onSettings,
-  onAddFriend,
   onClose,
   onCreate,
   onUpdate
@@ -42,7 +42,6 @@ export function BotModal({
   agent?: AgentConfig
   localAgents: LocalAgent[]
   initialLocalAgentId?: string
-  onAddFriend?: () => void
   onSettings: () => void
   onClose: () => void
   onCreate: (input: CreateAgentInput) => Promise<void>
@@ -70,13 +69,14 @@ export function BotModal({
       if (!emojiPicker.current?.contains(event.target as Node)) setEmojiPickerOpen(false)
     }
     const escape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setEmojiPickerOpen(false)
+      if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setEmojiPickerOpen(false) }
     }
-    window.addEventListener('pointerdown', close)
-    window.addEventListener('keydown', escape)
+    const owner = emojiPicker.current?.ownerDocument.defaultView ?? window
+    owner.addEventListener('pointerdown', close)
+    owner.addEventListener('keydown', escape)
     return () => {
-      window.removeEventListener('pointerdown', close)
-      window.removeEventListener('keydown', escape)
+      owner.removeEventListener('pointerdown', close)
+      owner.removeEventListener('keydown', escape)
     }
   }, [emojiPickerOpen])
 
@@ -130,8 +130,8 @@ export function BotModal({
   }
 
   if (!agent) return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
-      <form className="agent-modal create-contact-modal" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="create-contact-title">
+    <NativeDialog layoutKey={agentSource} className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()} onClose={onClose}>
+      <form className="agent-modal create-contact-modal" data-agent-source={agentSource} onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="create-contact-title">
         <div className="modal-heading">
           <h2 id="create-contact-title">{t('Create agent')}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')}><X size={18} /></button>
@@ -159,16 +159,15 @@ export function BotModal({
         {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available local agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
-          {onAddFriend && <button type="button" className="create-contact-friend-entry" disabled={saving} onClick={onAddFriend}>{t('Add friend')}</button>}
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
           <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && !localAgent?.installed)}>{t(saving ? 'Saving…' : 'Create agent')}</button>
         </div>
       </form>
-    </div>
+    </NativeDialog>
   )
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+    <NativeDialog className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()} onClose={onClose}>
       <form className="agent-modal edit-contact-modal" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="edit-contact-title">
         <div className="edit-contact-heading">
           <h2 id="edit-contact-title">{t('Edit agent')}</h2>
@@ -260,7 +259,7 @@ export function BotModal({
           <button className="primary-button" type="submit" disabled={saving || !name.trim()}>{t(saving ? 'Saving…' : 'Done')}</button>
         </div>
       </form>
-    </div>
+    </NativeDialog>
   )
 }
 
@@ -397,7 +396,7 @@ export function AddMembersModal({ onRemoveContacts, onAddContacts, initialFriend
           : 'Create group'
       : 'Add'
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => !saving && event.target === event.currentTarget && onClose()}>
+    <NativeDialog className="modal-backdrop" onMouseDown={(event) => !saving && event.target === event.currentTarget && onClose()} onClose={onClose}>
       <form className="agent-modal add-members-modal" role="dialog" aria-modal="true" aria-labelledby="add-members-title" onSubmit={submit}
         onKeyDown={(event) => { if (event.key === 'Escape' && !saving) { event.stopPropagation(); onClose() } }}>
         <section className="member-picker-source">
@@ -458,7 +457,7 @@ export function AddMembersModal({ onRemoveContacts, onAddContacts, initialFriend
           <footer><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={invalid || saving}>{saving ? t('Saving…') : t(action)}</button></footer>
         </section>
       </form>
-    </div>
+    </NativeDialog>
   )
 }
 
@@ -550,7 +549,7 @@ export function RoutineModal({
   const selectedAgent = snapshot.agents.find((agent) => agent.id === agentId)
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <NativeDialog className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose}>
       <form className="agent-modal routine-modal" onSubmit={submit}>
         <div className="modal-heading">
           <div>
@@ -657,7 +656,7 @@ export function RoutineModal({
           </button>
         </div>
       </form>
-    </div>
+    </NativeDialog>
   )
 }
 
@@ -721,7 +720,7 @@ export function EndpointModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <NativeDialog className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose}>
       <form className="agent-modal" onSubmit={submit}>
         <div className="modal-heading">
           <div>
@@ -785,6 +784,6 @@ export function EndpointModal({
           </button>
         </div>
       </form>
-    </div>
+    </NativeDialog>
   )
 }
