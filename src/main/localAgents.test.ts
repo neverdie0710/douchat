@@ -59,6 +59,11 @@ describe('local agent discovery', () => {
     await removeCustomLocalAgent(custom!.id)
     await expect(detectLocalAgents({ executable: async () => undefined, desktopApp: async () => undefined })).resolves.toHaveLength(11)
   })
+  it('validates only the requested CLI instead of probing the whole catalog', async () => {
+    vi.mocked(resolveExecutable).mockResolvedValue('/local/bin/codex')
+    await validateLocalAgent('codex')
+    expect(resolveExecutable).toHaveBeenCalledExactlyOnceWith('codex')
+  })
   it('rejects stale installation state and unknown commands', async () => {
     await expect(validateLocalAgent('codex')).rejects.toThrow('not installed')
     vi.mocked(resolveExecutable).mockResolvedValue('/local/bin/openclaw')

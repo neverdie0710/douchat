@@ -6,7 +6,7 @@ import type { ComputerProvider } from './computer'
 import { runLocalAgent } from './localAgentRuntime'
 import { DouchatRuntime } from './runtime'
 import { DouchatStore } from './store'
-vi.mock('./localAgentRuntime', () => ({ runLocalAgent: vi.fn() }))
+vi.mock('./localAgentRuntime', () => ({ runLocalAgent: vi.fn(), disposeLocalAgentSessions: vi.fn(), resetLocalAgentConversation: vi.fn() }))
 const directories: string[] = []
 afterEach(() => { vi.resetAllMocks(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
 function setup() {
@@ -89,6 +89,27 @@ describe('local contact routing', () => {
     const reply = store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)?.text ?? ''
     expect(reply).toBe('Ordinary answer.')
     expect(reply).not.toContain('douchat_create_routine')
+  })
+  it('publishes local startup and progress state without persisting it as an agent answer', async () => {
+    const { store, runtime, conversationId } = setup()
+    let release!: () => void
+    let started!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    const ready = new Promise<void>((resolve) => { started = resolve })
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, _prompt, _signal, _images, options) => {
+      expect(options?.sessionKey).toContain(conversationId)
+      options?.onProgress?.({ phase: 'working', elapsedSeconds: 120, silentSeconds: 10, detail: 'Checking results' })
+      started()
+      await waiting
+      return { text: 'Done', images: [] }
+    })
+    const turn = runtime.sendMessage(conversationId, 'Do the work')
+    await ready
+    expect(runtime.snapshot().activity[0]?.localProgress).toMatchObject({ elapsedSeconds: 120, detail: 'Checking results' })
+    release()
+    await turn
+    expect(runtime.snapshot().activity).toHaveLength(0)
+    expect(store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)?.text).toBe('Done')
   })
   it('surfaces login errors without inventing a reply', async () => {
     const { store, runtime, conversationId } = setup()

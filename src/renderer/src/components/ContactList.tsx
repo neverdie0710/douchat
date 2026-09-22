@@ -27,7 +27,7 @@ export function ContactList({
   const [groupsOpen, setGroupsOpen] = useState(false)
   const [botsOpen, setBotsOpen] = useState(true)
   const [friendsOpen, setFriendsOpen] = useState(true)
-  const friends = (social?.friendships ?? []).filter((item) => matchesContactQuery(`${item.person.name} ${item.person.email}`, query))
+  const friends = (social?.friendships ?? []).filter((item) => matchesContactQuery(`${item.person.name} ${item.status === 'accepted' ? item.person.email : ''}`, query))
   const sharedGroups: NonNullable<typeof social>['rooms'] = []
 
   const groups = useMemo(
@@ -160,7 +160,7 @@ export function ContactList({
           {friends.map((friend) => {
             const status = friend.status === 'accepted' ? t('Added') : friend.status === 'declined' ? t('Declined') : friend.recipientId === social?.userId ? t('Awaiting acceptance') : t('Request sent')
             const incoming = friend.status === 'pending' && friend.recipientId === social?.userId
-            return <button key={friend.id} className={`contact-row friend-contact-row ${(selected?.kind === 'friend' || selected?.kind === 'friend-chat') && selected.id === friend.person.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'friend', id: friend.person.id })}><UserAvatar src={friend.person.image || ''} name={friend.person.name} size={34} /><span className="contact-row-copy"><span className="friend-contact-title"><strong>{friend.person.name}</strong><small className={`friend-contact-status ${incoming ? 'pending' : ''}`}>{status}</small></span><small>{friend.person.email}</small></span></button>
+            return <button key={friend.id} className={`contact-row friend-contact-row ${(selected?.kind === 'friend' || selected?.kind === 'friend-chat') && selected.id === friend.person.id ? 'active' : ''}`} onClick={() => onSelect({ kind: 'friend', id: friend.person.id })}><UserAvatar src={friend.person.image || ''} name={friend.person.name} size={34} /><span className="contact-row-copy"><span className="friend-contact-title"><strong>{friend.person.name}</strong><small className={`friend-contact-status ${incoming ? 'pending' : ''}`}>{status}</small></span>{friend.status === 'accepted' && friend.person.email && <small>{friend.person.email}</small>}</span></button>
           })}
           {socialError && <p className="empty-search" role="status">{socialError}</p>}
           {!friends.length && !socialError && <p className="empty-search">{query.trim() ? t('No matching friends') : t('No friends yet')}</p>}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SocialClient } from './social'
+import { privacySafeSocialSnapshot, SocialClient } from './social'
 import type { DesktopAuth } from './desktopAuth'
 import type { DouchatStore } from './store'
 import type { DouchatRuntime } from './runtime'
@@ -8,12 +8,32 @@ function setup() {
   let userId = 'alice'
   const auth = { getState: () => ({ status: 'signed-in', user: { id: userId } }), getAccessToken: () => `token-${userId}`, invalidateSession: vi.fn() } as unknown as DesktopAuth
   const store = { agents: [{ id: 'local', ownerId: 'alice' }], socialTaskOutbox: () => [], saveSocialTaskResult: vi.fn(), removeSocialTaskResult: vi.fn(), claimSocialAgent: vi.fn(() => ({ id: 'local', name: 'Owned agent', ownerId: 'alice' })), agent: vi.fn(() => ({ ownerId: 'alice' })) } as unknown as DouchatStore
-  const runtime = { executeSocialTask: vi.fn(async () => 'Done') } as unknown as DouchatRuntime
+  const runtime = { executeSocialTask: vi.fn(async () => ({ text: 'Done' })) } as unknown as DouchatRuntime
   const client = new SocialClient('https://example.com', auth, store, runtime)
   return { client, store, runtime, switchAccount: () => { userId = 'bob' } }
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 describe('social IPC and task execution', () => {
+  it('keeps email addresses only for the signed-in user and accepted friends', () => {
+    const snapshot = privacySafeSocialSnapshot({
+      userId: 'alice',
+      friendships: [
+        { id: 'accepted', senderId: 'alice', recipientId: 'bob', status: 'accepted', person: { id: 'bob', name: 'Bob', email: 'bob@example.com' } },
+        { id: 'pending', senderId: 'charlie', recipientId: 'alice', status: 'pending', person: { id: 'charlie', name: 'Charlie', email: 'charlie@example.com' } }
+      ],
+      rooms: [{
+        id: 'room', name: 'Group', kind: 'group', agents: [], createdAt: '', members: [
+          { id: 'alice', name: 'Alice', email: 'alice@example.com' },
+          { id: 'bob', name: 'Bob', email: 'bob@example.com' },
+          { id: 'charlie', name: 'Charlie', email: 'charlie@example.com' }
+        ]
+      }]
+    })
+
+    expect(snapshot.friendships.map((item) => item.person.email)).toEqual(['bob@example.com', ''])
+    expect(snapshot.rooms[0].members.map((person) => person.email)).toEqual(['alice@example.com', 'bob@example.com', ''])
+  })
+
   it('does not expose worker-only operations and uses trusted local agent names', async () => {
     const { client, store } = setup()
     const fetcher = vi.fn(async (_url: unknown, _options?: RequestInit) => new Response(JSON.stringify({ data: {} })))
@@ -29,7 +49,7 @@ describe('social IPC and task execution', () => {
     vi.stubGlobal('fetch', vi.fn(async () => { switchAccount(); return new Response(JSON.stringify({ data: { userId: 'alice' } })) }))
     await expect(client.snapshot()).rejects.toThrow('账号已切换')
   })
-  it('refuses a claimed task whose author is not the owner', async () => {
+  it('passes an authenticated external requester to the runtime permission boundary', async () => {
     const { client, runtime } = setup()
     vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
       if (!options?.body) return new Response(JSON.stringify({ data: { userId: 'alice', rooms: [], friendships: [] } }))
@@ -38,11 +58,11 @@ describe('social IPC and task execution', () => {
       return new Response(JSON.stringify({ data }))
     }))
     client.start()
-    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(4))
+    await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(5))
     client.stop()
-    expect(runtime.executeSocialTask).not.toHaveBeenCalled()
-    const completed = JSON.parse(vi.mocked(fetch).mock.calls[3]![1]!.body as string)
-    expect(completed.failed).toBe(true)
+    expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }))
+    const completed = JSON.parse(vi.mocked(fetch).mock.calls.find((call) => call[1]?.body && JSON.parse(call[1].body as string).action === 'complete')![1]!.body as string)
+    expect(completed.failed).toBe(false)
   })
   it('leaves tasks on another device queued', async () => {
     const { client, store, runtime } = setup()
@@ -51,7 +71,7 @@ describe('social IPC and task execution', () => {
     client.start()
     await vi.waitFor(() => expect(store.agent).toHaveBeenCalled())
     client.stop()
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(3)
     expect(runtime.executeSocialTask).not.toHaveBeenCalled()
   })
 })

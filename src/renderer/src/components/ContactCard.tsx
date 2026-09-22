@@ -26,6 +26,7 @@ export function ContactCard({
   onMessage,
   onStartDirect,
   onEditBot,
+  onEditPermissions,
   onDeleteBot,
   onDeleteConversation,
   onRemoveFromContacts,
@@ -40,6 +41,7 @@ export function ContactCard({
   selection?: ContactSelection
   onMessage: (conversationId: string) => void
   onStartDirect: (agentId: string) => void
+  onEditPermissions?: (agent: AgentConfig) => void
   onEditBot: (agent: AgentConfig) => void
   onRemoveFromContacts?: (conversation: Conversation) => void
   onDeleteConversation?: (conversation: Conversation) => void
@@ -91,7 +93,7 @@ export function ContactCard({
     return <main className="workspace contact-card-pane contact-profile-pane">
       <div className="contact-profile-scroll"><div className="contact-profile-sheet">
         <section className="contact-profile-header"><UserAvatar src={person.image || ''} name={person.name} size={64} /><div className="contact-profile-identity"><div className="contact-profile-name"><h1>{person.name}</h1>{direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}</div><p>{friend?.status === 'accepted' ? t('Friend') : t('Douchat user')}</p></div></section>
-        <section className="contact-profile-section"><h2>{t('Contact details')}</h2><Field label={t('Name')} value={person.name} /><Field label={t('Email')} value={person.email} /></section>
+        <section className="contact-profile-section"><h2>{t('Contact details')}</h2><Field label={t('Name')} value={person.name} />{friend?.status === 'accepted' && person.email && <Field label={t('Email')} value={person.email} />}</section>
         <section className="contact-profile-section"><h2>{t('More information')}</h2>{status && <Field label={t('Status')} value={status} />}<Field label={t('Shared groups')} value={String(social?.rooms.filter((room) => room.kind === 'group' && room.members.some((person) => person.id === person.id)).length ?? 0)} /></section>
         {friendError && <p className="friend-profile-error" role="alert">{friendError}</p>}
         <div className="contact-profile-actions">
@@ -139,6 +141,7 @@ export function ContactCard({
                 <button className="profile-edit" onClick={() => setProfileMenuOpen((open) => !open)} aria-label={t('Agent menu')} aria-haspopup="menu" aria-expanded={profileMenuOpen} title={t('Agent menu')}><MoreHorizontal size={21} /></button>
                 {profileMenuOpen && <div className="dropdown-menu profile-actions-menu" role="menu">
                   <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
+                  {onEditPermissions && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditPermissions(agent) }}>{t('Agent permissions')}</button>}
                   {agent.systemRole !== 'admin' && <>
                     <div className="dropdown-separator" />
                     <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>
@@ -161,7 +164,11 @@ export function ContactCard({
               {agent.createdAt > 0 && <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />}
             </section>
 
-            {!readOnly && <div className="contact-profile-actions"><button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button></div>}
+            <div className="contact-profile-actions">
+              {readOnly
+                ? <p className="contact-profile-message-hint">{t('This agent belongs to another member. Direct messaging is not available.')}</p>
+                : <button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button>}
+            </div>
           </div>
         </div>
       </main>

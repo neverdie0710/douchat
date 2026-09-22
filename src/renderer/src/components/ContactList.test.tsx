@@ -114,4 +114,18 @@ describe('contact list', () => {
     expect(container.querySelector('.contact-friends')?.textContent).not.toContain('bob@example.com')
   })
 
+  it('does not display or search pending contacts by email address', async () => {
+    await act(async () => root.render(<ContactList snapshot={snapshot} onSelect={vi.fn()}
+      social={{ userId: 'me', rooms: [], friendships: [{ id: 'f', senderId: 'bob', recipientId: 'me', status: 'pending', person: { id: 'bob', name: 'Bob', email: 'private@example.com' } }] }} />))
+    expect(container.querySelector('.contact-friends')?.textContent).toContain('Bob')
+    expect(container.textContent).not.toContain('private@example.com')
+
+    const input = container.querySelector('input')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'private@example.com')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('.contact-friends')?.textContent).not.toContain('Bob')
+  })
+
 })

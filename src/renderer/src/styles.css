@@ -6213,3 +6213,67 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 .group-profile-pane .group-profile-menu { position: absolute; top: 20px; right: 24px; z-index: 2; }
 
 .group-remove-contact { position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%); border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 14px; }
+
+.composer-send-actions { display: flex; align-items: center; gap: 8px; }
+.composer-queue { max-height: 160px; overflow-y: auto; padding: 8px 0; }
+.composer-queue-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; padding: 10px 12px; border-radius: 10px; background: var(--hover, #f5f6f8); font-size: 13px; }
+.composer-queue-item > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.composer-queue-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
+.composer-queue-item small { display: flex; align-items: flex-start; gap: 5px; margin-top: 4px; color: var(--danger, #ba4438); font-size: 12px; line-height: 1.5; }
+.composer-queue-item small svg { flex-shrink: 0; margin-top: 2px; }
+.composer-queue-item button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; min-height: 28px; padding: 4px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary, #747880); font: inherit; font-size: 12px; cursor: pointer; }
+.composer-queue-item button:hover { background: var(--border, #e7e9ed); color: var(--text, #202124); }
+.composer-queue-item button:focus-visible { outline: 2px solid var(--accent, #165dff); outline-offset: 2px; }
+
+
+.message-delivery-state { display: block; font-size: 11px; opacity: .65; margin-top: 5px; }
+
+/* Local tasks report concrete progress, which may span more than one line. */
+.messenger .typing-activity.is-local-progress .typing-activity-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+
+.messenger .agent-modal.agent-permissions-modal { display: flex; flex-direction: column; width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: hidden; padding: 0 24px 24px; border-radius: 14px; background: var(--surface); }
+.agent-permissions-modal .edit-contact-heading { flex-shrink: 0; }
+.agent-permissions-modal .permission-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.agent-permissions-modal .permission-agent-name { margin: 0 0 20px; text-align: center; color: var(--muted); font-size: calc(13px * var(--font-scale, .92)); }
+.agent-permissions-modal h3 { font-size: calc(13px * var(--font-scale, .92)); font-weight: 500; color: var(--muted); margin: 20px 0 8px; }
+.agent-permissions-modal p { font-size: calc(13px * var(--font-scale, .92)); line-height: 1.6; }
+.agent-permissions-modal .muted { color: var(--muted); margin: 8px 0 12px; }
+.agent-permission-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 10px 0; border-top: 1px solid var(--line); font-size: calc(14px * var(--font-scale, .92)); }
+.agent-permission-row > span { min-width: 0; }
+.agent-permission-row select { flex-shrink: 0; width: 112px; max-width: 45%; padding: 7px 9px; font: inherit; font-size: calc(13px * var(--font-scale, .92)); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; cursor: pointer; }
+.agent-permission-row select:focus-visible { outline: 0; border-color: var(--accent-400); box-shadow: 0 0 0 2px var(--brand-ring); }
+.agent-permissions-modal .edit-contact-footer { flex-shrink: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.agent-permissions-modal [role='alert'] { color: var(--danger, #ba4438); }
+.permission-notice { margin: 12px 0; padding: 10px 12px; border-radius: 8px; background: var(--bubble-agent); color: var(--muted); font-size: 13px; line-height: 1.6; }
+.permission-details { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflow: auto; font-size: 13px; }
+.permission-approval-backdrop { z-index: 1200; }
+
+.permission-requester-id { overflow-wrap: anywhere; font-size: 12px; }
+
+.message-quote { display: flex; align-items: center; gap: 14px; min-width: 0; margin: 0 0 10px; padding: 1px 0 1px 11px; border-left: 2px solid color-mix(in srgb, currentColor 35%, transparent); color: color-mix(in srgb, var(--ink) 25%, var(--muted)); font: inherit; letter-spacing: inherit; }
+.message-quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: normal; flex: 1; min-width: 0; font-weight: inherit; }
+.message-quote-text strong { font-weight: inherit; }
+.composer-quote { margin: 12px 2px 4px; font-size: calc(14px * var(--font-scale, 0.92)); line-height: 1.6; }
+.message-quote button { display: grid; place-items: center; flex: 0 0 15px; width: 15px; height: 15px; margin: 0 3px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--muted) 30%, var(--canvas)); color: var(--canvas); cursor: pointer; }
+.message-quote button:hover { background: var(--muted); }
+.message-quote button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
+
+ .chat-render-error { flex: 1; min-width: 0; padding: 24px; align-self: stretch; overflow: auto; }
+.message-plain-fallback { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.message-quote .quote-markdown { display: inline; font: inherit; color: inherit; white-space: normal; }
+.message-quote .quote-markdown strong { font-weight: 600; }
+.message-quote .quote-markdown a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.message-quote .quote-markdown code { font-size: .92em; white-space: normal; overflow-wrap: anywhere; }
+
+.permission-row-label small { display: block; margin-top: 5px; color: var(--muted); font-size: calc(12px * var(--font-scale, .92)); line-height: 1.5; font-weight: 400; }
+
+.contact-profile-message-hint { margin: 0; color: var(--muted); font-size: calc(13px * var(--font-scale, .92)); line-height: 1.6; text-align: center; overflow-wrap: anywhere; }
+
+.mention-menu .mention-presence { flex: 0 0 7px; width: 7px; height: 7px; margin-left: 0; margin-right: 0; border-radius: 50%; background: var(--muted); }
+.mention-menu .mention-presence.is-online { background: #20b878; }
+.social-task-status { display: grid; gap: 3px; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }

@@ -1,5 +1,6 @@
+import { messageSendError, type QueuedMessage } from '../messageQueue'
 import { mentionableAgents } from './common'
-import type { SocialPerson } from '../../../shared/social'
+import type { SocialAgent, SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
 import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, X } from 'lucide-react'
@@ -17,7 +18,7 @@ import type {
   MessageSource,
   Topic
 } from '../../../shared/types'
-import { MessageMarkdown } from './MessageMarkdown'
+import { MessageMarkdown, QuoteMarkdown } from './MessageMarkdown'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
@@ -67,6 +68,14 @@ async function readPastedImage(file: File): Promise<PendingImage> {
     data: new Uint8Array(buffer),
     previewUrl
   }
+}
+
+async function copyMessage(message: ChatMessage): Promise<void> {
+  if (message.text || !message.attachments?.length) {
+    await window.douchat.copyText(message.text || message.error || '')
+    return
+  }
+  await window.douchat.copyAttachment(message.attachments[0].id)
 }
 
 function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactElement {
@@ -235,6 +244,14 @@ export function MessageActions({ actions }: { actions?: MessageAction[] }): Reac
 }
 
 function activityDetailLabel(activity: ConversationActivityState): string {
+  if (activity.localProgress) {
+    const progress = activity.localProgress
+    if (progress.phase === 'connecting') return t('Connecting to local agent')
+    if (progress.phase === 'ready') return t('Task received; getting started')
+    const elapsed = `${Math.floor(progress.elapsedSeconds / 60)}:${String(progress.elapsedSeconds % 60).padStart(2, '0')}`
+    const state = progress.silentSeconds >= 60 ? t('Waiting for new progress from local agent') : t('Local agent is running')
+    return `${state} · ${elapsed}${progress.detail ? `\n${t(progress.detail)}` : ''}`
+  }
   if (activity.action?.status === 'running') return messageActionLabel(activity.action)
   if (activity.action?.status === 'failed') return t('Trying another approach')
   if (activity.action?.status === 'succeeded') return t('Preparing the result')
@@ -261,7 +278,7 @@ export function ChatActivity({
       {activeAgents.map((agent) => <AgentAvatar key={agent.id} agent={agent} size={36} />)}
       <div className="typing-content" role="status" aria-live="polite">
         <span className="typing-label">{activeAgents.map(agentDisplayName).join('、') || t(activity.label)}</span>
-        <span className="typing-bubble typing-activity">
+        <span className={`typing-bubble typing-activity${activity.localProgress ? ' is-local-progress' : ''}`}>
           <span className="typing-activity-text" key={detail}>{detail}</span>
           <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
         </span>
@@ -528,6 +545,7 @@ export function MessageGroupRow({
   showAuthor,
   onOpenAgentProfile
 }: {
+  socialAgents?: SocialAgent[]
   person?: SocialPerson
   onOpenPersonProfile?: (anchor: ProfileAnchor) => void
   messages: ChatMessage[]
@@ -599,7 +617,7 @@ export function MessageGroupRow({
           const hasText = bubbleMessages.some((message) => Boolean(message.text))
           const actions = bubbleMessages.flatMap((message) => message.actions ?? [])
           return (
-            <div key={bubble.id} className={`message-bubble agent-bubble ${hasError ? 'has-error' : ''} ${hasAttachments ? 'has-attachments' : ''} ${!hasText && hasAttachments ? 'image-only' : ''}`}>
+            <div key={bubble.id} data-message-id={bubble.id} className={`message-bubble agent-bubble ${hasError ? 'has-error' : ''} ${hasAttachments ? 'has-attachments' : ''} ${!hasText && hasAttachments ? 'image-only' : ''}`}>
               {bubble.source ? (
                 <MessageSourceCard
                   source={bubble.source}
@@ -611,7 +629,7 @@ export function MessageGroupRow({
                 />
               ) : null}
               {bubbleMessages.map((message) => message.source?.kind !== 'group' ? (
-                <div className="bubble-reply-segment" key={message.id}>
+                <div className="bubble-reply-segment" key={message.id} data-message-id={message.id}>
                   {message.text ? (
                     <div className="bubble-primary-content">
                       <MessageMarkdown text={message.text} />
@@ -706,7 +724,7 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
             <button
               className="system-copy"
               onClick={() => {
-                void navigator.clipboard.writeText(summary.detail).then(() => setCopied(true))
+                void window.douchat.copyText(summary.detail).then(() => setCopied(true))
               }}
             >
               {copied ? <Check size={11} /> : <Copy size={11} />}
@@ -748,7 +766,46 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
   )
 }
 
+function MessageQuote({ author, text, onCancel }: { author: string; text: string; onCancel?: () => void }): ReactElement {
+  return <div className={`message-quote${onCancel ? ' composer-quote' : ''}`}>
+    <div className="message-quote-text" title={`${author}: ${text}`}><span>{author}: </span><QuoteMarkdown text={text} /></div>
+    {onCancel && <button type="button" aria-label={t('Cancel quote')} onClick={onCancel}><X size={11} strokeWidth={2.5} /></button>}
+  </div>
+}
+
+function UserMessageText({ text }: { text: string }): ReactElement {
+  // Existing replies store their quote as an author line followed by quoted lines.
+  const quote = /^> ([^\r\n]+):\r?\n((?:>[^\r\n]*(?:\r?\n|$))+)\r?\n?/.exec(text)
+  if (!quote) return text.startsWith('> ') ? <MessageMarkdown text={text} /> : <span>{text}</span>
+  return <><MessageQuote author={quote[1]} text={quote[2].replace(/^> ?/gm, '').trim()} /><span>{text.slice(quote[0].length)}</span></>
+}
+
+function usePresenceTime(): number {
+  const [time, setTime] = useState(Date.now)
+  useEffect(() => { const timer = setInterval(() => setTime(Date.now()), 5000); return () => clearInterval(timer) }, [])
+  return time
+}
+function AgentPresence({ agent }: { agent?: SocialAgent }): ReactElement | null {
+  const time = usePresenceTime()
+  if (!agent) return null
+  const online = agent.onlineUntil !== undefined && agent.onlineUntil > time
+  const label = agent.onlineUntil === undefined ? '状态未知' : online ? '在线' : '离线'
+  return <span className={`mention-presence${online ? ' is-online' : ''}`} role="img" aria-label={label} title={label} />
+}
+function SocialTaskStatus({ tasks, agents }: { tasks: NonNullable<ChatMessage['socialTasks']>; agents: SocialAgent[] }): ReactElement | null {
+  const time = usePresenceTime()
+  const pending = tasks.filter((task) => task.status === 'pending' || task.status === 'running')
+  if (!pending.length) return null
+  return <div className="social-task-status" role="status">{pending.map((task) => {
+    const agent = agents.find((entry) => entry.id === task.agentId)
+    const offline = agent?.onlineUntil !== undefined && agent.onlineUntil <= time
+    const status = task.status === 'pending' ? offline ? '等待主人设备上线，上线后处理' : '等待接单' : offline ? '设备连接已中断，等待恢复' : agent?.approvalTaskId === task.id ? '等待主人确认' : '处理中'
+    return <small key={task.id}>{task.agentName} · {status}</small>
+  })}</div>
+}
+
 export function MessageRow({
+  socialAgents,
   person,
   onOpenPersonProfile,
   messages,
@@ -762,6 +819,7 @@ export function MessageRow({
   onOpenUserProfile,
   onOpenCredits
 }: {
+  socialAgents?: SocialAgent[]
   person?: SocialPerson
   onOpenPersonProfile?: (anchor: ProfileAnchor) => void
   messages: ChatMessage[]
@@ -794,7 +852,9 @@ export function MessageRow({
     return (
       <div className="message-row user-message-row">
         <div className={`message-bubble user-bubble ${hasAttachments ? 'has-attachments' : ''} ${!message.text && hasAttachments ? 'image-only' : ''}`}>
-          {message.text && <span>{message.text}</span>}
+          {message.text && <UserMessageText text={message.text} />}
+          {message.socialTasks && <SocialTaskStatus tasks={message.socialTasks} agents={socialAgents ?? []} />}
+          {message.deliveryState && <small className="message-delivery-state" role="status">{message.deliveryState === 'sending' ? '发送中…' : '发送未确认，请在队列中重试'}</small>}
           <MessageAttachments attachments={message.attachments} />
         </div>
         {onOpenUserProfile ? (
@@ -895,9 +955,13 @@ export function ChatPane({
   onOpenAgentProfile,
   onOpenUserProfile,
   onOpenCredits,
+  queuedMessages = [],
+  onPromoteQueued,
+  onRemoveQueued,
   onSend,
   onStop
 }: {
+  socialAgents?: SocialAgent[]
   person?: SocialPerson
   onOpenPersonProfile?: (anchor: ProfileAnchor) => void
   loadMessagePage?: (before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
@@ -918,6 +982,9 @@ export function ChatPane({
   onOpenAgentProfile: (agentId: string, anchor: ProfileAnchor) => void
   onOpenUserProfile: (anchor: ProfileAnchor) => void
   onOpenCredits?: () => void
+  queuedMessages?: QueuedMessage[]
+  onPromoteQueued?: (id: number) => void
+  onRemoveQueued?: (id: number) => void
   onSend: (text: string, images?: MessageImageInput[]) => Promise<void>
   onStop: () => void
 }): ReactElement {
@@ -942,6 +1009,32 @@ export function ChatPane({
     setHistory({ source: recentMessages, messages })
     if (!recentMessages.length) setHasMore(false)
   }
+  const [messageMenu, setMessageMenu] = useState<{ message: ChatMessage; x: number; y: number } | null>(null)
+  const [quotedMessage, setQuotedMessage] = useState<ChatMessage | null>(null)
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set())
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [messageActionError, setMessageActionError] = useState('')
+  const messageText = (message: ChatMessage): string => message.text || message.attachments?.map((image) => `[${image.name || t('Image')}]`).join('\n') || t(message.error || 'Message')
+  useEffect(() => {
+    if (!messageMenu) return
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    const close = (event: Event): void => {
+      if (!menuRef.current?.contains(event.target as Node)) setMessageMenu(null)
+    }
+    const escape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key === 'Escape') setMessageMenu(null)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('scroll', close, true)
+    document.addEventListener('keydown', escape)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('scroll', close, true)
+      document.removeEventListener('keydown', escape)
+      window.removeEventListener('resize', close)
+    }
+  }, [messageMenu])
   const [draft, setDraft] = useState('')
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [attachmentError, setAttachmentError] = useState('')
@@ -962,7 +1055,7 @@ export function ChatPane({
   const working = Boolean(activity)
   const conversationName = conversation ? conversationDisplayName(conversation, agents) : ''
   const timelineMessages = person ? messages : visibleConversationMessages(conversation, messages)
-  const timelineGroups = groupConversationMessages(timelineMessages)
+  const timelineGroups = groupConversationMessages(timelineMessages.filter((message) => !deletedIds.has(message.id)))
 
   useEffect(() => {
     voiceAttemptRef.current += 1
@@ -975,6 +1068,9 @@ export function ChatPane({
     setVoiceError('')
     setVoiceNeedsSettings(false)
     setDraft('')
+    setMessageMenu(null)
+    setQuotedMessage(null)
+    setMessageActionError('')
     setMention(null)
     setEmojiOpen(false)
   }, [conversation?.id, topic?.id])
@@ -1174,7 +1270,9 @@ export function ChatPane({
 
   const send = async (): Promise<void> => {
     const content = draft.trim()
-    if ((!content && !pendingImages.length) || !conversation || sending || working || voiceState !== 'idle') return
+    if ((!content && !pendingImages.length) || !conversation || sending || voiceState !== 'idle') return
+    const quote = quotedMessage
+    const outgoing = quote ? `> ${quote.authorId === 'user' ? userName : quote.authorName}:\n${messageText(quote).split(/\r?\n/).map((line) => `> ${line}`).join('\n')}\n\n${content}` : content
     const sendingImages = pendingImages
     const sendingImageIds = new Set(sendingImages.map((image) => image.id))
     setSending(true)
@@ -1184,9 +1282,11 @@ export function ChatPane({
       setPendingImages((current) => current.filter((image) => !sendingImageIds.has(image.id)))
       setMention(null)
       setAttachmentError('')
-      await onSend(content, images)
+      setQuotedMessage(null)
+      await onSend(outgoing, images)
     } catch {
       setDraft(content)
+      setQuotedMessage(quote)
       setPendingImages((current) => [
         ...sendingImages.filter((image) => !current.some((candidate) => candidate.id === image.id)),
         ...current
@@ -1295,13 +1395,20 @@ export function ChatPane({
             const agent = agents.find((item) => item.id === message.authorId)
             const breaks = !previous || isDifferentDay(message, previous) || message.createdAt - previous.createdAt >= 300_000
             return (
-              <div key={message.id}>
+              <div key={message.id} data-message-id={message.id} onContextMenu={(event) => {
+                event.preventDefault()
+                const id = (event.target as HTMLElement).closest('[data-message-id]')?.getAttribute('data-message-id')
+                const target = messageGroup.find((item) => item.id === id) ?? message
+                setMessageActionError('')
+                setMessageMenu({ message: target, x: Math.max(8, Math.min(event.clientX, window.innerWidth - 188)), y: Math.max(8, Math.min(event.clientY, window.innerHeight - 148)) })
+              }}>
                 {breaks && (
                   <div className="date-separator">
                     <span>{isDifferentDay(message, previous) ? `${dayLabel(message.createdAt)} ` : ''}{formatTime(message.createdAt)}</span>
                   </div>
                 )}
                 <MessageRow
+                  socialAgents={conversation?.socialRoom?.agents}
                   person={message.authorId !== 'user' ? person || conversation.socialRoom?.members.find((member) => member.id === message.authorId) : undefined}
                   onOpenPersonProfile={onOpenPersonProfile}
                   messages={messageGroup}
@@ -1330,7 +1437,37 @@ export function ChatPane({
         </div>
       </div>
 
+      {messageMenu && <div ref={menuRef} className="context-menu" role="menu" aria-label={t('Message actions')} style={{ left: messageMenu.x, top: messageMenu.y }} onKeyDown={(event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          const buttons = Array.from(event.currentTarget.querySelectorAll('button'))
+          const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+          buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+        }
+      }}>
+        <button role="menuitem" onClick={() => {
+          void copyMessage(messageMenu.message).catch(() => setMessageActionError(t('Could not copy message')))
+          setMessageMenu(null)
+        }}>{t('Copy')}</button>
+        <button role="menuitem" onClick={() => {
+          setQuotedMessage(messageMenu.message)
+          setMessageMenu(null)
+          textareaRef.current?.focus()
+        }}>{t('Quote')}</button>
+        <div className="dropdown-separator" role="separator" />
+        <button role="menuitem" className="danger" onClick={() => {
+          const target = messageMenu.message
+          setMessageMenu(null)
+          void window.douchat.deleteMessage(target.conversationId, target.id).then((deleted) => {
+            if (!deleted) return
+            setDeletedIds((current) => new Set([...current, target.id]))
+            setHistory((current) => ({ ...current, messages: current.messages.filter((item) => item.id !== target.id) }))
+            setQuotedMessage((current) => current?.id === target.id ? null : current)
+          }).catch(() => setMessageActionError(t('Could not delete message')))
+        }}>{t('Delete')}</button>
+      </div>}
       <div className="composer-wrap">
+        {messageActionError && <div className="composer-attachment-error" role="alert">{messageActionError}</div>}
         {offline && (
           <div className="offline-banner">
             <span>{t('Choose a local agent or connect a model endpoint to start chatting.')}</span>
@@ -1352,11 +1489,17 @@ export function ChatPane({
               >
                 {option.agent ? <AgentAvatar agent={option.agent} size={22} /> : option.person ? <UserAvatar src={option.person.image || ''} name={option.person.name} size={22} /> : <span className="mention-all"><AtSign size={13} /></span>}
                 <span>{option.label}</span>
+                {option.agent && <AgentPresence agent={conversation.socialRoom?.agents.find((agent) => agent.id === option.id)} />}
               </button>
             ))}
           </div>
         )}
         <div className={`composer ${draft.trim() || pendingImages.length ? 'has-content' : ''}`}>
+          {quotedMessage && <MessageQuote
+            author={quotedMessage.authorId === 'user' ? userName : quotedMessage.authorName}
+            text={messageText(quotedMessage)}
+            onCancel={() => setQuotedMessage(null)}
+          />}
           {pendingImages.length > 0 && (
             <div className="composer-images" aria-label={t('Images ready to send')}>
               {pendingImages.map((image) => (
@@ -1389,6 +1532,13 @@ export function ChatPane({
             disabled={!conversation}
             readOnly={voiceState !== 'idle'}
           />
+          {queuedMessages.length > 0 && <div className="composer-queue" aria-label="待发送消息">
+            {queuedMessages.map((item, index) => <div className={`composer-queue-item${item.error ? ' is-failed' : ''}`} key={item.id}>
+              <span><span className="composer-queue-text">{index + 1}. {item.text}</span>{item.error && <small role="alert"><TriangleAlert size={13} /><span>{messageSendError(item.error)}</span></small>}</span>
+              <button type="button" onClick={() => onPromoteQueued?.(item.id)}>{item.error ? '重试' : '插队'}</button>
+              <button type="button" aria-label="移除排队消息" onClick={() => onRemoveQueued?.(item.id)}><X size={14} /></button>
+            </div>)}
+          </div>}
           {attachmentError && <div className="composer-attachment-error" role="alert">{attachmentError}</div>}
           {SHOW_VOICE_INPUT && voiceError && (
             <div className="composer-voice-error" role="alert">
@@ -1426,20 +1576,21 @@ export function ChatPane({
               }} disabled={voiceState !== 'idle'}><AtSign size={18} strokeWidth={2.1} /></button>}
             </div>
             {emojiOpen && <div className="emoji-picker" aria-label={t('Choose an emoji')}>{['😀', '😂', '🥰', '👍', '🎉', '❤️', '🙏', '🤔'].map((emoji) => <button key={emoji} onClick={() => { setDraft((text) => text + emoji); setEmojiOpen(false); textareaRef.current?.focus() }}>{emoji}</button>)}</div>}
-          {working ? (
+          <div className="composer-send-actions">
+          {working && (
             <button className="stop-button" onClick={onStop} aria-label={t('Stop the current reply')} title={t('Stop')}>
               <Square size={13} fill="currentColor" />
             </button>
-          ) : (
+          )}
             <button
               className="send-button"
               onClick={() => void send()}
               disabled={sending || voiceState !== 'idle' || (!draft.trim() && !pendingImages.length)}
               aria-label={t('Send message')}
             >
-              {t('Send')}
+              {working ? '排队发送' : t('Send')}
             </button>
-          )}
+          </div>
           </div>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { ChatErrorBoundary } from './ChatErrorBoundary'
 import { memo, useState, type ReactElement, type ReactNode } from 'react'
 import { Streamdown, type Components, type ControlsConfig, type MermaidErrorComponentProps, type PluginConfig } from 'streamdown'
 import { cjk } from '@streamdown/cjk'
@@ -100,7 +101,7 @@ function MermaidError({ chart, error, retry }: MermaidErrorComponentProps): Reac
 }
 
 export const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: string }) {
-  return <Streamdown
+  return <ChatErrorBoundary fallbackText={text}><Streamdown
     className="message-markdown"
     mode="static"
     plugins={messageMarkdownPlugins}
@@ -126,5 +127,36 @@ export const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: s
     controls={messageMarkdownControls}
     skipHtml
     rehypePlugins={noRawHtmlPlugins}
-  >{text}</Streamdown>
+  >{text}</Streamdown></ChatErrorBoundary>
+})
+
+// Quotes retain Markdown formatting without embedding full-size artifacts or controls.
+const quoteComponents: Components = {
+  ...components,
+  p: ({ children }) => <span>{children} </span>,
+  h1: ({ children }) => <span>{children} </span>,
+  h2: ({ children }) => <span>{children} </span>,
+  h3: ({ children }) => <span>{children} </span>,
+  h4: ({ children }) => <span>{children} </span>,
+  h5: ({ children }) => <span>{children} </span>,
+  h6: ({ children }) => <span>{children} </span>,
+  ul: ({ children }) => <span>{children}</span>,
+  ol: ({ children }) => <span>{children}</span>,
+  li: ({ children }) => <span>• {children} </span>,
+  blockquote: ({ children }) => <span>{children}</span>,
+  pre: ({ children }) => <span>{children} </span>,
+  code: ({ children }) => <code>{children}</code>,
+  img: ({ alt }) => <span>{alt || '[Image]'}</span>,
+  table: ({ children }) => <span>{children}</span>,
+  thead: ({ children }) => <span>{children}</span>,
+  tbody: ({ children }) => <span>{children}</span>,
+  tr: ({ children }) => <span>{children} </span>,
+  th: ({ children }) => <span>{children} </span>,
+  td: ({ children }) => <span>{children} </span>,
+  hr: () => <span> · </span>,
+  br: () => <span> </span>
+}
+
+export const QuoteMarkdown = memo(function QuoteMarkdown({ text }: { text: string }) {
+  return <ChatErrorBoundary fallbackText={text}><Streamdown className="quote-markdown" mode="static" plugins={{ cjk }} components={quoteComponents} controls={false} skipHtml rehypePlugins={noRawHtmlPlugins}>{text}</Streamdown></ChatErrorBoundary>
 })

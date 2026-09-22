@@ -1,3 +1,8 @@
+import { reportDiagnostic } from './diagnostics'
+import { ChatErrorBoundary } from './components/ChatErrorBoundary'
+import { AgentPermissionsDialog, AgentPermissionPrompt } from './components/AgentPermissions'
+import { DialogErrorBoundary } from './components/DialogErrorBoundary'
+import { MessageQueue, type QueuedMessage } from './messageQueue'
 import type { SocialSnapshot } from '../../shared/social'
 import { AddFriendModal } from './components/AddFriendModal'
 import { SocialWorkspace } from './components/SocialWorkspace'
@@ -33,6 +38,7 @@ import { isImeCommitEnter } from './ime'
 import { withAccountIdentity } from './accountIdentity'
 
 type Dialog =
+  | { kind: 'agent-permissions'; agent: AgentConfig }
   | { kind: 'self-profile'; anchor: ProfileAnchor }
   | { kind: 'add-friend' }
   | { kind: 'friend-profile'; personId: string; anchor: ProfileAnchor }
@@ -53,10 +59,19 @@ function WorkspaceApp(): ReactElement {
   const imeComposing = useRef(false)
   const [authState, setAuthState] = useState<DesktopAuthState>({ status: 'checking' })
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null)
+  const snapshotRef = useRef(snapshot)
+  snapshotRef.current = snapshot
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([])
+  const [messageQueue] = useState(() => new MessageQueue(setQueuedMessages))
+  useEffect(() => { messageQueue.kick() }, [snapshot, messageQueue])
   const detachedId = new URLSearchParams(window.location.search).get('conversation')
   const [activeId, setActiveId] = useState(detachedId || '')
   const [view, setView] = useState<AppView>('chats')
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, updateSettingsOpen] = useState(false)
+  function setSettingsOpen(open: boolean): void {
+    reportDiagnostic(open ? 'settings.open-request' : 'settings.close')
+    updateSettingsOpen(open)
+  }
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile')
   const [creditsRefreshToken, setCreditsRefreshToken] = useState(0)
   const [creditsAttention, setCreditsAttention] = useState(false)
@@ -257,12 +272,15 @@ function WorkspaceApp(): ReactElement {
 
   async function send(text: string, images?: MessageImageInput[]): Promise<void> {
     if (!conversation) return
-    try {
-      await window.douchat.sendMessage(conversation.id, text, images)
-    } catch (error) {
-      fail(error, 'Message could not be sent')
-      throw error
-    }
+    const target = conversation
+    const targetTopic = topic?.id
+    messageQueue.enqueue(target.id, text || `[${images?.length ?? 0} 张图片]`, async () => {
+      const current = snapshotRef.current?.conversations.find((item) => item.id === target.id)
+      if (!current || current.ownerId !== target.ownerId) throw new Error('会话已不可用，请移除这条排队消息。')
+      const currentTopic = current.activeTopicId ?? current.topics[0]?.id
+      if (currentTopic !== targetTopic) throw new Error('话题已切换，请切回原话题后重试。')
+      await window.douchat.sendMessage(target.id, text, images)
+    }, () => !snapshotRef.current?.activity.some((item) => item.conversationId === target.id))
   }
 
   async function createAgent(input: CreateAgentInput): Promise<void> {
@@ -455,6 +473,7 @@ function WorkspaceApp(): ReactElement {
             onMessage={openChat}
             onStartDirect={(agentId) => { void startDirectChat(agentId) }}
             onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+              onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
             onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
             onTogglePin={togglePin}
           />}
@@ -478,6 +497,7 @@ function WorkspaceApp(): ReactElement {
       />
 
       <div className="chat-stage">
+      <ChatErrorBoundary key={`${activeId}:${topic?.id}`}>
       <ChatPane person={conversation?.person}
         onOpenPersonProfile={(anchor) => conversation?.person && setDialog({ kind: 'friend-profile', personId: conversation.person.id, anchor })}
         key={`${activeId}:${topic?.id}`}
@@ -503,6 +523,9 @@ function WorkspaceApp(): ReactElement {
         }}
         onOpenUserProfile={(anchor) => setDialog({ kind: 'self-profile', anchor })}
         onOpenCredits={openCreditRecovery}
+        queuedMessages={queuedMessages.filter((item) => item.conversationId === conversation?.id)}
+        onPromoteQueued={(id) => messageQueue.promote(id)}
+        onRemoveQueued={(id) => messageQueue.remove(id)}
         onSend={send}
         onStop={() => conversation && void window.douchat.stopConversation(conversation.id)}
       />
@@ -524,10 +547,12 @@ function WorkspaceApp(): ReactElement {
           onRunRoutineNow={(routineId) => window.douchat.runRoutineNow(routineId)}
         />
       </div>
+      </ChatErrorBoundary>
       </div>
         </>
       )}
 
+      <DialogErrorBoundary key={`${dialog?.kind ?? 'none'}:${settingsOpen}`} onClose={() => { setDialog(null); setSettingsOpen(false) }}>
       {dialog?.kind === 'self-profile' && <MemberProfilePopover anchor={dialog.anchor} onClose={() => setDialog(null)}>
         <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
         <SelfProfileCard name={authState.user.name} email={authState.user.email} avatar={authState.user.image || ''} onEdit={() => { setDialog(null); setSettingsTab('profile'); setSettingsOpen(true) }} />
@@ -537,6 +562,7 @@ function WorkspaceApp(): ReactElement {
         <ContactCard social={socialSnapshot} snapshot={uiSnapshot} selection={{ kind: 'friend', id: dialog.personId }}
           onFriendMessage={(id) => { setDialog(null); void openFriendChat(id) }}
           onMessage={openChat} onStartDirect={(id) => void startDirectChat(id)} onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+              onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
           onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent} onTogglePin={togglePin} />
       </MemberProfilePopover>}
       {dialog?.kind === 'member-profile' && (
@@ -546,10 +572,15 @@ function WorkspaceApp(): ReactElement {
               onMessage={(id) => { setDialog(null); openChat(id) }}
               onStartDirect={(agentId) => { setDialog(null); void startDirectChat(agentId) }}
               onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+              onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
               onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
               onTogglePin={togglePin} />
         </MemberProfilePopover>
       )}
+      {uiSnapshot.permissionRequests?.[0] && <AgentPermissionPrompt key={uiSnapshot.permissionRequests[0].id} request={uiSnapshot.permissionRequests[0]}
+        onResolve={async (allow) => { setSnapshot(await window.douchat.resolveAgentPermission(uiSnapshot.permissionRequests![0].id, allow)) }} />}
+      {dialog?.kind === 'agent-permissions' && <AgentPermissionsDialog agent={dialog.agent} onClose={() => setDialog(null)}
+        onSave={async (permissions) => { setSnapshot(await window.douchat.updateAgent(dialog.agent.id, { permissions })) }} />}
       {dialog?.kind === 'add-friend' && <AddFriendModal onClose={() => setDialog(null)} />}
       {dialog?.kind === 'bot' && (
         <BotModal
@@ -656,6 +687,7 @@ function WorkspaceApp(): ReactElement {
           onRunRoutineNow={(id) => window.douchat.runRoutineNow(id)}
         />
       )}
+      </DialogErrorBoundary>
       {toast && <div className="toast">{toast}</div>}
     </div>
   )

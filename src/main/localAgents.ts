@@ -131,7 +131,7 @@ interface DetectionDependencies {
   version?: (path: string) => Promise<string | undefined>
 }
 
-export async function detectLocalAgents(dependencies: DetectionDependencies = {}): Promise<LocalAgent[]> {
+export async function detectLocalAgents(dependencies: DetectionDependencies = {}, onlyId?: string): Promise<LocalAgent[]> {
   const resolveCommand = dependencies.executable ?? resolveExecutable
   const resolveApp = dependencies.desktopApp ?? findDesktopApp
   const readVersion = dependencies.version ?? executableVersion
@@ -140,7 +140,7 @@ export async function detectLocalAgents(dependencies: DetectionDependencies = {}
     ...localAgentCatalog.map(([id, name, command, appNames]) => [id, name, command, appNames, false] as const),
     ...custom.map(({ id, name, command }) => [id, name, command, [], true] as const)
   ]
-  return Promise.all(definitions.map(async ([id, name, command, appNames, isCustom]) => {
+  return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
     const version = path && !isCustom ? await readVersion(path) : undefined
     const status = path ? 'ready' : desktopPath ? 'desktop-only' : 'not-found'
@@ -162,7 +162,7 @@ export async function detectLocalAgents(dependencies: DetectionDependencies = {}
 }
 
 export async function validateLocalAgent(id: string): Promise<LocalAgent> {
-  const agent = (await detectLocalAgents()).find((item) => item.id === id)
+  const agent = (await detectLocalAgents({ version: async () => undefined }, id)).find((item) => item.id === id)
   if (!agent) throw new Error('Unknown local agent')
   if (!agent.installed) throw new Error(`${agent.name} is not installed. Refresh Agents in Settings after installing it.`)
   return agent

@@ -1,3 +1,4 @@
+import { agentPermissions } from '../shared/agentPermissions'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,6 +22,30 @@ afterEach(() => {
 })
 
 describe('DouchatStore', () => {
+  it('persists agent permission choices across restarts', () => {
+    const store = createStore()
+    const agent = store.createAgent({ name: 'Permission test', role: '', instructions: '', color: '', provider: 'local', model: 'default', localAgentId: 'codex' })
+    const permissions = agentPermissions()
+    permissions.groupAgents = 'deny'
+    permissions.sensitive.filesRead = 'allow'
+    store.updateAgent(agent.id, { permissions })
+    store.close()
+    const reopened = new DouchatStore(join(temporaryDirectories.at(-1)!, 'douchat.db'))
+    expect(reopened.agent(agent.id)?.permissions).toEqual(permissions)
+    reopened.close()
+  })
+
+  it('deletes only the requested message from stored history', () => {
+    const store = createStore()
+    const input = { conversationId: 'direct-dobi', topicId: 'main', authorId: 'user', authorName: 'You', kind: 'message' as const }
+    const first = store.addMessage({ ...input, text: 'First' })
+    const second = store.addMessage({ ...input, text: 'Second' })
+    store.deleteMessage('direct-lin', first.id)
+    expect(store.topicMessages(input.conversationId, input.topicId).some((item) => item.id === first.id)).toBe(true)
+    store.deleteMessage(input.conversationId, first.id)
+    expect(store.topicMessages(input.conversationId, input.topicId).map((item) => item.id)).toEqual([second.id])
+  })
+
   it('keeps a saved group when its inbox conversation is deleted', () => {
     const store = createStore()
     const group = store.createGroup({ name: 'Saved', agentIds: store.agents.slice(0, 2).map((agent) => agent.id) })

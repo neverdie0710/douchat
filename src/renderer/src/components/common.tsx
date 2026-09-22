@@ -268,10 +268,11 @@ export function SidebarResizer(): ReactElement {
   )
 }
 
-/** Display membership is broader than permission to address an agent. */
+/** Only offer callable agents; execution permissions are checked again when sending. */
 export function mentionableAgents(conversation: Conversation | undefined, members: AgentConfig[]): AgentConfig[] {
   if (!conversation?.socialRoom) return members
-  const allowed = new Set(conversation.socialRoom.agents
-    .filter((agent) => agent.ownerId === conversation.ownerId).map((agent) => agent.id))
-  return members.filter((agent) => allowed.has(agent.id))
+  const memberIds = new Set(conversation.socialRoom.agents
+    .filter((agent) => agent.ownerId === conversation.ownerId || agent.interactionHumans === 'allow' || agent.interactionHumans === 'ask')
+    .map((agent) => agent.id))
+  return members.filter((agent) => memberIds.has(agent.id))
 }

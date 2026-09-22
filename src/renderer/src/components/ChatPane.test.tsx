@@ -14,10 +14,12 @@ vi.mock('../preferences', () => ({
 }))
 
 vi.mock('./MessageMarkdown', () => ({
+  QuoteMarkdown: ({ text }: { text: string }) => <span>{text}</span>,
   MessageMarkdown: ({ text }: { text: string }) => <div data-testid="private-message-content">{text}</div>
 }))
 
 vi.mock('./common', () => ({
+  mentionableAgents: (_conversation: unknown, members: AgentConfig[]) => members,
   AgentAvatar: ({ agent }: { agent: { name: string } }) => <span data-testid="agent-avatar" data-agent-name={agent.name} />,
   EmptyAvatar: () => <span data-testid="empty-avatar" />,
   UserAvatar: ({ name }: { name: string }) => <span data-testid="user-avatar" data-user-name={name} />,
@@ -34,6 +36,7 @@ import {
   MessageDeliveries,
   MessageActions,
   ChatActivity,
+  ChatPane,
   MessageGroupRow,
   MessageRow,
   MessageSourceCard,
@@ -111,6 +114,76 @@ describe('private delivery disclosure', () => {
   afterEach(async () => {
     await act(async () => root.unmount())
     container.remove()
+  })
+
+  it('shows offline and approval waits and clears them after completion', async () => {
+    const task = { id: 'task', agentId: 'peer', agentName: 'Peer', status: 'pending' }
+    const peer = { id: 'peer', localId: 'local', ownerId: 'bob', name: 'Peer', onlineUntil: 0, approvalTaskId: 'task' }
+    const render = async () => act(async () => root.render(<MessageRow messages={[{ ...incomingReply, authorId: 'user', socialTasks: [task] }]} socialAgents={[peer]} agents={[]} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
+    await render()
+    expect(container.textContent).toContain('等待主人设备上线')
+    peer.onlineUntil = Date.now() + 45000
+    task.status = 'running'
+    await render()
+    expect(container.textContent).toContain('等待主人确认')
+    task.status = 'succeeded'
+    await render()
+    expect(container.querySelector('.social-task-status')).toBeNull()
+  })
+
+  it('renders saved reply quotes inline with the author and keeps the reply separate', async () => {
+    const message = { ...incomingReply, authorId: 'user', text: '> Dobi:\n> First line\n> Second line\n\nMy reply' }
+    await act(async () => root.render(<MessageRow messages={[message]} agents={agents} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
+    const quote = container.querySelector('.message-quote')!
+    expect(quote.textContent).toBe('Dobi: First line\nSecond line')
+    expect(quote.querySelector('button')).toBeNull()
+    expect(container.querySelector('.user-bubble > span')?.textContent).toBe('My reply')
+  })
+
+  it('copies, quotes and deletes the selected message from its context menu', async () => {
+    const message = { ...incomingReply, conversationId: directConversation.id, source: undefined }
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const deleteMessage = vi.fn().mockResolvedValue(true)
+    window.douchat = { deleteMessage, copyText: writeText } as unknown as typeof window.douchat
+    const send = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={[message]} allMessages={[message]} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={send} onStop={() => {}} />))
+    const open = async (): Promise<void> => { await act(async () => {
+      container.querySelector('.message-bubble')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 100, clientY: 100 }))
+    }) }
+    const click = async (label: string): Promise<void> => { await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find((button) => button.textContent === label)!.click()
+    }) }
+    await open()
+    await click('Copy')
+    expect(writeText).toHaveBeenCalledWith(message.text)
+    await open()
+    await click('Quote')
+    expect(container.querySelector('.composer-quote')?.textContent).toContain(message.text)
+    const textarea = container.querySelector('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'My reply')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { container.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    expect(send).toHaveBeenCalledWith(expect.stringContaining(`> ${message.text}\n\nMy reply`), [])
+    expect(container.querySelector('.composer-quote')).toBeNull()
+    await open()
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(container.querySelector('[role="menu"]')).toBeNull()
+    deleteMessage.mockResolvedValueOnce(false)
+    await open()
+    await click('Delete')
+    expect(container.querySelector('.message-bubble')).not.toBeNull()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+    deleteMessage.mockRejectedValueOnce(new Error('Database unavailable'))
+    await open()
+    await click('Delete')
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe('Could not delete message')
+    expect(container.querySelector('.message-bubble')).not.toBeNull()
+    await open()
+    await click('Delete')
+    expect(deleteMessage).toHaveBeenCalledWith(message.conversationId, message.id)
+    expect(container.querySelector('.message-bubble')).toBeNull()
   })
 
   it('shows group delivery receipts without a disclosure control', async () => {
@@ -448,6 +521,13 @@ describe('private delivery disclosure', () => {
     expect(container.querySelector('.typing-label')?.textContent).toBe('Coordinating the group')
     expect(container.querySelector('.avatar')).toBeNull()
     expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Coordinating the group')
+    await act(async () => root.render(
+      <ChatActivity activity={{ ...activity, phase: 'planning', agentIds: [agents[0].id], label: 'Coordinating the group', action: undefined }} agents={agents} />
+    ))
+    expect(container.querySelector('.typing-label')?.textContent).toBe(agents[0].name)
+    expect(container.querySelector('[data-testid="agent-avatar"]')?.getAttribute('data-agent-name')).toBe(agents[0].name)
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Coordinating the group')
+
 
     await act(async () => root.render(
       <ChatActivity
@@ -461,6 +541,21 @@ describe('private delivery disclosure', () => {
     expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Preparing the result')
   })
 
+  it('shows local connection and stalled-progress feedback without claiming completion', async () => {
+    const activity: ConversationActivityState = {
+      conversationId: directConversation.id, topicId: 'topic-2', phase: 'replying',
+      agentIds: ['agent-1'], label: 'Local', startedAt: 1,
+      localProgress: { phase: 'connecting', elapsedSeconds: 0, silentSeconds: 0 }
+    }
+    await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
+    expect(container.textContent).toContain('Connecting to local agent')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, localProgress: {
+      phase: 'waiting', elapsedSeconds: 185, silentSeconds: 70, detail: 'Checking results'
+    } }} agents={agents} />))
+    expect(container.textContent).toContain('Waiting for new progress from local agent')
+    expect(container.textContent).toContain('3:05')
+    expect(container.textContent).toContain('Checking results')
+  })
   it('shows the specific problem immediately while keeping raw detail folded', async () => {
     const onOpenCredits = vi.fn()
     const detail = '429: {"message":"Douchat credit balance is insufficient"}'

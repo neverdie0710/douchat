@@ -170,7 +170,7 @@ it('waits for a fresh room list when a friend chat is created during an older in
   expect(remote.messages.at(-1)?.agentId).toBe('own-agent')
   await alice.client.sendMessage(chat.id, '@Bob hello')
   expect(remote.messages.at(-1)?.agentId).toBeUndefined()
-  await expect(alice.client.sendMessage(chat.id, '@Peer work')).rejects.toThrow('只能指挥自己的')
+  await expect(alice.client.sendMessage(chat.id, '@Peer work')).rejects.toThrow('调用权限尚未同步')
   expect(remote.messages).toHaveLength(2)
 })
 
@@ -186,11 +186,11 @@ it('broadcasts a roll call to every owned agent and renders only one human messa
   await alice.client.sendMessage(chat.id, '@all 报个数')
   const send = remote.fetcher.mock.calls.map(([, options]) => options?.body ? JSON.parse(String(options.body)) : {}).find((body) => body.action === 'send')
   expect(send.agentIds).toEqual(['one', 'two'])
-  const base: SocialMessage = { id: 'root', roomId: shared.id, authorId: 'alice', authorName: 'Alice', content: '大家报个数', status: 'succeeded', agentId: 'one', reply: 'One here', createdAt: new Date().toISOString() }
-  const batch = [base, { ...base, id: 'child', parentMessageId: 'root', agentId: 'two', reply: 'Two here' }]
+  const base: SocialMessage = { id: send.id, roomId: shared.id, authorId: 'alice', authorName: 'Alice', content: '@all 报个数', status: 'succeeded', agentId: 'one', reply: 'One here', createdAt: new Date().toISOString() }
+  const batch = [base, { ...base, id: 'child', parentMessageId: send.id, agentId: 'two', reply: 'Two here' }]
   alice.store.syncFriendConversation('alice', shared, batch)
   alice.store.syncFriendConversation('alice', shared, batch)
-  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['大家报个数', 'One here', 'Two here'])
+  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['@all 报个数', 'One here', 'Two here'])
 })
 
 it('syncs a shared group after its last other human is removed', async () => {
@@ -230,4 +230,128 @@ it('refreshes existing owned agent avatars without republishing unchanged or pee
   const synced = alice.store.accountConversations.find((item) => item.remoteRoomId === shared.id)!
   expect(synced.socialRoom?.agents[0].avatarEmoji).toBe('🐱')
   expect(synced.socialRoom?.agents[1].avatarEmoji).toBe('🐶')
+})
+
+it('syncs generated reply images even when the task message was already cached', async () => {
+  const task: SocialMessage = { id: 'image-task', roomId: room.id, authorId: 'alice', authorName: 'Alice', content: 'Draw a car', agentId: 'artist', agentName: 'Artist', status: 'running', createdAt: '2026-09-21T01:00:00Z' }
+  server([task])
+  const bob = account('bob')
+  await bob.client.syncInbox()
+  task.status = 'succeeded'
+  task.reply = ''
+  task.replyImages = [{ name: 'car.png', mimeType: 'image/png', base64: 'iVBORw0KGgo=' }]
+  await bob.client.syncInbox()
+  const conversation = bob.store.accountConversations[0]
+  const reply = bob.store.topicMessages(conversation.id, conversation.activeTopicId).find((message) => message.authorId === 'artist')!
+  expect(reply.attachments).toHaveLength(1)
+  expect(await bob.store.attachmentDataUrl(reply.attachments![0].id)).toBe('data:image/png;base64,iVBORw0KGgo=')
+  await bob.client.syncInbox()
+  const again = bob.store.topicMessages(conversation.id, conversation.activeTopicId).find((message) => message.authorId === 'artist')!
+  expect(again.attachments).toEqual(reply.attachments)
+})
+
+it('shows a sending bubble before a slow request resolves and reconciles it without duplicates', async () => {
+  const remote = server()
+  const alice = account('alice')
+  await alice.client.syncInbox()
+  const id = alice.store.accountConversations[0].id
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const original = remote.fetcher.getMockImplementation()!
+  remote.fetcher.mockImplementation(async (url, options) => {
+    if (options?.body && JSON.parse(String(options.body)).action === 'send') await gate
+    return original(url, options)
+  })
+  const pending = alice.client.sendMessage(id, 'Immediate')
+  await vi.waitFor(() => expect(alice.store.topicMessages(id, 'main')).toHaveLength(1))
+  expect(alice.store.topicMessages(id, 'main')[0]).toMatchObject({ text: 'Immediate', deliveryState: 'sending' })
+  expect(remote.messages).toHaveLength(0)
+  release()
+  await pending
+  await alice.client.syncInbox()
+  expect(alice.store.topicMessages(id, 'main')).toHaveLength(1)
+  expect(alice.store.topicMessages(id, 'main')[0].deliveryState).toBeUndefined()
+})
+
+it('uses incremental cursors, skips unchanged rooms and still fetches old task completions', async () => {
+  const alice = account('alice')
+  let revision = 'one'
+  const task: SocialMessage = { id: 'old-task', roomId: room.id, authorId: 'alice', authorName: 'Alice', content: 'Work', agentId: 'agent', status: 'pending', createdAt: '2026-09-21T01:00:00Z' }
+  const later: SocialMessage = { ...task, id: 'later', agentId: undefined, status: 'sent', content: 'Hi', createdAt: '2026-09-21T02:00:00Z' }
+  const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', syncVersion: 1, friendships: [], rooms: [{ ...room, revision }] } })
+    const body = JSON.parse(String(options.body))
+    if (body.after) return Response.json({ data: { messages: [], updates: [{ ...task, status: 'succeeded', reply: 'Done' }], hasMore: false } })
+    return Response.json({ data: { messages: [task, later], hasMore: false } })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  await alice.client.syncInbox()
+  fetcher.mockClear()
+  await alice.client.syncInbox()
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  revision = 'two'
+  await alice.client.syncInbox()
+  const body = JSON.parse(String(fetcher.mock.calls.at(-1)![1]!.body))
+  expect(body.after).toEqual({ time: '2026-09-21T01:59:55.000Z', id: '' })
+  expect(body.pending).toEqual(['old-task'])
+  const chat = alice.store.accountConversations[0]
+  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toContain('Done')
+})
+
+it('refreshes a fast room without waiting for a slow room', async () => {
+  const alice = account('alice')
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', rooms: [{ ...room, id: 'slow' }, { ...room, id: 'fast' }], friendships: [] } })
+    const body = JSON.parse(String(options.body))
+    if (body.roomId === 'slow') await gate
+    return Response.json({ data: { messages: [{ id: body.roomId, roomId: body.roomId, authorId: 'bob', authorName: 'Bob', content: 'Hello', status: 'sent', createdAt: room.createdAt }], hasMore: false } })
+  }))
+  const pending = alice.client.syncInbox()
+  await vi.waitFor(() => expect(alice.store.accountConversations.some((chat) => chat.remoteRoomId === 'fast')).toBe(true))
+  expect(alice.store.accountConversations.some((chat) => chat.remoteRoomId === 'slow')).toBe(false)
+  release()
+  await pending
+})
+
+it('opens an authenticated change notification request and aborts it on stop', async () => {
+  const alice = account('alice')
+  let notificationSignal: AbortSignal | undefined
+  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', syncVersion: 1, rooms: [{ ...room, revision: 'r1' }], friendships: [] } })
+    const body = JSON.parse(String(options.body))
+    if (body.action === 'watch') {
+      expect(body.versions).toEqual({ [room.id]: 'r1' })
+      expect((options.headers as Record<string, string>).Authorization).toBe('Bearer alice')
+      notificationSignal = options.signal as AbortSignal
+      return new Promise<Response>((_resolve, reject) => notificationSignal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true }))
+    }
+    return Response.json({ data: { messages: [], tasks: [], hasMore: false } })
+  }))
+  alice.client.start()
+  try {
+    await vi.waitFor(() => expect(notificationSignal).toBeDefined())
+  } finally { alice.client.stop() }
+  expect(notificationSignal!.aborted).toBe(true)
+})
+
+it('applies bundled notification messages without another metadata or message request', async () => {
+  const alice = account('alice')
+  const snapshot = { userId: 'alice', syncVersion: 1, rooms: [{ ...room, revision: 'one' }], friendships: [] }
+  const first: SocialMessage = { id: 'first', roomId: room.id, authorId: 'bob', authorName: 'Bob', content: 'First', status: 'sent', createdAt: '2026-09-21T01:00:00.000Z' }
+  const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => options?.body
+    ? Response.json({ data: { messages: [first], hasMore: false } })
+    : Response.json({ data: snapshot }))
+  vi.stubGlobal('fetch', fetcher)
+  await alice.client.syncInbox()
+  fetcher.mockClear()
+  const next = { ...first, id: 'next', content: 'Instant', createdAt: '2026-09-21T01:00:01.000Z' }
+  await alice.client.syncInbox(false, {
+    snapshot: { ...snapshot, rooms: [{ ...room, revision: 'two' }] },
+    pages: { [room.id]: { after: { time: '2026-09-21T00:59:55.000Z', id: '' }, pending: [], messages: [first, next], hasMore: false } }
+  })
+  expect(fetcher).not.toHaveBeenCalled()
+  const chat = alice.store.accountConversations[0]
+  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['First', 'Instant'])
 })

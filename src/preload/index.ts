@@ -19,6 +19,10 @@ import type {
 } from '../shared/types'
 
 const api: DouchatApi = {
+  reportDiagnostic: (event, detail) => ipcRenderer.send('douchat:diagnostic', event, detail),
+  openDiagnosticLogs: () => ipcRenderer.invoke('douchat:open-diagnostic-logs'),
+  copyText: (text) => ipcRenderer.invoke('douchat:copy-text', text),
+  copyAttachment: (id) => ipcRenderer.invoke('douchat:copy-attachment', id),
   getSocialSnapshot: () => ipcRenderer.invoke('douchat:social-snapshot'),
   socialAction: (input) => ipcRenderer.invoke('douchat:social-action', input),
   platform: process.platform,
@@ -50,6 +54,7 @@ const api: DouchatApi = {
   openLocalFile: (path) => ipcRenderer.invoke('douchat:open-local-file', path),
   getSnapshot: () => ipcRenderer.invoke('douchat:get-snapshot'),
   createAgent: (input: CreateAgentInput) => ipcRenderer.invoke('douchat:create-agent', input),
+  resolveAgentPermission: (id, allow) => ipcRenderer.invoke('douchat:resolve-agent-permission', id, allow),
   updateAgent: (agentId: string, input: UpdateAgentInput) => ipcRenderer.invoke('douchat:update-agent', agentId, input),
   deleteAgent: (agentId: string) => ipcRenderer.invoke('douchat:delete-agent', agentId),
   startDirectChat: (agentId: string) => ipcRenderer.invoke('douchat:start-direct-chat', agentId),
@@ -62,6 +67,7 @@ const api: DouchatApi = {
   testEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:test-email-connector', input),
   saveEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:save-email-connector', input),
   disconnectEmailConnector: (connectorId: string) => ipcRenderer.invoke('douchat:disconnect-email-connector', connectorId),
+  deleteMessage: (conversationId: string, messageId: string) => ipcRenderer.invoke('douchat:delete-message', conversationId, messageId),
   deleteConversation: (conversationId: string) => ipcRenderer.invoke('douchat:delete-conversation', conversationId),
   setConversationPinned: (conversationId: string, pinned: boolean) =>
     ipcRenderer.invoke('douchat:set-conversation-pinned', conversationId, pinned),

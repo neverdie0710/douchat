@@ -52,7 +52,7 @@ export function createLoopbackSuccessPage(): string {
       color-scheme: light;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       color: #111827;
-      background: #f6f8ff;
+      background: #f7f7fa;
     }
     * { box-sizing: border-box; }
     body {
@@ -61,80 +61,80 @@ export function createLoopbackSuccessPage(): string {
       display: grid;
       place-items: center;
       padding: 24px;
-      background:
-        radial-gradient(circle at 50% 18%, rgba(31, 99, 255, .12), transparent 38%),
-        #f6f8ff;
+      background: #f7f7fa;
     }
     main {
-      width: min(100%, 520px);
-      padding: 48px 44px 40px;
+      width: min(100%, 420px);
+      padding: 32px;
       text-align: center;
-      background: rgba(255, 255, 255, .94);
+      background: #fff;
       border: 1px solid #dfe5f2;
-      border-radius: 28px;
-      box-shadow: 0 24px 70px rgba(45, 68, 122, .14);
+      border-radius: 24px;
+      box-shadow: 0 12px 40px -20px rgba(25, 35, 55, .18);
     }
     .status {
-      width: 76px;
-      height: 76px;
-      margin: 0 auto 26px;
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 20px;
       display: grid;
       place-items: center;
       color: white;
       background: #1f63ff;
-      border: 10px solid #e6edff;
-      border-radius: 24px;
-      box-shadow: 0 10px 24px rgba(31, 99, 255, .24);
+      border: 6px solid #e6edff;
+      border-radius: 18px;
     }
-    .status svg { width: 30px; height: 30px; }
+    .status svg { width: 24px; height: 24px; }
     h1 {
       margin: 0;
-      font-size: clamp(30px, 7vw, 42px);
-      line-height: 1.12;
+      font-size: 24px;
+      font-weight: 600;
+      line-height: 1.3;
       letter-spacing: -.035em;
     }
     p {
-      margin: 18px auto 0;
+      margin: 12px auto 0;
       max-width: 390px;
       color: #667085;
-      font-size: 17px;
+      font-size: 14px;
       line-height: 1.7;
     }
     .button {
       width: 100%;
-      min-height: 56px;
-      margin-top: 32px;
+      min-height: 44px;
+      padding: 10px 24px;
+      margin-top: 24px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 10px;
       color: white;
       background: #1f63ff;
-      border-radius: 16px;
-      font-size: 17px;
-      font-weight: 650;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 500;
       text-decoration: none;
-      box-shadow: 0 10px 22px rgba(31, 99, 255, .22);
+      box-shadow: 0 1px 2px rgba(25, 35, 55, .08);
       transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
     }
     .button:hover {
       background: #1555e8;
-      box-shadow: 0 12px 28px rgba(31, 99, 255, .28);
+      box-shadow: 0 3px 8px rgba(25, 35, 55, .12);
       transform: translateY(-1px);
     }
     .button:focus-visible {
       outline: 3px solid rgba(31, 99, 255, .28);
       outline-offset: 4px;
     }
-    .button svg { width: 19px; height: 19px; }
+    .button svg { width: 16px; height: 16px; }
     .hint {
-      margin-top: 18px;
-      color: #98a2b3;
-      font-size: 14px;
+      margin-top: 16px;
+      color: #667085;
+      font-size: 12px;
+      line-height: 1.5;
     }
     @media (max-width: 520px) {
       body { padding: 16px; }
-      main { padding: 40px 24px 32px; border-radius: 24px; }
+      main { padding: 28px 24px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .button { transition: none; }

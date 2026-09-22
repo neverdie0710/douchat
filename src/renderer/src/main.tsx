@@ -1,3 +1,5 @@
+import './diagnostics'
+import { ChatErrorBoundary } from './components/ChatErrorBoundary'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
@@ -10,6 +12,6 @@ document.documentElement.dataset.platform = window.douchat.platform
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ChatErrorBoundary root><App /></ChatErrorBoundary>
   </StrictMode>
 )

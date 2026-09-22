@@ -19,7 +19,7 @@ vi.mock('./common', () => ({
   agentSourceLabel: (agent: AgentConfig) => agent.localAgentId ? `Local · ${agent.localAgentId}` : 'Cloud'
 }))
 
-import { ContactCard } from './ContactCard'
+import { ContactCard, SelfProfileCard } from './ContactCard'
 
 const agents: AgentConfig[] = [
   { id: 'alpha', name: 'Alpha', role: '', instructions: '', color: '#14B8A6', provider: '', model: '', createdAt: 1 },
@@ -74,8 +74,14 @@ describe('group contact profile', () => {
       social={{ userId: 'me', friendships: [], rooms: [{ id: 'room', name: 'Team', kind: 'group', agents: [], createdAt: '', members: [{ id: 'bob', name: 'Bob', email: 'bob@test' }] }] }}
       onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
     expect(container.querySelector('h1')?.textContent).toBe('Bob')
-    expect(container.textContent).toContain('bob@test')
+    expect(container.textContent).not.toContain('bob@test')
+    expect([...container.querySelectorAll('.contact-field')].some((field) => field.textContent?.startsWith('Email'))).toBe(false)
     expect(container.textContent).not.toContain('Send message')
+  })
+
+  it('continues to show the signed-in user their own email address', async () => {
+    await act(async () => root.render(<SelfProfileCard name="Alice" email="alice@example.com" avatar="" onEdit={vi.fn()} />))
+    expect(container.textContent).toContain('alice@example.com')
   })
 
   it('keeps the group page focused on entering the chat', async () => {
@@ -146,12 +152,13 @@ describe('group contact profile', () => {
     const props = { snapshot, selection: { kind: 'friend' as const, id: 'bob' }, onMessage: vi.fn(), onStartDirect: vi.fn(), onEditBot: vi.fn(), onDeleteBot: vi.fn(), onTogglePin: vi.fn(), onFriendMessage: message, onRespondRequest: respond }
     await act(async () => root.render(<ContactCard {...props} social={{ userId: 'me', rooms: [], friendships: [relation] }} />))
     expect(container.querySelector('.contact-profile-sheet')).not.toBeNull()
-    expect(container.textContent).toContain('bob@example.com')
+    expect(container.textContent).not.toContain('bob@example.com')
     expect(container.querySelector('.profile-edit')).toBeNull()
     const accept = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Accept request')!
     await act(async () => accept.click())
     expect(respond).toHaveBeenCalledWith('request', true)
     await act(async () => root.render(<ContactCard {...props} social={{ userId: 'me', rooms: [], friendships: [{ ...relation, status: 'accepted' }] }} />))
+    expect(container.textContent).toContain('bob@example.com')
     const send = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Send message')!
     await act(async () => send.click())
     expect(message).toHaveBeenCalledWith('bob')

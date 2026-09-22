@@ -4,6 +4,10 @@ The Friends group in the desktop Contacts section uses the existing Douchat desk
 `/api/desktop-auth/social` in the sibling `douchat-tanstack` service. Tokens and task
 claims stay in Electron's main process.
 
+Current cross-account interaction and approval behavior is documented in
+[Agent permissions](agent-permissions.md). The first-version notes below describe
+the original delivery model; permission-controlled group calls extend it.
+
 ## First version
 
 The Add friend dialog uses a narrower 480px width and shares its typography and
@@ -58,12 +62,14 @@ images enter the same local attachment store used by agent chat.
 ## Ownership and delivery
 
 Service-side agent ids combine the authenticated account id with the local agent id.
-The server derives the sender from the session and checks room membership and agent
-ownership on both sending and claiming. Ordinary messages and agent results never
+The server derives the sender from the session and checks room membership and the
+target agent’s interaction permissions when sending. Only the agent owner can claim
+and complete its tasks. Ordinary messages and agent results never
 enter the task queue. The renderer cannot claim or complete jobs.
 
-The main process also validates the task's author/owner and the persisted local agent
-owner before invoking the runtime. Legacy local agents acquire ownership the first
+The main process validates the task’s target owner against the persisted local agent
+owner, and checks external callers against the owner’s local permission policy before
+invoking the runtime. Legacy local agents acquire ownership the first
 time they are shared; newly created agents inherit the current account. Updating an
 agent through IPC cannot change ownership.
 
@@ -126,3 +132,38 @@ exchange. Explicit mentions override it; `@all` invokes all locally owned room
 agents. An unaddressed message without an established exchange defaults to one
 owned member rather than broadcasting to every agent. This deterministic shared
 room routing is separate from the model-driven local-group controller.
+
+### Low-latency inbox synchronization
+
+The service advertises `syncVersion: 1`. Desktops then hold one authenticated
+`watch` request (15-second maximum), comparing persisted room revisions every
+500 ms. Sending a message or completing a task changes the revision in the same
+database transaction. This works across service instances without in-memory
+notification state. The 500 ms interval is detection cadence, not a measured
+end-to-end delivery guarantee. Proxies must allow requests lasting 15 seconds;
+failed/unsupported notification requests fall back to two-second polling.
+
+Up to four rooms synchronize concurrently, publishing each room immediately.
+Unchanged rooms skip message downloads; changed rooms fetch forward by the
+(timestamp, ID) cursor plus explicit pending task IDs, so old completions are
+not missed. A five-second overlap handles cursor boundary races; periodic full
+reconciliation (five minutes) and startup history replay recover older gaps.
+A lightweight reconciliation runs at least every 30 seconds. Stop/sign-out
+aborts notification requests and stale sync generations cannot overwrite state.
+Message IDs retain idempotent sends and deduplication. Deploy the service first,
+then update desktops; older services continue using the original polling path.
+No database migration is required.
+
+The notification fast path now wakes same-process waiters immediately after the
+message transaction commits. Listeners are installed before checking revisions
+to avoid a read/subscribe race and removed on completion, abort, or timeout.
+Other instances still detect changes through the 500 ms database fallback;
+process memory is never required for correctness.
+
+New desktops request bundled notifications (`includeMessages` plus per-room
+cursors). A changed response includes the authorized room snapshot and up to
+four incremental message pages. Desktops apply matching pages directly, avoiding
+the separate snapshot and message HTTP round trips. Cursor mismatches, extra
+pages, periodic reconciliation, and older servers fall back to ordinary sync.
+This is an optimization of the existing long-poll protocol, not a WebSocket
+migration. Multi-instance immediate fanout would require a shared event bus.

@@ -1,3 +1,5 @@
+import { LocalAgentConnection, killLocalProcess, type ProgressListener } from './localAgentConnection'
+import { randomUUID } from 'node:crypto'
 import { executableCommand } from './windowsCommand'
 import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -145,8 +147,8 @@ function imageMime(data: Uint8Array): MessageAttachment['mimeType'] | undefined 
   return undefined
 }
 
-async function generatedImages(threadId: string | undefined, env: NodeJS.ProcessEnv): Promise<LocalAgentImage[]> {
-  if (!threadId) return []
+async function generatedImages(threadId: string | undefined, env: NodeJS.ProcessEnv, since = 0): Promise<LocalAgentImage[]> {
+  if (!threadId || !/^[0-9a-f-]{36}$/i.test(threadId)) return []
   const directory = join(env.CODEX_HOME || join(homedir(), '.codex'), 'generated_images', threadId)
   let entries
   try {
@@ -164,6 +166,7 @@ async function generatedImages(threadId: string | undefined, env: NodeJS.Process
   const images: LocalAgentImage[] = []
   let total = 0
   for (const candidate of candidates) {
+    if (candidate.info.mtimeMs < since) continue
     if (images.length >= 4 || candidate.info.size > 8 * 1024 * 1024 || total + candidate.info.size > 20 * 1024 * 1024) continue
     const data = await readFile(candidate.path)
     const mimeType = imageMime(data)
@@ -178,8 +181,13 @@ export async function runLocalAgent(
   config: AgentConfig,
   prompt: string,
   signal?: AbortSignal,
-  inputImages: LocalAgentImage[] = []
+  inputImages: LocalAgentImage[] = [],
+  options: LocalRunOptions = {}
 ): Promise<LocalAgentReply> {
+  options.onProgress?.({ phase: 'connecting', elapsedSeconds: 0, silentSeconds: 0 })
+  if (options.sessionKey && ['codex', 'claude'].includes(config.localAgentId!)) {
+    return runConnectedAgent(config, prompt, signal, inputImages, options)
+  }
   const agent = await validateLocalAgent(config.localAgentId!)
   const env = await spawnEnvironment()
   signal?.throwIfAborted()
@@ -207,22 +215,20 @@ export async function runLocalAgent(
       let stderr = ''
       let bytes = 0
       let failure: Error | undefined
-      const kill = (): void => {
-        if (!child.pid) return
-        try {
-          if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
-          else {
-            const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
-            killer.on('error', () => { child.kill('SIGKILL') })
-          }
-        } catch { /* Already exited. */ }
-      }
+      const kill = (): void => killLocalProcess(child)
       const abort = (): void => { failure = new Error('Stopped'); kill() }
-      const timer = setTimeout(() => { failure = new Error(`${agent.name} timed out after three minutes`); kill() }, 180_000)
-      const cleanup = (): void => { clearTimeout(timer); signal?.removeEventListener('abort', abort) }
+      const started = Date.now()
+      let lastOutput = started
+      options.onProgress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
+      const timer = setInterval(() => options.onProgress?.({
+        phase: 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000),
+        silentSeconds: Math.floor((Date.now() - lastOutput) / 1000)
+      }), 15_000)
+      const cleanup = (): void => { clearInterval(timer); signal?.removeEventListener('abort', abort) }
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
       const collect = (text: string, stream: 'stdout' | 'stderr'): void => {
+        lastOutput = Date.now()
         bytes += Buffer.byteLength(text)
         if (bytes > 8 * 1024 * 1024) { failure = new Error(`${agent.name} produced too much output`); kill(); return }
         if (stream === 'stdout') stdout += text
@@ -268,5 +274,118 @@ export async function runLocalAgent(
     return localAgentReply(agent.name, text, images)
   } finally {
     await rm(directory, { recursive: true, force: true })
+  }
+}
+
+
+export interface LocalRunOptions {
+  sessionKey?: string
+  /** Full transcript is needed only when a connection is cold. */
+  continuationPrompt?: string
+  onProgress?: ProgressListener
+  /** Internal retry for the specific Claude account-login configuration conflict. */
+  claudeAccountLogin?: boolean
+}
+interface ConnectedSession {
+  config: AgentConfig
+  sessionKey: string
+  connection: LocalAgentConnection
+  directory: Promise<string>
+  ready: Promise<{ agent: LocalAgent; env: NodeJS.ProcessEnv; directory: string }>
+  busy: boolean
+  idle?: NodeJS.Timeout
+}
+const connections = new Map<string, ConnectedSession>()
+const MAX_CONNECTIONS = 8
+const IDLE_CONNECTION_MS = 5 * 60_000
+
+function evictConnection(key: string, entry: ConnectedSession): void {
+  if (connections.get(key) === entry) connections.delete(key)
+  clearTimeout(entry.idle)
+  entry.connection.close()
+  void entry.directory.then(async (directory) => {
+    await entry.connection.disposed()
+    await rm(directory, { recursive: true, force: true })
+  }).catch(() => { /* Startup already reports its error. */ })
+}
+
+export function disposeLocalAgentSessions(agentId: string): void {
+  for (const [key, entry] of connections) if (entry.config.id === agentId) evictConnection(key, entry)
+}
+export function resetLocalAgentConversation(conversationId: string, topicId?: string): void {
+  const prefixes = [`direct:${conversationId}:`, `group:${encodeURIComponent(conversationId)}:`, `handoff:${conversationId}:`]
+  for (const [key, entry] of connections) {
+    if (prefixes.some((prefix) => entry.sessionKey.startsWith(prefix))
+      && (!topicId || entry.sessionKey.includes(encodeURIComponent(topicId)))) evictConnection(key, entry)
+  }
+}
+
+async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
+  images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
+  signal?.throwIfAborted()
+  // Include account and complete configuration: edits cannot inherit old persona or login state.
+  let key = JSON.stringify([config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, options.claudeAccountLogin])
+  if (config.localAgentId === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
+    const accountKey = JSON.stringify([config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, true])
+    if (connections.has(accountKey)) key = accountKey
+  }
+  let entry = connections.get(key)
+  if (entry && !entry.connection.alive) { evictConnection(key, entry); entry = undefined }
+  if (entry?.busy) throw new Error('This local agent conversation is already working')
+  if (!entry) {
+    if (connections.size >= MAX_CONNECTIONS) {
+      const idle = [...connections].find(([, candidate]) => !candidate.busy)
+      if (idle) evictConnection(...idle)
+      else throw new Error('All local agent connections are busy. Wait for a task to finish or stop one.')
+    }
+    const connection = new LocalAgentConnection(config.localAgentId as 'codex' | 'claude')
+    const directory = mkdtemp(join(tmpdir(), 'douchat-session-'))
+    const ready = Promise.all([validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
+      .then(async ([agent, env, cwd]) => {
+        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin))
+        return { agent, env, directory: cwd }
+      })
+    entry = { config, sessionKey: options.sessionKey!, connection, directory, ready, busy: true }
+    connections.set(key, entry)
+  }
+  entry.busy = true
+  clearTimeout(entry.idle)
+  const current = entry
+  const abort = (): void => current.connection.close(new Error('Stopped'))
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted) abort()
+  const connectingAt = Date.now()
+  const connectingTimer = setInterval(() => options.onProgress?.({ phase: 'connecting', elapsedSeconds: Math.floor((Date.now() - connectingAt) / 1000), silentSeconds: 0 }), 15_000)
+  try {
+    const { agent, env, directory } = await current.ready
+    clearInterval(connectingTimer)
+    signal?.throwIfAborted()
+    const paths = await Promise.all(images.map(async (image) => {
+      const path = join(directory, `input-${randomUUID()}.${image.mimeType.split('/')[1]}`)
+      await writeFile(path, image.data)
+      return path
+    }))
+    const text = current.connection.hasHistory ? options.continuationPrompt ?? prompt : prompt
+    const effective = paths.length ? `${text}\n\nInspect these attached image files before answering:\n${paths.join('\n')}` : text
+    const started = Date.now()
+    const reply = await current.connection.turn(effective, signal, options.onProgress)
+    const outputImages = agent.id === 'codex' ? await generatedImages(current.connection.thread, env, started) : []
+    return localAgentReply(agent.name, reply, outputImages)
+  } catch (error) {
+    // Never replay a failed turn automatically: tools may already have caused side effects.
+    evictConnection(key, current)
+    if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !current.connection.hasHistory
+      && shouldRetryClaudeWithAccountLogin(config.localAgentId!, error, await spawnEnvironment())) {
+      return runConnectedAgent(config, prompt, signal, images, { ...options, claudeAccountLogin: true })
+    }
+    throw error
+  } finally {
+    clearInterval(connectingTimer)
+    signal?.removeEventListener('abort', abort)
+    current.busy = false
+    if (connections.get(key) === current) {
+      current.idle = setTimeout(() => evictConnection(key, current), IDLE_CONNECTION_MS)
+      current.idle.unref()
+    }
   }
 }

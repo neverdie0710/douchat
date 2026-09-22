@@ -306,7 +306,8 @@ export function AddMembersModal({ onRemoveContacts, onAddContacts, initialFriend
       .sort((a, b) => conversationDisplayName(a, snapshot.agents).localeCompare(conversationDisplayName(b, snapshot.agents)))
     : []
   const friends = remove && conversation?.socialRoom ? conversation.socialRoom.members.filter((person) => person.id !== conversation.socialRoom!.members[0]?.id && conversation.socialRoom!.members[0]?.id === social?.userId).map((person) => ({ person })) : (social?.friendships ?? []).filter((item) => item.status === 'accepted')
-  const matchingFriends = friends.filter((item) => `${item.person.name} ${item.person.email}`.toLocaleLowerCase().includes(needle))
+  const acceptedFriendIds = new Set((social?.friendships ?? []).filter((item) => item.status === 'accepted').map((item) => item.person.id))
+  const matchingFriends = friends.filter((item) => `${item.person.name} ${acceptedFriendIds.has(item.person.id) ? item.person.email : ''}`.toLocaleLowerCase().includes(needle))
   const selectedFriends = friends.filter((item) => selectedFriendIds.includes(item.person.id))
   const selectedConversation = matchingGroups.find((item) => item.id === selectedConversationId)
     ?? snapshot.conversations.find((item) => item.id === selectedConversationId && item.type === 'group')

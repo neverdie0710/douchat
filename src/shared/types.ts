@@ -1,3 +1,4 @@
+import type { AgentPermissions, PermissionRequest } from './agentPermissions'
 import type { SocialAction, SocialResult, SocialSnapshot } from './social'
 export type AgentStatus = 'idle' | 'thinking' | 'offline'
 export type ComputerStatus = 'stopped' | 'starting' | 'ready' | 'working' | 'error'
@@ -30,6 +31,7 @@ export interface CustomLocalAgentInput {
 }
 
 export interface AgentConfig {
+  permissions?: AgentPermissions
   /** Account ownership used for shared group execution. */
   ownerId?: string
   localAgentId?: string
@@ -223,6 +225,8 @@ export interface EmailConnectionTestResult {
 }
 
 export interface ChatMessage {
+  socialTasks?: { id: string; agentId: string; agentName: string; status: string }[]
+  deliveryState?: 'sending' | 'failed'
   id: string
   conversationId: string
   topicId: string
@@ -304,6 +308,12 @@ export interface ModelOption {
 export type ConversationPhase = 'planning' | 'replying' | 'greeting' | 'delivering'
 
 export interface ConversationActivityState {
+  localProgress?: {
+    phase: 'connecting' | 'ready' | 'working' | 'waiting'
+    elapsedSeconds: number
+    silentSeconds: number
+    detail?: string
+  }
   conversationId: string
   topicId: string
   phase: ConversationPhase
@@ -402,6 +412,7 @@ export interface RunEvent {
 }
 
 export interface AppSnapshot {
+  permissionRequests?: PermissionRequest[]
   agents: AgentConfig[]
   agentStatuses: Record<string, AgentStatus>
   conversations: Conversation[]
@@ -441,6 +452,7 @@ export interface CreateAgentInput {
 export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model'>
 
 export interface UpdateAgentInput {
+  permissions?: AgentPermissions
   localAgentId?: string
   localAgentName?: string
 
@@ -525,6 +537,10 @@ export interface UpdateState {
 }
 
 export interface DouchatApi {
+  reportDiagnostic: (event: string, detail: string) => void
+  openDiagnosticLogs: () => Promise<void>
+  copyText: (text: string) => Promise<void>
+  copyAttachment: (attachmentId: string) => Promise<void>
   getSocialSnapshot: () => Promise<SocialSnapshot>
   socialAction: (input: SocialAction) => Promise<SocialResult>
   platform: string
@@ -558,6 +574,7 @@ export interface DouchatApi {
   openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>
+  resolveAgentPermission: (id: string, allow: boolean) => Promise<AppSnapshot>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>
   deleteAgent: (agentId: string) => Promise<AppSnapshot>
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
@@ -569,6 +586,7 @@ export interface DouchatApi {
   testEmailConnector: (input: EmailConnectorInput) => Promise<EmailConnectionTestResult>
   saveEmailConnector: (input: EmailConnectorInput) => Promise<AppSnapshot>
   disconnectEmailConnector: (connectorId: string) => Promise<AppSnapshot>
+  deleteMessage: (conversationId: string, messageId: string) => Promise<boolean>
   deleteConversation: (conversationId: string) => Promise<AppSnapshot>
   setConversationPinned: (conversationId: string, pinned: boolean) => Promise<AppSnapshot>
   markConversationRead: (conversationId: string) => Promise<AppSnapshot>

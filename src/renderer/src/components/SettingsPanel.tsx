@@ -1,3 +1,4 @@
+import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
 import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, X } from 'lucide-react'
@@ -32,6 +33,16 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   onSetRoutineEnabled?: (id: string, enabled: boolean) => Promise<void>
   onRunRoutineNow?: (id: string) => Promise<void>
 }): ReactElement {
+  useEffect(() => {
+    reportDiagnostic('settings.mounted')
+    const timer = window.setTimeout(() => {
+      const element = document.querySelector('.settings-modal')
+      const bounds = element?.getBoundingClientRect()
+      const style = element ? getComputedStyle(element) : undefined
+      reportDiagnostic('settings.layout', JSON.stringify({ tab, width: bounds?.width, height: bounds?.height, display: style?.display, visibility: style?.visibility, opacity: style?.opacity, viewport: [window.innerWidth, window.innerHeight] }))
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [tab])
   const preferences = usePreferences()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState('')
@@ -396,6 +407,15 @@ function AboutTab(): ReactElement {
           <a className="secondary-button about-website-button" href="https://douchat.ai" target="_blank" rel="noreferrer">
             {t('Open website')}<ExternalLink size={14} />
           </a>
+        </div>
+      </div>
+      <div className="about-row">
+        <div className="about-row-copy">
+          <strong>{t('Diagnostic logs')}</strong>
+          <span>{t('Share local logs to help troubleshoot display errors.')}</span>
+        </div>
+        <div className="about-action">
+          <button className="secondary-button" onClick={() => { void window.douchat.openDiagnosticLogs().catch((error) => window.alert(String(error))) }}>{t('Open log folder')}</button>
         </div>
       </div>
     </section>

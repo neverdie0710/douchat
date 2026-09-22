@@ -1,3 +1,4 @@
+import { agentPermissions } from '../shared/agentPermissions'
 import type { SocialRoom, SocialMessage } from '../shared/social'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -1257,6 +1258,7 @@ export class DouchatStore {
       for (const message of [...incoming].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || Number(Boolean(a.parentMessageId)) - Number(Boolean(b.parentMessageId)) || a.id.localeCompare(b.id))) {
         const messageId = `${id}:${message.id}`
         if (message.roomId !== room.id || cleared.has(messageId) || (message.parentMessageId && cleared.has(`${id}:${message.parentMessageId}`))) continue
+        if (!message.parentMessageId) this.setMessageDeliveryState(messageId)
         if (!message.parentMessageId && !this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', messageId)) {
         this.insertMessage({ id: messageId, conversationId: id, topicId: conversation.activeTopicId,
           authorId: message.authorId === ownerId ? 'user' : message.authorId, authorName: message.authorName,
@@ -1264,12 +1266,21 @@ export class DouchatStore {
         conversation.updatedAt = Math.max(conversation.updatedAt, Date.parse(message.createdAt))
         if (message.authorId !== ownerId) unread++
         }
-        if (message.reply) {
+        if (message.agentId) {
+          const parentId = `${id}:${message.parentMessageId || message.id}`
+          const parent = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', parentId)
+          if (parent) {
+            parent.socialTasks = [...(parent.socialTasks ?? []).filter((task) => task.id !== message.id), { id: message.id, agentId: message.agentId, agentName: message.agentName || '', status: message.status }]
+            this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(parent), parentId)
+          }
+        }
+        if (message.reply || message.replyImages?.length) {
           const replyId = `${messageId}:reply`
           if (!cleared.has(replyId)) {
             const existingReply = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', replyId)
             const reply: ChatMessage = { id: replyId, conversationId: id, topicId: conversation.activeTopicId,
-              authorId: message.agentId || 'system', authorName: message.agentName || '', text: message.reply,
+              authorId: message.agentId || 'system', authorName: message.agentName || '', text: message.reply || '',
+              attachments: attachments.get(`${message.id}:reply`) ?? existingReply?.attachments,
               kind: 'message', createdAt: Date.parse(message.createdAt), ...(message.status === 'failed' ? { error: message.reply } : {}) }
             if (existingReply) this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(reply), replyId)
             else { this.insertMessage(reply); unread++ }
@@ -1282,11 +1293,11 @@ export class DouchatStore {
     })
   }
 
-  socialTaskOutbox(accountId = this.currentAccountId): { id: string; ownerId: string; claim: string; reply: string; failed: boolean }[] {
+  socialTaskOutbox(accountId = this.currentAccountId): { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; failed: boolean }[] {
     try { return JSON.parse(this.accountMeta('socialTaskOutbox', accountId) || '[]') } catch { return [] }
   }
 
-  saveSocialTaskResult(result: { id: string; ownerId: string; claim: string; reply: string; failed: boolean }): void {
+  saveSocialTaskResult(result: { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; failed: boolean }): void {
     this.setAccountMeta('socialTaskOutbox', JSON.stringify([
       ...this.socialTaskOutbox(result.ownerId).filter((item) => item.id !== result.id),
       result
@@ -1380,6 +1391,7 @@ export class DouchatStore {
       delete next.model
       delete next.localAgentId
     }
+    if (next.permissions !== undefined) next.permissions = agentPermissions(next.permissions)
     if (next.avatar !== undefined) {
       next.avatar = next.avatar.trim()
       if (!validAvatar(next.avatar)) delete next.avatar
@@ -1686,6 +1698,13 @@ export class DouchatStore {
     )
   }
 
+  setMessageDeliveryState(id: string, deliveryState?: ChatMessage['deliveryState']): void {
+    const message = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', id)
+    if (!message || this.conversation(message.conversationId)?.ownerId !== this.currentAccountId) return
+    message.deliveryState = deliveryState
+    this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(message), id)
+  }
+
   addMessage(message: Omit<ChatMessage, 'id' | 'createdAt'> & { id?: string; createdAt?: number }): ChatMessage {
     const result: ChatMessage = {
       ...message,
@@ -1749,6 +1768,18 @@ export class DouchatStore {
         'DELETE FROM privateMessages WHERE rowid NOT IN (SELECT rowid FROM privateMessages ORDER BY rowid DESC LIMIT ?)',
         PRIVATE_MESSAGE_LIMIT
       )
+    })
+  }
+
+  deleteMessage(conversationId: string, messageId: string): void {
+    this.tx(() => {
+      const conversation = this.conversation(conversationId)
+      if (conversation?.remoteRoomId) {
+        const cleared = new Set(this.socialClearedMessageIds(conversationId))
+        cleared.add(messageId)
+        this.setAccountMeta(`socialClearedMessages:${conversationId}`, JSON.stringify([...cleared]), conversation.ownerId)
+      }
+      this.write('DELETE FROM messages WHERE conversationId = ? AND id = ?', conversationId, messageId)
     })
   }
 

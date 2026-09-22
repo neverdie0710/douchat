@@ -204,11 +204,12 @@ describe('usage and billing settings', () => {
     expect(container.textContent).not.toContain('Custom local agent')
   })
 
-  it('keeps the About page focused on version controls and the website', async () => {
+  it('offers diagnostic logs alongside version controls and the website', async () => {
     const update = { status: 'disabled' as const, currentVersion: '0.1.6' }
     Object.defineProperty(window, 'douchat', {
       configurable: true,
       value: {
+        openDiagnosticLogs: vi.fn(async () => undefined),
         getUpdateState: vi.fn(async () => update),
         onUpdateState: vi.fn(() => () => undefined),
         checkForUpdates: vi.fn(async () => update),
@@ -233,6 +234,9 @@ describe('usage and billing settings', () => {
 
     expect(container.textContent).toContain('0.1.6')
     expect(container.textContent).toContain('Douchat website')
+    const logs = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Open log folder')!
+    await act(async () => logs.click())
+    expect(window.douchat.openDiagnosticLogs).toHaveBeenCalledOnce()
     expect(container.querySelector('.about-note')).toBeNull()
     expect(container.textContent).not.toContain('Updates are downloaded from signed Douchat releases')
   })

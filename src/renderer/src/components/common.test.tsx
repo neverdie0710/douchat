@@ -140,7 +140,7 @@ describe('user avatar', () => {
 })
 
 
-it('keeps remote avatars while limiting mentions to owned group agents', () => {
+it('only offers owned agents and peers with published allow or ask permissions', () => {
   const conversation = { ownerId: 'alice', agentIds: [], socialRoom: { agents: [
     { id: 'mine', localId: 'one', ownerId: 'alice', name: 'Mine', avatarEmoji: '🐱' },
     { id: 'peer', localId: 'two', ownerId: 'bob', name: 'Peer', avatarSeed: 'peer-seed', color: '#112233', localAgentId: 'claude', avatar: 'https://example.com/avatar.png' },
@@ -150,5 +150,10 @@ it('keeps remote avatars while limiting mentions to owned group agents', () => {
   expect(members[1]).toMatchObject({ avatarSeed: 'peer-seed', avatar: 'https://example.com/avatar.png', color: '#112233', localAgentId: 'claude' })
   expect(members[2].systemRole).toBe('admin')
   expect(mentionableAgents(conversation, members).map((agent) => agent.id)).toEqual(['mine'])
+  conversation.socialRoom!.agents[1].interactionHumans = 'allow'
+  conversation.socialRoom!.agents[2].interactionHumans = 'ask'
+  expect(mentionableAgents(conversation, members).map((agent) => agent.id)).toEqual(['mine', 'peer', 'admin'])
+  conversation.socialRoom!.agents[1].interactionHumans = 'deny'
+  expect(mentionableAgents(conversation, members).map((agent) => agent.id)).toEqual(['mine', 'admin'])
   expect(mentionableAgents({ ...conversation, socialRoom: undefined }, members)).toEqual(members)
 })

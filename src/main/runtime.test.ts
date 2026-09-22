@@ -108,6 +108,26 @@ afterEach(() => {
 })
 
 describe('DouchatRuntime', () => {
+  it('keeps private specialist progress out of the caller’s direct chat while allowing group and recipient progress', () => {
+    const { store, runtime } = createRuntime()
+    const internal = runtime as unknown as {
+      setActivity: (conversationId: string, topicId: string, phase: string, ids: string[], label: string, extra?: object, sourceAgentId?: string) => void
+      activity: Map<string, { agentIds: string[]; label: string }>
+    }
+    const topic = store.activeTopicId('direct-dobi')
+    internal.setActivity('direct-dobi', topic, 'replying', ['dobi'], 'Contacting Lin')
+    const original = internal.activity.get('direct-dobi')
+    internal.setActivity('direct-dobi', topic, 'replying', ['lin'], 'Lin reconnecting', {}, 'lin')
+    expect(internal.activity.get('direct-dobi')).toBe(original)
+    // Tool events inherit the caller's IDs, so source identity must also be checked.
+    internal.setActivity('direct-dobi', topic, 'replying', ['dobi'], 'Lin tool', { action: { tool: 'search' } }, 'lin')
+    expect(internal.activity.get('direct-dobi')).toBe(original)
+    internal.setActivity('direct-lin', store.activeTopicId('direct-lin'), 'replying', ['lin'], 'Lin', {}, 'lin')
+    expect(internal.activity.get('direct-lin')?.agentIds).toEqual(['lin'])
+    internal.setActivity('crew', store.activeTopicId('crew'), 'replying', ['lin'], 'Lin', {}, 'lin')
+    expect(internal.activity.get('crew')?.agentIds).toEqual(['lin'])
+  })
+
   it.each(['agent', 'conversation'] as const)('disposes a busy %s session without resetting an active agent', (scope) => {
     const { runtime } = createRuntime()
     const reset = vi.fn(() => { throw new Error('Agent is already processing') })
@@ -146,16 +166,100 @@ describe('DouchatRuntime', () => {
     await expect(runtime.executeSocialTask('local-demo-account', agent.id, 'task', 'Do work', abort.signal)).rejects.toThrow('取消')
   })
 
+  it('returns generated image bytes with a shared task reply', async () => {
+    const { store, runtime } = createRuntime()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    const image = await store.saveImageAttachment({ name: 'car.png', mimeType: 'image/png', data: Buffer.from('iVBORw0KGgo=', 'base64') }, 'alice')
+    const internal = runtime as unknown as { canRunLive: () => Promise<boolean>; runReply: (options: unknown) => Promise<object> }
+    vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
+    vi.spyOn(internal, 'runReply').mockResolvedValue({ text: '', attachments: [image] })
+    await expect(runtime.executeSocialTask('alice', admin.id, 'image-task', 'Draw', new AbortController().signal)).resolves.toEqual({
+      text: '', images: [{ name: 'car.png', mimeType: 'image/png', base64: 'iVBORw0KGgo=' }]
+    })
+  })
+
   it('executes the owner’s built-in agent in shared group context', async () => {
     const { store, runtime } = createRuntime()
     const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
     const internal = runtime as unknown as { canRunLive: () => Promise<boolean>; runReply: (options: unknown) => Promise<{ text: string }> }
     const reply = vi.spyOn(internal, 'runReply').mockResolvedValue({ text: 'Done' })
     vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
-    expect(await runtime.executeSocialTask('alice', admin.id, 'shared-task', 'Help the group', new AbortController().signal)).toBe('Done')
+    expect(await runtime.executeSocialTask('alice', admin.id, 'shared-task', 'Help the group', new AbortController().signal)).toEqual({ text: 'Done' })
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ id: admin.id }), context: 'group' }))
     await expect(runtime.executeSocialTask('bob', admin.id, 'foreign-task', 'Run', new AbortController().signal)).rejects.toThrow('不属于')
     expect(reply).toHaveBeenCalledTimes(1)
+  })
+
+  it('guards the actual shared cloud tool invocation and leaves private owner tools separate', async () => {
+    const { store } = createRuntime()
+    const operation = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'secret' }], details: {} }))
+    const runtime = new DouchatRuntime(store, { ...idleComputer, createTools: () => [{
+      name: 'computer_list_files', label: 'Read files', description: 'Read files',
+      parameters: { type: 'object', properties: {} } as any, execute: operation
+    }] }, () => {})
+    const agent = store.accountAgents[0]
+    const internal = runtime as any
+    vi.spyOn(internal, 'resolveModel').mockReturnValue({ id: 'mock', provider: 'mock', api: 'openai-completions' })
+    internal.sharedCallers.set('social:task', { requesterId: 'other', requester: 'Other', roomName: 'Group', delegate: vi.fn() })
+    const session = internal.session(agent, 'social:task', 'group')
+    const guarded = session.state.tools.find((tool: any) => tool.name === 'computer_list_files')
+    const work = guarded.execute('tool-id', { directory: 'Documents' })
+    expect(operation).not.toHaveBeenCalled()
+    runtime.resolveAgentPermission(runtime.snapshot().permissionRequests![0].id, true)
+    await work
+    expect(operation).toHaveBeenCalledOnce()
+    const privateSession = internal.session(agent, 'direct:owner:topic', 'direct')
+    await privateSession.state.tools.find((tool: any) => tool.name === 'computer_list_files').execute('private', {})
+    expect(operation).toHaveBeenCalledTimes(2)
+    expect(runtime.snapshot().permissionRequests).toHaveLength(0)
+    const abort = new AbortController()
+    const pending = guarded.execute('cancelled-tool', {}, abort.signal)
+    const stopped = expect(pending).rejects.toThrow('declined')
+    abort.abort()
+    await stopped
+    expect(operation).toHaveBeenCalledTimes(2)
+    expect(runtime.snapshot().permissionRequests).toHaveLength(0)
+  })
+
+  it('does not expire a cloud reply while the owner is reviewing a permission request', async () => {
+    vi.useFakeTimers()
+    const { store } = createRuntime()
+    const runtime = new DouchatRuntime(store, idleComputer, () => {})
+    const agent = store.accountAgents[0]
+    const internal = runtime as any
+    const abort = vi.fn()
+    vi.spyOn(internal, 'session').mockReturnValue({
+      abort,
+      state: { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'Approved result' }] }] },
+      prompt: () => internal.permissions.authorize(agent, { requester: 'Friend', roomName: 'Group', capability: 'filesRead', operation: 'read', details: '{}' })
+    })
+    let completed = false
+    const result = internal.runReply({ config: agent, sessionKey: 'social:approval', context: 'group', prompt: 'Read', conversationId: 'crew', topicId: 'main' }).then((reply: any) => { completed = true; return reply })
+    try {
+      await vi.advanceTimersByTimeAsync(180_000)
+      expect(completed).toBe(false)
+      expect(abort).not.toHaveBeenCalled()
+      runtime.resolveAgentPermission(runtime.snapshot().permissionRequests![0].id, true)
+      expect((await result).text).toBe('Approved result')
+    } finally { runtime.disposeAgent(agent.id); vi.useRealTimers() }
+  })
+
+  it('requires an explicit execution grant before starting an externally requested local agent', async () => {
+    const { store, runtime } = createRuntime()
+    const agent = store.createAgent({ name: 'Local', role: '', instructions: '', color: '', provider: 'local', model: 'default', localAgentId: 'codex' })
+    const internal = runtime as any
+    const reply = vi.spyOn(internal, 'runReply').mockResolvedValue({ text: 'Done' })
+    vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
+    const result = runtime.executeSocialTask(store.currentAccountId!, agent.id, 'external-local', 'Read a file', new AbortController().signal, '', {
+      requesterId: 'other', requester: 'Other', roomName: 'Group', delegate: vi.fn()
+    })
+    const rejected = expect(result).rejects.toThrow('declined')
+    await vi.waitFor(() => expect(runtime.snapshot().permissionRequests).toHaveLength(1))
+    expect(runtime.snapshot().permissionRequests![0].capability).toBe('localExecution')
+    expect(reply).not.toHaveBeenCalled()
+    runtime.resolveAgentPermission(runtime.snapshot().permissionRequests![0].id, false)
+    await rejected
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('creates a persistent routine from a top-level chat tool and prevents duplicates', async () => {
@@ -583,6 +687,35 @@ describe('DouchatRuntime', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it.each(['signal', 'conversation'])('cancels a stalled model through %s even when the provider ignores abort', async (method) => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-cancel-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+    const config = store.agent('dobi')!
+    const session = {
+      state: { messages: [] },
+      prompt: vi.fn(() => new Promise<void>(() => undefined)),
+      abort: vi.fn()
+    }
+    const internals = runtime as unknown as {
+      sessions: Map<string, { agentId: string; agent: typeof session }>
+      runReply: (options: object) => Promise<{ text: string; error?: string }>
+      busyAgents: Set<string>
+    }
+    internals.sessions.set('cancel-me', { agentId: config.id, agent: session })
+    const abort = new AbortController()
+    const pending = internals.runReply({ config, sessionKey: 'cancel-me', context: 'direct', prompt: 'Hello',
+      conversationId: 'direct-dobi', topicId: store.activeTopicId('direct-dobi'), signal: abort.signal })
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce())
+    if (method === 'signal') abort.abort()
+    else runtime.stopConversation('direct-dobi')
+    await expect(pending).resolves.toMatchObject({ text: '', error: 'Reply stopped' })
+    expect(session.abort).toHaveBeenCalled()
+    expect(internals.sessions.has('cancel-me')).toBe(false)
+    expect(internals.busyAgents.has(config.id)).toBe(false)
+  })
+
   it('stops a stalled group coordinator instead of leaving the chat loading forever', async () => {
     vi.useFakeTimers()
     try {
@@ -775,6 +908,31 @@ describe('DouchatRuntime', () => {
     expect(new Set(sent?.deliveries?.[0].replies?.map((reply) => reply.replyGroupId))).toEqual(
       new Set([receivedReplies[0]?.replyGroupId])
     )
+  })
+
+  it.each(['success', 'failure', 'stop'] as const)('cleans recipient handoff activity on %s', async (outcome) => {
+    const { runtime } = createRuntime()
+    const internals = runtime as unknown as {
+      withHandoffConversation: (id: string, parent: AbortSignal, run: (signal: AbortSignal) => Promise<string>) => Promise<string>
+      activity: Map<string, unknown>
+      aborts: Map<string, AbortController>
+    }
+    const parent = new AbortController()
+    const pending = internals.withHandoffConversation('direct-lin', parent.signal, async (signal) => {
+      internals.activity.set('direct-lin', { phase: 'replying' })
+      expect(internals.aborts.has('direct-lin')).toBe(true)
+      if (outcome === 'failure') throw new Error('provider failed')
+      if (outcome === 'stop') {
+        runtime.stopConversation('direct-lin')
+        expect(signal.aborted).toBe(true)
+      }
+      return 'done'
+    })
+    if (outcome === 'success') await expect(pending).resolves.toBe('done')
+    else await expect(pending).rejects.toThrow(outcome === 'stop' ? 'Handoff stopped' : 'provider failed')
+    expect(internals.activity.has('direct-lin')).toBe(false)
+    expect(internals.aborts.has('direct-lin')).toBe(false)
+    expect(parent.signal.aborted).toBe(false)
   })
 
   it('keeps inline agent handoffs out of the direct-chat transcript', async () => {

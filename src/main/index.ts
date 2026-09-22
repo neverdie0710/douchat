@@ -1,9 +1,12 @@
+import { DiagnosticLog } from './diagnostics'
+import { release as osRelease } from 'node:os'
+import { notifyWindows } from './windowNotifications'
 import { SocialClient } from './social'
 import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, powerMonitor, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -34,6 +37,10 @@ import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
 import { openLocalAgentTerminal } from './terminalLauncher'
 
+// Use the software compositor on Windows: modal layers can blank the entire
+// window on affected GPU/driver combinations. Must run before app readiness.
+if (process.platform === 'win32') app.disableHardwareAcceleration()
+
 const development = !app.isPackaged
 // Chromium derives the macOS safeStorage Keychain service from the application
 // name. Keep development on "Douchat Dev Safe Storage" so local builds never
@@ -53,6 +60,57 @@ const webAppUrl = normalizeWebAppUrl(
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
+const diagnostics = new DiagnosticLog(join(app.getPath('userData'), 'logs'))
+diagnostics.write('app.start', JSON.stringify({ version: app.getVersion(), platform: process.platform, arch: process.arch, os: osRelease(), electron: process.versions.electron, chrome: process.versions.chrome, hardwareAccelerationDisabled: process.platform === 'win32' }))
+process.on('uncaughtExceptionMonitor', (error) => diagnostics.write('main.uncaughtException', error.stack || error.message))
+const settingsTimers = new Map<number, ReturnType<typeof setTimeout>>()
+function clearSettingsTimer(id: number): void {
+  clearTimeout(settingsTimers.get(id))
+  settingsTimers.delete(id)
+}
+async function openDiagnosticLogs(): Promise<void> {
+  diagnostics.write('logs.open')
+  const error = await shell.openPath(diagnostics.directory)
+  if (error) {
+    diagnostics.write('logs.open-failed', error)
+    dialog.showErrorBox('Douchat', `无法打开日志目录：${diagnostics.directory}\n${error}`)
+  }
+}
+app.on('browser-window-created', (_event, window) => {
+  const contents = window.webContents
+  const id = contents.id
+  const record = (event: string, detail = '') => diagnostics.write(event, `window=${id} ${detail}`)
+  contents.on('preload-error', (_event, _path, error) => record('preload.error', error.stack || error.message))
+  contents.on('did-fail-load', (_event, code, description, _url, mainFrame) => record('window.load-failed', JSON.stringify({ code, description, mainFrame })))
+  contents.on('render-process-gone', (_event, details) => record('renderer.gone', JSON.stringify(details)))
+  window.on('unresponsive', () => record('window.unresponsive'))
+  window.on('responsive', () => record('window.responsive'))
+  window.on('closed', () => clearSettingsTimer(id))
+  contents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && (input.control || input.meta) && input.shift && input.key.toLowerCase() === 'l') {
+      event.preventDefault()
+      void openDiagnosticLogs()
+    }
+  })
+})
+app.on('child-process-gone', (_event, details) => diagnostics.write('child-process.gone', JSON.stringify(details)))
+ipcMain.on('douchat:diagnostic', (event, name: unknown, detail: unknown) => {
+  if (!isDouchatRenderer(event.sender) || typeof name !== 'string' || typeof detail !== 'string' || name.length > 100 || detail.length > 16000) return
+  const id = event.sender.id
+  diagnostics.write(name, `window=${id} ${detail}`)
+  if (name === 'settings.open-request') {
+    clearSettingsTimer(id)
+    settingsTimers.set(id, setTimeout(() => {
+      settingsTimers.delete(id)
+      diagnostics.write('settings.render-timeout', `window=${id} No layout acknowledgement within 5 seconds`)
+    }, 5000))
+  } else if (name === 'settings.layout' || name === 'settings.close' || name === 'dialog.render-error') clearSettingsTimer(id)
+})
+ipcMain.handle('douchat:open-diagnostic-logs', async (event) => {
+  if (!isDouchatRenderer(event.sender)) return
+  await openDiagnosticLogs()
+})
+
 
 let mainWindow: BrowserWindow | null = null
 let store: DouchatStore
@@ -85,7 +143,7 @@ function receiveAppUrl(url: string): void {
   if (isDesktopCreditsUrl(url, authScheme)) {
     pendingCreditsRefresh = true
     focusMainWindow()
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('douchat:credits-updated')
+    if (mainWindow) notifyWindows([mainWindow], 'douchat:credits-updated')
     return
   }
   if (!isDesktopAuthUrl(url, authScheme)) return
@@ -115,8 +173,16 @@ if (initialAppUrl) {
   else pendingAuthUrl = initialAppUrl
 }
 
+let localWorkBlocker: number | undefined
+let quitting = false
 function broadcast(snapshot: AppSnapshot): void {
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:snapshot', snapshot)
+  const localWork = !quitting && snapshot.agents.some((agent) => agent.localAgentId && snapshot.agentStatuses[agent.id] === 'thinking')
+  if (localWork && localWorkBlocker === undefined) localWorkBlocker = powerSaveBlocker.start('prevent-app-suspension')
+  if (!localWork && localWorkBlocker !== undefined) {
+    powerSaveBlocker.stop(localWorkBlocker)
+    localWorkBlocker = undefined
+  }
+  notifyWindows(BrowserWindow.getAllWindows(), 'douchat:snapshot', snapshot)
 }
 
 let social: SocialClient | undefined
@@ -198,11 +264,11 @@ function broadcastAuth(state: DesktopAuthState): void {
   } else {
     void builtInRefresh
   }
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:auth-state', state)
+  notifyWindows(BrowserWindow.getAllWindows(), 'douchat:auth-state', state)
 }
 
 function broadcastUpdate(state: UpdateState): void {
-  for (const window of BrowserWindow.getAllWindows()) window.webContents.send('douchat:update-state', state)
+  notifyWindows(BrowserWindow.getAllWindows(), 'douchat:update-state', state)
 }
 
 const chatWindows = new Map<string, BrowserWindow>()
@@ -516,6 +582,16 @@ app.whenReady().then(() => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     return store.messagePage(conversationId, topicId, before)
   })
+  ipcMain.handle('douchat:copy-text', (event, text: string) => {
+    if (!isDouchatRenderer(event.sender) || typeof text !== 'string') throw new Error('Invalid clipboard request')
+    clipboard.writeText(text)
+  })
+  ipcMain.handle('douchat:copy-attachment', async (event, attachmentId: string) => {
+    if (!isDouchatRenderer(event.sender) || typeof attachmentId !== 'string') throw new Error('Invalid clipboard request')
+    const image = nativeImage.createFromDataURL(await store.attachmentDataUrl(attachmentId))
+    if (image.isEmpty()) throw new Error('Image could not be copied')
+    clipboard.writeImage(image)
+  })
   ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
   ipcMain.handle('douchat:open-local-file', async (event, path: string) => {
     if (!isDouchatRenderer(event.sender) || typeof path !== 'string') throw new Error('Invalid file request')
@@ -545,6 +621,10 @@ app.whenReady().then(() => {
     )
     // A new bot opens with its own proactive greeting, like a new topic does.
     if (direct) void runtime.greet(direct.id)
+    return push()
+  })
+  ipcMain.handle('douchat:resolve-agent-permission', (_event, id: string, allow: boolean) => {
+    runtime.resolveAgentPermission(id, allow)
     return push()
   })
   ipcMain.handle('douchat:update-agent', async (_event, agentId: string, input: UpdateAgentInput) => {
@@ -623,6 +703,18 @@ app.whenReady().then(() => {
     await emailConnectors.disconnect(connectorId)
     for (const agent of store.accountAgents) runtime.disposeAgent(agent.id)
     return push()
+  })
+  ipcMain.handle('douchat:delete-message', async (event, conversationId: string, messageId: string) => {
+    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string' || typeof messageId !== 'string') throw new Error('Invalid message request')
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
+    const parent = BrowserWindow.fromWebContents(event.sender)
+    const options = { type: 'warning' as const, message: '删除这条消息？', detail: '消息将从本地聊天记录中删除，无法恢复。此操作不会撤回对方的消息。', buttons: ['取消', '删除'], defaultId: 0, cancelId: 0 }
+    const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+    if (result.response !== 1) return false
+    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
+    store.deleteMessage(conversationId, messageId)
+    push()
+    return true
   })
   ipcMain.handle('douchat:delete-conversation', async (event, conversationId: string) => {
     const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
@@ -760,6 +852,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  quitting = true
+  if (localWorkBlocker !== undefined) { powerSaveBlocker.stop(localWorkBlocker); localWorkBlocker = undefined }
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)
   scheduler?.dispose()
   computer?.dispose()

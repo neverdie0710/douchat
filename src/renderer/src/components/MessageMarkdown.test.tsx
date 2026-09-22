@@ -8,11 +8,20 @@ vi.mock('../preferences', () => ({
     text
   )
 }))
-import { MessageMarkdown, localFilePathFromHref, messageMarkdownControls, messageMarkdownPlugins } from './MessageMarkdown'
+import { QuoteMarkdown, MessageMarkdown, localFilePathFromHref, messageMarkdownControls, messageMarkdownPlugins } from './MessageMarkdown'
 import { CodeArtifact } from './CodeArtifact'
 const render = (text: string): string => renderToStaticMarkup(<MessageMarkdown text={text} />)
 
 describe('message Markdown', () => {
+  it('renders compact quote Markdown without raw emphasis markers or full-size blocks', () => {
+    const html = renderToStaticMarkup(<QuoteMarkdown text={'**热度**：`Jev`\n\n- [文档](https://example.com)\n\n```js\nconst x = 1\n```'} />)
+    expect(html).toContain('<strong>热度</strong>')
+    expect(html).not.toContain('**')
+    expect(html).toContain('<code>Jev</code>')
+    expect(html).toContain('href="https://example.com"')
+    expect(html).not.toContain('<pre')
+    expect(html).not.toContain('<button')
+  })
   it('renders Chinese emphasis, lists and inline filenames', () => {
     const html = render('共找到 **23 个视频文件**：\n\n- **文稿 Documents（8 个）**：`App.mp4`、`App2.mp4`\n- **影片**：`movie.mov`')
     expect(html).toContain('<strong')
