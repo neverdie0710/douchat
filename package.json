@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -149,6 +149,11 @@
       "category": "Utility",
       "maintainer": "ThinkAny <idoubi@users.noreply.github.com>",
       "syncDesktopName": true,
+      "desktop": {
+        "entry": {
+          "MimeType": "x-scheme-handler/douchat;"
+        }
+      },
       "target": [
         {
           "target": "AppImage",

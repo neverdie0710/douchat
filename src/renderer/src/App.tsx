@@ -1,3 +1,4 @@
+import { LocalModelDialog } from './components/LocalModelDialog'
 import { reportDiagnostic } from './diagnostics'
 import { ChatErrorBoundary } from './components/ChatErrorBoundary'
 import { AgentPermissionsDialog, AgentPermissionPrompt } from './components/AgentPermissions'
@@ -43,6 +44,7 @@ type Dialog =
   | { kind: 'add-friend' }
   | { kind: 'friend-profile'; personId: string; anchor: ProfileAnchor }
   | { kind: 'member-profile'; agentId: string; anchor: ProfileAnchor }
+  | { kind: 'local-model'; agent: AgentConfig }
   | { kind: 'bot'; agent?: AgentConfig; localAgentId?: string }
   | { kind: 'add-members' | 'remove-members'; conversation: Conversation }
   | { kind: 'group'; conversation?: Conversation; initialAgentIds?: string[]; initialFriendIds?: string[] }
@@ -479,7 +481,7 @@ function WorkspaceApp(): ReactElement {
             selection={contact}
             onMessage={openChat}
             onStartDirect={(agentId) => { void startDirectChat(agentId) }}
-            onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+            onEditBot={(agent) => setDialog({ kind: 'bot', agent })} onConfigureModel={(agent) => setDialog({ kind: 'local-model', agent })}
               onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
             onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
             onTogglePin={togglePin}
@@ -569,7 +571,7 @@ function WorkspaceApp(): ReactElement {
         <button autoFocus className="icon-button member-profile-close" aria-label={t('Close')} onClick={() => setDialog(null)}><X size={18} /></button>
         <ContactCard social={socialSnapshot} snapshot={uiSnapshot} selection={{ kind: 'friend', id: dialog.personId }}
           onFriendMessage={(id) => { setDialog(null); void openFriendChat(id) }}
-          onMessage={openChat} onStartDirect={(id) => void startDirectChat(id)} onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+          onMessage={openChat} onStartDirect={(id) => void startDirectChat(id)} onEditBot={(agent) => setDialog({ kind: 'bot', agent })} onConfigureModel={(agent) => setDialog({ kind: 'local-model', agent })}
               onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
           onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent} onTogglePin={togglePin} />
       </MemberProfilePopover>}
@@ -579,7 +581,7 @@ function WorkspaceApp(): ReactElement {
             <ContactCard snapshot={{ ...uiSnapshot, agents: [...uiSnapshot.agents, ...members.filter((member) => !uiSnapshot.agents.some((agent) => agent.id === member.id))] }} ownerName={conversation?.socialRoom?.members.find((person) => person.id === members.find((agent) => agent.id === dialog.agentId)?.ownerId)?.name} readOnly={!uiSnapshot.agents.some((agent) => agent.id === dialog.agentId)} selection={{ kind: 'bot', id: dialog.agentId }}
               onMessage={(id) => { setDialog(null); openChat(id) }}
               onStartDirect={(agentId) => { setDialog(null); void startDirectChat(agentId) }}
-              onEditBot={(agent) => setDialog({ kind: 'bot', agent })}
+              onEditBot={(agent) => setDialog({ kind: 'bot', agent })} onConfigureModel={(agent) => setDialog({ kind: 'local-model', agent })}
               onEditPermissions={(agent) => setDialog({ kind: 'agent-permissions', agent })}
               onRemoveFromContacts={(group) => { void window.douchat.updateConversation(group.id, { savedToContacts: false }).then(setSnapshot).catch((error) => fail(error, 'Could not save changes')) }} onDeleteConversation={deleteConversation} onDeleteBot={deleteAgent}
               onTogglePin={togglePin} />
@@ -590,11 +592,18 @@ function WorkspaceApp(): ReactElement {
       {dialog?.kind === 'agent-permissions' && <AgentPermissionsDialog agent={dialog.agent} onClose={() => setDialog(null)}
         onSave={async (permissions) => { setSnapshot(await window.douchat.updateAgent(dialog.agent.id, { permissions })) }} />}
       {dialog?.kind === 'add-friend' && <AddFriendModal onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'local-model' && <LocalModelDialog key={dialog.agent.id} agent={dialog.agent} cloudModels={snapshot.models}
+        onModelSettings={() => { setDialog(null); setSettingsTab('models'); setSettingsOpen(true) }}
+        onCreditsSettings={() => { setDialog(null); setSettingsTab('usage'); setSettingsOpen(true) }}
+        onClose={() => setDialog(null)} onSave={async (model, provider) => { setSnapshot(await window.douchat.updateAgent(dialog.agent.id, provider === 'cloud' ? { cloudModel: { model } } : provider?.startsWith('custom:') ? { customModel: { providerId: provider.slice('custom:'.length), model } } : { model })) }} />}
       {dialog?.kind === 'bot' && (
         <BotModal
           agent={dialog.agent}
           localAgents={localAgents}
+          cloudModels={snapshot.models}
           initialLocalAgentId={dialog.localAgentId}
+          onModelSettings={() => { setDialog(null); setSettingsTab('models'); setSettingsOpen(true) }}
+          onCreditsSettings={() => { setDialog(null); setSettingsTab('usage'); setSettingsOpen(true) }}
           onSettings={() => { setDialog(null); setSettingsOpen(true) }}
           onClose={() => setDialog(null)}
           onCreate={createAgent}

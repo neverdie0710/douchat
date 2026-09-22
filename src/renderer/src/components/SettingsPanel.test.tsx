@@ -251,6 +251,7 @@ describe('usage and billing settings', () => {
 
     expect(container.textContent).toContain('0.1.6')
     expect(container.textContent).toContain('Douchat website')
+    expect(container.querySelector<HTMLAnchorElement>('a.about-website-button')?.href).toBe('https://douchat.ai/?utm_source=douchat-desktop')
     const logs = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Open log folder')!
     await act(async () => logs.click())
     expect(window.douchat.openDiagnosticLogs).toHaveBeenCalledOnce()

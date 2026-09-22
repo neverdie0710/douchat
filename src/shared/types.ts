@@ -1,3 +1,4 @@
+import type { CustomModelConfig, CustomProviderInput, CustomModelTest } from './customModels'
 import type { AgentPermissions, PermissionRequest } from './agentPermissions'
 import type { SocialAction, SocialResult, SocialSnapshot } from './social'
 export type AgentStatus = 'idle' | 'thinking' | 'offline'
@@ -16,6 +17,8 @@ export interface LocalAgent {
   path?: string
   desktopPath?: string
   version?: string
+  latestVersion?: string
+  updateStatus?: 'available' | 'current' | 'unknown'
   chatSupported: boolean
   status: 'ready' | 'desktop-only' | 'not-found'
   /** Authentication is deliberately checked by the CLI when the first chat runs. */
@@ -69,6 +72,8 @@ export interface AgentConfig {
 export type BuiltInAgentCapability = 'manage_agents'
 
 export interface BuiltInAgentUserOverrides {
+  /** Explicit model selection, validated and resolved by the main process. */
+  modelBinding?: Pick<AgentConfig, 'provider' | 'model'>
   name?: string
   avatar?: string
   avatarEmoji?: string
@@ -226,7 +231,7 @@ export interface EmailConnectionTestResult {
 
 export interface ChatMessage {
   socialTasks?: { id: string; agentId: string; agentName: string; status: string }[]
-  deliveryState?: 'sending' | 'failed'
+  deliveryState?: 'sending' | 'confirming' | 'failed'
   id: string
   conversationId: string
   topicId: string
@@ -435,6 +440,8 @@ export interface AppSnapshot {
 }
 
 export interface CreateAgentInput {
+  customModel?: { providerId: string; model: string }
+  cloudModel?: { model: string }
   localAgentId?: string
   localAgentName?: string
 
@@ -447,11 +454,13 @@ export interface CreateAgentInput {
   labels?: string
 }
 
-/** Provider/model bindings are resolved by the main process. Cloud contacts
- * deliberately never accept a renderer-selected model. */
+/** Provider/model bindings are resolved by the main process. Built-in cloud contacts
+ * remain service-owned; custom selections are validated against saved providers. */
 export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model'>
 
 export interface UpdateAgentInput {
+  customModel?: { providerId: string; model: string }
+  cloudModel?: { model: string }
   permissions?: AgentPermissions
   localAgentId?: string
   localAgentName?: string
@@ -564,6 +573,7 @@ export interface DouchatApi {
   getUpdateState: () => Promise<UpdateState>
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<UpdateState>
+  listLocalAgentModels: (agentId: string) => Promise<import('./localModels').LocalModelList>
   detectLocalAgents: () => Promise<LocalAgent[]>
   maintainLocalAgent: (id: string) => Promise<boolean>
   openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>
@@ -575,6 +585,9 @@ export interface DouchatApi {
   /** Reopen a file reference saved in chat history after main-process validation. */
   openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
+  getCustomModels: () => Promise<CustomModelConfig>
+  saveCustomModels: (providers: CustomProviderInput[], defaultModel: string) => Promise<CustomModelConfig>
+  testCustomModel: (input: CustomModelTest) => Promise<{ ok: boolean; error?: string; model?: string }>
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>
   resolveAgentPermission: (id: string, allow: boolean) => Promise<AppSnapshot>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>

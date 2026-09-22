@@ -92,6 +92,12 @@ export function isDouchatCreditError(raw: string | undefined): boolean {
 }
 
 function localAgentFailure(source: string): Omit<RuntimeErrorSummary, 'detail'> | undefined {
+  if (/cursor/i.test(source) && /workspace trust required/i.test(source)) {
+    return {
+      title: 'Cursor needs workspace trust',
+      guidance: 'Cursor could not start in the temporary chat workspace. Update Douchat and try again.'
+    }
+  }
   if (/grok|runtime-socket deny|socket deny resolution/i.test(source) && /sandbox|runtime-socket deny/i.test(source)) {
     const socket = /socket.*symlink|runtime-socket deny.*symlink/i.test(source)
     return {

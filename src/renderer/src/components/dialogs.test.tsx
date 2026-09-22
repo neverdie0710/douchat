@@ -237,17 +237,37 @@ describe('create agent terminology', () => {
     expect(container.textContent).toContain('Create agent')
     expect(container.textContent).toContain('Agent name')
     expect(container.textContent).toContain('Runs with')
-    expect(container.textContent).toContain('Use cloud model')
-    expect(container.textContent).toContain('Use local agent')
+    expect(container.textContent).toContain('Custom model')
+    expect(container.textContent).toContain('Local agent')
     expect(container.textContent).not.toContain('Create contact')
-    expect(container.textContent).not.toContain('Local agent')
+    expect([...container.querySelectorAll('[role="radio"] strong')].map(button => button.textContent)).toEqual(['Custom model', 'Local agent'])
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Use local agent'))!
+      .find((button) => button.textContent?.includes('Local agent'))!
     await act(async () => local.click())
 
     expect(container.textContent).toContain('Local agent')
     expect(container.textContent).toContain('No available local agents')
+  })
+
+  it('creates an agent with a saved custom model without exposing its key', async () => {
+    Object.defineProperty(window, 'douchat', { configurable: true, value: {
+      getCustomModels: vi.fn(async () => ({ providers: [{ id: 'mine', name: 'Mine', kind: 'openai', apiBase: 'https://example.com', hasKey: true, models: ['org/model'] }], defaultModel: 'mine/org/model' }))
+    } })
+    const onCreate = vi.fn(async () => undefined)
+    await act(async () => root.render(<BotModal localAgents={[]} onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
+    const custom = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(b => b.textContent?.includes('Custom model'))!
+    await act(async () => custom.click())
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model provider"]')?.value).toBe('mine')
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model"]')?.value).toBe('org/model')
+    const name = container.querySelector<HTMLInputElement>('input')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'My agent')
+      name.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ customModel: { providerId: 'mine', model: 'org/model' }, localAgentId: '' }))
+    expect(JSON.stringify(onCreate.mock.calls)).not.toContain('apiKey')
   })
 
   it('creates a manual agent with a blank description by default', async () => {
@@ -322,7 +342,7 @@ describe('create agent terminology', () => {
     ))
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Use local agent'))!
+      .find((button) => button.textContent?.includes('Local agent'))!
     await act(async () => local.click())
     await act(async () => container.querySelector<HTMLButtonElement>('.agent-select-trigger')!.click())
 

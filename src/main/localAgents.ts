@@ -113,7 +113,8 @@ async function executableVersion(path: string): Promise<string | undefined> {
     const command = await executableCommand(path)
     const { stdout, stderr } = await execFileAsync(command.file, [...command.prefix, '--version'], {
       env: await executableEnvironment(),
-      timeout: 1_000,
+      // Node-based CLIs can take several seconds to load even for --version.
+      timeout: 6_000,
       killSignal: 'SIGKILL',
       maxBuffer: 256 * 1024,
       windowsHide: true
@@ -137,7 +138,7 @@ async function detectionDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([work, new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('本地智能体检测超时，请检查终端启动配置后重试。')), ms)
+      timer = setTimeout(() => reject(new Error('Local agent detection timed out. Check your shell startup configuration and try again.')), ms)
     })])
   } finally { clearTimeout(timer) }
 }
@@ -157,7 +158,7 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   ]
   return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
-    const version = path && !isCustom ? await detectionDeadline(readVersion(path), 2000).catch(() => undefined) : undefined
+    const version = path && !isCustom ? await detectionDeadline(readVersion(path), 8000).catch(() => undefined) : undefined
     const status = path ? 'ready' : desktopPath ? 'desktop-only' : 'not-found'
     return {
       id,

@@ -131,6 +131,11 @@ describe('private delivery disclosure', () => {
     expect(container.querySelector('.social-task-status')).toBeNull()
   })
 
+  it('shows a status while a sent message is waiting for the task snapshot', async () => {
+    await act(async () => root.render(<MessageRow messages={[{ ...incomingReply, authorId: 'user', deliveryState: 'confirming' }]} agents={[]} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
+    expect(container.querySelector('.message-delivery-state')?.textContent).toBe('已发送，正在同步接单状态…')
+  })
+
   it('renders saved reply quotes inline with the author and keeps the reply separate', async () => {
     const message = { ...incomingReply, authorId: 'user', text: '> Dobi:\n> First line\n> Second line\n\nMy reply' }
     await act(async () => root.render(<MessageRow messages={[message]} agents={agents} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
@@ -138,6 +143,24 @@ describe('private delivery disclosure', () => {
     expect(quote.textContent).toBe('Dobi: First line\nSecond line')
     expect(quote.querySelector('button')).toBeNull()
     expect(container.querySelector('.user-bubble > span')?.textContent).toBe('My reply')
+  })
+
+  it('keeps the latest message visible when the queue grows without pulling readers away from history', async () => {
+    const messages = [{ ...incomingReply, conversationId: directConversation.id }]
+    const render = async (count: number) => act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={messages} allMessages={messages} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}}
+      queuedMessages={Array.from({ length: count }, (_, id) => ({ id, conversationId: directConversation.id, text: 'Queued message' }))} />))
+    await render(0)
+    const scroller = container.querySelector<HTMLDivElement>('.message-scroll')!
+    Object.defineProperties(scroller, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 400 } })
+    scroller.scrollTop = 600
+    await act(async () => scroller.dispatchEvent(new Event('scroll')))
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 300 })
+    await render(2)
+    expect(scroller.scrollTop).toBe(1000)
+    scroller.scrollTop = 200
+    await act(async () => scroller.dispatchEvent(new Event('scroll')))
+    await render(3)
+    expect(scroller.scrollTop).toBe(200)
   })
 
   it('copies, quotes and deletes the selected message from its context menu', async () => {

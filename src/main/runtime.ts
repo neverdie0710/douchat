@@ -1,3 +1,5 @@
+import { CUSTOM_PROVIDER_PREFIX } from '../shared/customModels'
+import { customModelProvider, type CustomProviderRecord } from './customModels'
 import { withReplyDeadline } from './replyDeadline'
 import { AgentPermissionBroker, toolCapability } from './agentPermissions'
 import type { SocialTaskReply } from '../shared/social'
@@ -335,6 +337,23 @@ export class DouchatRuntime {
     this.humanSender = sender
   }
 
+  private customProviders = new Set<string>()
+  configureCustomModels(records: CustomProviderRecord[]): void {
+    for (const agent of this.store.accountAgents) if (agent.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) this.disposeAgent(agent.id)
+    for (const id of this.customProviders) this.models.deleteProvider(id)
+    this.customProviders.clear()
+    this.liveAuth.clear()
+    for (const record of records) {
+      const provider = customModelProvider(record)
+      this.models.setProvider(provider)
+      this.customProviders.add(provider.id)
+    }
+  }
+  customAgentModel(providerId: string, model: string): Pick<AgentConfig, 'provider' | 'model'> {
+    const provider = CUSTOM_PROVIDER_PREFIX + providerId
+    if (!this.customProviders.has(provider) || !this.models.getModel(provider, model)) throw new Error('自定义模型已移除或不可用，请到设置中重新配置。')
+    return { provider, model }
+  }
   private readonly models = builtinModels()
   private readonly localRuns = new Map<string, Set<AbortController>>()
   private readonly sessions = new Map<string, Session>()
@@ -540,7 +559,7 @@ export class DouchatRuntime {
       const fallback = this.modelOptions[0]
       if (fallback) {
         for (const agent of this.store.accountAgents) {
-          if (agent.localAgentId) continue
+          if (agent.localAgentId || agent.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) continue
           const served = Boolean(this.models.getModel(GATEWAY_PROVIDER_ID, agent.model))
           if (agent.provider === GATEWAY_PROVIDER_ID && served) continue
           this.store.updateAgent(agent.id, {
@@ -600,8 +619,16 @@ export class DouchatRuntime {
       : { provider: GATEWAY_PROVIDER_ID, model: 'default' }
   }
 
+  cloudAgentModel(model: string): Pick<AgentConfig, 'provider' | 'model'> {
+    if (model === 'douchat-default') return this.defaultCloudAgentModel()
+    const selected = this.availableCloudModels().find(option => option.model === model)
+    if (!selected) throw new Error('云端模型不可用，请刷新模型列表后重试。')
+    return { provider: selected.provider, model: selected.model }
+  }
+
   /** A bot keeps answering when its saved model disappears from the catalog. */
   private resolveModel(config: AgentConfig): ReturnType<typeof this.models.getModel> {
+    if (config.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) return this.models.getModel(config.provider, config.model)
     const fallback = this.modelOptions[0]
     if (fallback) {
       return (
@@ -614,6 +641,10 @@ export class DouchatRuntime {
 
   private async canRunLive(agent: AgentConfig): Promise<boolean> {
     if (agent.localAgentId) return true
+    if (agent.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) {
+      if (!this.models.getModel(agent.provider, agent.model)) throw new Error('自定义模型已移除或不可用，请到「设置 → 自定义模型」重新配置。')
+      return true
+    }
     // One configured endpoint answers for every bot, whatever a bot has saved.
     if (isGatewayConfig(this.gatewayConfig())) {
       if (!this.modelOptions.length) {
@@ -1651,6 +1682,7 @@ export class DouchatRuntime {
               : context === 'group'
                 ? 'Douchat provides public handoffs and private delivery through the message syntax in the request. These channels work without a CLI tool; use them instead of asking the human to relay messages.'
                 : '',
+            'For desktop or browser interaction, use your installed native tools and follow their installed skill instructions. Douchat does not provide desktop control through this connection. Verify the native tool is available and connected before claiming you can control an application. Do not substitute a separate browser session for the human’s existing browser without explaining the limitation. If the native tool fails, report its actual error; a shell launch attempt or a calculated answer is not evidence of successful desktop interaction.',
             'When you mention a verified local file inside Downloads, Desktop, or Documents, make its visible filename a Markdown link using its exact absolute path: [filename](<douchat-file:///absolute/path>). Do not create this link for an unverified path.',
             localRoutineAllowed
               ? [

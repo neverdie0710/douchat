@@ -18,12 +18,15 @@ beforeAll(async () => {
   script = join(directory, 'fake.cjs')
   await writeFile(script, `
 const readline=require('node:readline');
-let count=0;
+let count=0;let model;
+const argvModel=process.argv.indexOf('--model');
 const send=p=>process.stdout.write(JSON.stringify(p)+'\\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{
  const p=JSON.parse(line);
+ if(p.type==='control_request') {send({type:'control_response',response:{subtype:'success',request_id:p.request_id,response:{models:[{value:'test-model',displayName:'Test model'}]}}});return;}
  if(p.method==='initialize') send({id:p.id,result:{}});
- if(p.method==='thread/start') send({id:p.id,result:{thread:{id:'thread-'+process.pid}}});
+ if(p.method==='thread/start') {model=p.params.model;send({id:p.id,result:{thread:{id:'thread-'+process.pid}}});}
+ if(p.method==='model/list') send({id:p.id,result:{data:[{model:'test-model',displayName:'Test model'}],nextCursor:null}});
  const prompt=p.method==='turn/start'?p.params.input[0].text:p.type==='user'?p.message.content:null;
  if(prompt===null)return;
  count++;
@@ -32,9 +35,10 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt==='crash'){process.exit(12);return;}
  if(prompt==='invalid'){send(null);return;}
  if(prompt==='wait')return;
+ if(prompt==='no-credit' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='auth-conflict' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set'});return;}
  if(prompt==='spawn-child') { const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});send({method:'item/completed',params:{threadId,item:{type:'agentMessage',text:String(child.pid)}}});send({method:'turn/completed',params:{threadId,turn:{status:'completed'}}});return; }
- const text=JSON.stringify({pid:process.pid,count,prompt,cwd:process.cwd()});
+ const text=JSON.stringify({pid:process.pid,count,prompt,model:model||(argvModel>=0?process.argv[argvModel+1]:undefined),cwd:process.cwd()});
  if(p.type==='user') {send({type:'system',subtype:'init'});send({type:'assistant',message:{content:[{type:'text',text:'Working'}]}});send({type:'result',result:text});}
  else {
  send({method:'item/completed',params:{threadId,item:{type:'agentMessage',phase:'commentary',text:'Working'}}});
@@ -73,11 +77,28 @@ describe('persistent local agent connections', () => {
     expect(second).toMatchObject({ pid: first.pid, count: 2, prompt: 'next turn', cwd: first.cwd })
     expect(vi.mocked(validateLocalAgent).mock.calls.length - before).toBe(1)
   })
-  it('retains Claude account-login fallback and reuses the successful connection', async () => {
+  it.each(['auth-conflict', 'no-credit'])('retains Claude account-login fallback after %s and reuses the successful connection', async (prompt) => {
     const claude = { ...config, localAgentId: 'claude' }
-    const first = JSON.parse((await runLocalAgent(claude, 'auth-conflict', undefined, [], options)).text)
+    const first = JSON.parse((await runLocalAgent(claude, prompt, undefined, [], options)).text)
     const second = JSON.parse((await runLocalAgent(claude, 'next', undefined, [], options)).text)
     expect(second).toMatchObject({ pid: first.pid, count: 2 })
+  })
+  it.each(['claude', 'codex'])('passes the configured model to %s and starts a new connection after a model change', async (id) => {
+    const agent = { ...config, localAgentId: id, model: 'test-first' }
+    const first = JSON.parse((await runLocalAgent(agent, 'hello', undefined, [], options)).text)
+    const second = JSON.parse((await runLocalAgent({ ...agent, model: 'test-second' }, 'hello', undefined, [], options)).text)
+    expect(first.model).toBe('test-first')
+    expect(second.model).toBe('test-second')
+    expect(second.pid).not.toBe(first.pid)
+  })
+  it.each(['claude', 'codex'] as const)('queries %s models without starting a conversation', async (id) => {
+    const child = new LocalAgentConnection(id)
+    try {
+      await child.connect(script, directory, process.env, undefined, true)
+      expect(await child.models()).toEqual([{ id: 'test-model', name: 'Test model' }])
+      expect(child.hasHistory).toBe(false)
+      expect(child.thread).toBeUndefined()
+    } finally { child.close(); await child.disposed() }
   })
   it('isolates accounts and topics, and resets cleared conversations', async () => {
     const a = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], options)).text)

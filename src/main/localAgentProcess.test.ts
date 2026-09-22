@@ -13,9 +13,9 @@ const config: AgentConfig = { id: 'test', name: 'Test', role: 'Tester', instruct
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'douchat-fake-cli-'))
   executable = join(directory, 'agent')
-  await writeFile(executable, `#!${process.execPath}\nconst prompt=process.argv.at(-1);const conflict='claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set';if(prompt==='wait')setInterval(()=>{},1000);else if(prompt==='auth-conflict'&&process.env.ANTHROPIC_API_KEY){process.stderr.write(conflict);process.exitCode=1}else if(prompt==='auth-conflict-json'&&process.env.ANTHROPIC_API_KEY){process.stdout.write(JSON.stringify({is_error:true,error:conflict}))}else process.stdout.write(JSON.stringify({result:prompt.startsWith('auth-conflict')?'account-login':prompt}));\n`, { mode: 0o755 })
+  await writeFile(executable, `#!${process.execPath}\nconst prompt=process.argv.at(-1);const conflict='claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set';if(prompt==='wait')setInterval(()=>{},1000);else if(prompt==='no-credit'&&process.env.ANTHROPIC_API_KEY){process.stdout.write(JSON.stringify({is_error:true,result:'Credit balance is too low'}));process.exitCode=1}else if(prompt==='no-credit-json'&&process.env.ANTHROPIC_API_KEY){process.stdout.write(JSON.stringify({is_error:true,result:'Credit balance is too low'}))}else if(prompt==='auth-conflict'&&process.env.ANTHROPIC_API_KEY){process.stderr.write(conflict);process.exitCode=1}else if(prompt==='auth-conflict-json'&&process.env.ANTHROPIC_API_KEY){process.stdout.write(JSON.stringify({is_error:true,error:conflict}))}else process.stdout.write(JSON.stringify({result:(prompt.startsWith('auth-conflict')||prompt.startsWith('no-credit'))?'account-login':prompt}));\n`, { mode: 0o755 })
   vi.mocked(validateLocalAgent).mockResolvedValue({
-    id: 'claude', name: 'Test CLI', command: executable, path: executable,
+    id: 'claude', name: 'Claude Code', command: executable, path: executable,
     installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked'
   })
 })
@@ -33,6 +33,9 @@ describe('local CLI process lifecycle', () => {
   it('round-trips the prompt through a real child process without shell expansion', async () => {
     const prompt = '$(echo wrong); hello "quoted"'
     expect(await runLocalAgent(config, prompt)).toEqual({ text: prompt, images: [] })
+  })
+  it.each(['no-credit', 'no-credit-json'])('retries %s with the persisted account login', async (prompt) => {
+    await expect(runLocalAgent(config, prompt)).resolves.toEqual({ text: 'account-login', images: [] })
   })
   it('retries Claude with its persisted account login after an environment auth conflict', async () => {
     await expect(runLocalAgent(config, 'auth-conflict')).resolves.toEqual({ text: 'account-login', images: [] })

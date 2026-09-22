@@ -1121,8 +1121,8 @@ export class DouchatStore {
           instructions: overrides.instructions ?? definition.instructions,
           labels: overrides.labels ?? definition.labels ?? '',
           color: definition.color,
-          provider: binding.provider,
-          model,
+          provider: overrides.modelBinding?.provider ?? binding.provider,
+          model: overrides.modelBinding?.model ?? model,
           systemRole: definition.systemRole,
           systemKey: definition.systemKey,
           cloudAgentId,
@@ -1368,7 +1368,10 @@ export class DouchatStore {
     })
   }
 
-  updateAgent(agentId: string, input: UpdateAgentInput): AgentConfig | undefined {
+  updateAgent(agentId: string, input: UpdateAgentInput, modelSelection?: {
+    binding: Pick<AgentConfig, 'provider' | 'model'>
+    followDefault: boolean
+  }): AgentConfig | undefined {
     const agent = this.agent(agentId)
     if (!agent) return undefined
     const {
@@ -1383,8 +1386,8 @@ export class DouchatStore {
       ...next
     } = input as UpdateAgentInput & Partial<AgentConfig>
     if (agent.systemRole === 'admin') {
-      // Runtime routing and permissions remain service-owned even when an
-      // untrusted renderer sends extra keys over IPC.
+      // Raw renderer fields cannot override system identity or model routing.
+      // Model changes use the separately validated selection below.
       delete next.role
       delete next.color
       delete next.provider
@@ -1405,6 +1408,13 @@ export class DouchatStore {
     if (next.avatarEmoji) next.avatar = ''
     if (agent.systemRole === 'admin') {
       const overrides = { ...agent.userOverrides }
+      if (modelSelection) {
+        if (modelSelection.followDefault) delete overrides.modelBinding
+        else overrides.modelBinding = { ...modelSelection.binding }
+        next.provider = modelSelection.binding.provider
+        next.model = modelSelection.followDefault && agent.modelRoute && agent.modelRoute !== 'default'
+          ? agent.modelRoute : modelSelection.binding.model
+      }
       for (const key of ['name', 'avatar', 'avatarEmoji', 'instructions', 'labels'] as const) {
         if (next[key] !== undefined) overrides[key] = next[key]
       }

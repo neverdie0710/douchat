@@ -1,3 +1,4 @@
+import { findCodexDesktopExecutable } from './codexDesktop';
 import { managedSearchPaths } from './managedNode';
 import { execFile } from "node:child_process";
 import fs from "node:fs";
@@ -74,6 +75,15 @@ const CLI_ENVIRONMENT_NAMES = [
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_CLOUD_PROJECT",
+  "GOOGLE_CLOUD_PROJECT_ID",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_GENAI_USE_VERTEXAI",
+  "GOOGLE_GEMINI_BASE_URL",
+  "GOOGLE_VERTEX_BASE_URL",
 ] as const;
 
 async function loginShellCliEnvironment(): Promise<NodeJS.ProcessEnv> {
@@ -242,7 +252,7 @@ export async function resolveExecutable(command: string): Promise<string | undef
         if (await isRunnable(candidate)) return candidate;
       }
     }
-    return undefined;
+    return trimmed.toLowerCase() === 'codex' ? findCodexDesktopExecutable() : undefined;
   }
   // Search the same PATH passed to child processes. `command -v` can return
   // alias/function descriptions, which cannot be launched with execFile.
@@ -251,5 +261,5 @@ export async function resolveExecutable(command: string): Promise<string | undef
     const candidate = path.resolve(directory || ".", trimmed);
     if (await isRunnable(candidate)) return candidate;
   }
-  return undefined;
+  return trimmed === 'codex' ? findCodexDesktopExecutable() : undefined;
 }

@@ -78,7 +78,7 @@ it('returns installed agents even when their version command never settles', asy
     const version = vi.fn(() => new Promise<string | undefined>(() => {}))
     const result = detectLocalAgents({ executable: async () => '/bin/tool', desktopApp: async () => undefined, version }, 'codex')
     await vi.waitFor(() => expect(version).toHaveBeenCalled())
-    await vi.advanceTimersByTimeAsync(2100)
+    await vi.advanceTimersByTimeAsync(8100)
     expect(await result).toMatchObject([{ id: 'codex', installed: true, version: undefined }])
   } finally { vi.useRealTimers() }
 })
@@ -86,7 +86,7 @@ it('bounds an entire scan when executable discovery never settles', async () => 
   vi.useFakeTimers()
   try {
     const result = detectLocalAgents({ executable: () => new Promise(() => {}), desktopApp: async () => undefined }, 'codex')
-    const assertion = expect(result).rejects.toThrow('检测超时')
+    const assertion = expect(result).rejects.toThrow('Local agent detection timed out')
     await vi.advanceTimersByTimeAsync(15001)
     await assertion
   } finally { vi.useRealTimers() }

@@ -1,4 +1,5 @@
 import type { SocialSnapshot } from '../../../shared/social'
+import type { CustomModelConfig } from '../../../shared/customModels'
 import { t } from '../preferences'
 import { Check, Pencil, MessageSquare, MoreHorizontal, Star, Users, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactElement } from 'react'
@@ -27,6 +28,7 @@ export function ContactCard({
   onStartDirect,
   onEditBot,
   onEditPermissions,
+  onConfigureModel,
   onDeleteBot,
   onDeleteConversation,
   onRemoveFromContacts,
@@ -41,6 +43,7 @@ export function ContactCard({
   selection?: ContactSelection
   onMessage: (conversationId: string) => void
   onStartDirect: (agentId: string) => void
+  onConfigureModel?: (agent: AgentConfig) => void
   onEditPermissions?: (agent: AgentConfig) => void
   onEditBot: (agent: AgentConfig) => void
   onRemoveFromContacts?: (conversation: Conversation) => void
@@ -52,10 +55,32 @@ export function ContactCard({
   const [friendError, setFriendError] = useState('')
   const friend = selection?.kind === 'friend' ? social?.friendships.find((item) => item.person.id === selection.id) : undefined
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const [customModels, setCustomModels] = useState<CustomModelConfig>()
+  const [localModelLabel, setLocalModelLabel] = useState<{ agentId: string; model: string; name: string }>()
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const agent = selection?.kind === 'bot' ? snapshot.agents.find((item) => item.id === selection.id) : undefined
   const group =
     selection?.kind === 'group' ? snapshot.conversations.find((item) => item.id === selection.id) : undefined
+
+  useEffect(() => {
+    const provider = agent?.provider ?? ''
+    if (!provider.startsWith('custom:')) { setCustomModels(undefined); return }
+    let active = true
+    window.douchat.getCustomModels().then(config => { if (active) setCustomModels(config) }).catch(() => { if (active) setCustomModels(undefined) })
+    return () => { active = false }
+  }, [agent?.provider])
+
+  useEffect(() => {
+    setLocalModelLabel(undefined)
+    if (readOnly || !agent?.localAgentId || !agent.model || agent.model === 'default') return
+    const { id, model } = agent
+    let active = true
+    window.douchat.listLocalAgentModels(id).then(list => {
+      const selected = list.models.find(item => item.id === model)
+      if (active && selected) setLocalModelLabel({ agentId: id, model, name: selected.name })
+    }).catch(() => { /* Keep the saved model ID when discovery is unavailable. */ })
+    return () => { active = false }
+  }, [agent?.id, agent?.localAgentId, agent?.model, readOnly])
 
   useEffect(() => {
     setProfileMenuOpen(false)
@@ -92,7 +117,7 @@ export function ContactCard({
     }
     return <main className="workspace contact-card-pane contact-profile-pane">
       <div className="contact-profile-scroll"><div className="contact-profile-sheet">
-        <section className="contact-profile-header"><UserAvatar src={person.image || ''} name={person.name} size={64} /><div className="contact-profile-identity"><div className="contact-profile-name"><h1>{person.name}</h1>{direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}</div><p>{friend?.status === 'accepted' ? t('Friend') : t('Douchat user')}</p></div></section>
+        <section className="contact-profile-header"><UserAvatar src={person.image || ''} name={person.name} size={64} /><div className="contact-profile-identity"><div className="contact-profile-name"><h1>{person.name}</h1>{direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}</div><p>{t('Friends')}</p></div></section>
         <section className="contact-profile-section"><h2>{t('Contact details')}</h2><Field label={t('Name')} value={person.name} />{friend?.status === 'accepted' && person.email && <Field label={t('Email')} value={person.email} />}</section>
         <section className="contact-profile-section"><h2>{t('More information')}</h2>{status && <Field label={t('Status')} value={status} />}<Field label={t('Shared groups')} value={String(social?.rooms.filter((room) => room.kind === 'group' && room.members.some((person) => person.id === person.id)).length ?? 0)} /></section>
         {friendError && <p className="friend-profile-error" role="alert">{friendError}</p>}
@@ -118,7 +143,15 @@ export function ContactCard({
 
   if (agent) {
     const displayName = agentDisplayName(agent)
+    const categoryLabel = agent.systemRole === 'admin' ? t('Built-in') : t('Agents')
     const sourceLabel = agentSourceLabel(agent)
+    const modelId = agent.model && agent.model !== 'default' ? agent.model : undefined
+    const configuredProvider = agent.provider.startsWith('custom:') ? customModels?.providers.find(provider => `custom:${provider.id}` === agent.provider) : undefined
+    const builtInModel = (snapshot.models ?? []).find(option => option.model === modelId)
+    const localName = localModelLabel?.agentId === agent.id && localModelLabel.model === agent.model ? localModelLabel.name : undefined
+    const modelLabel = agent.localAgentId
+      ? localName || modelId || t('Use agent default')
+      : configuredProvider?.modelLabels?.[agent.model] || builtInModel?.label || modelId || t('Cloud default')
     const direct = snapshot.conversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
     )
@@ -135,12 +168,13 @@ export function ContactCard({
                 <div className="contact-profile-name"><h1>{displayName}</h1>
                   {direct && <button className={`profile-star ${direct.pinned ? 'is-starred' : ''}`} onClick={() => onTogglePin(direct)} aria-label={t(direct.pinned ? 'Unpin' : 'Pin to top')} title={t(direct.pinned ? 'Unpin' : 'Pin to top')}><Star size={16} fill={direct.pinned ? 'currentColor' : 'none'} /></button>}
                 </div>
-                <p>{sourceLabel}</p>
+                <p>{categoryLabel}</p>
               </div>
               {!readOnly && <div className="profile-menu-anchor" ref={profileMenuRef}>
                 <button className="profile-edit" onClick={() => setProfileMenuOpen((open) => !open)} aria-label={t('Agent menu')} aria-haspopup="menu" aria-expanded={profileMenuOpen} title={t('Agent menu')}><MoreHorizontal size={21} /></button>
                 {profileMenuOpen && <div className="dropdown-menu profile-actions-menu" role="menu">
                   <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
+                  {onConfigureModel && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onConfigureModel(agent) }}>{t('Configure model')}</button>}
                   {onEditPermissions && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditPermissions(agent) }}>{t('Agent permissions')}</button>}
                   {agent.systemRole !== 'admin' && <>
                     <div className="dropdown-separator" />
@@ -153,6 +187,8 @@ export function ContactCard({
             <section className="contact-profile-section">
               <h2>{t('Agent details')}</h2>
               <Field label={t('Name')} value={displayName} />
+              <Field label={t('Run mode')} value={sourceLabel} />
+              <Field label={t('Model')} value={modelLabel} />
               {readOnly && ownerName && <Field label={t('Owned by')} value={ownerName} />}
               {agent.labels?.trim() && <Field label={t('Labels')} value={agent.labels} />}
             </section>
@@ -160,7 +196,6 @@ export function ContactCard({
             <section className="contact-profile-section">
               <h2>{t('More information')}</h2>
               <Field label={t('Shared groups')} value={String(sharedGroupCount)} />
-              <Field label={t('Source')} value={sourceLabel} />
               {agent.createdAt > 0 && <Field label={t('Added on')} value={new Date(agent.createdAt).toLocaleDateString(document.documentElement.lang, { year: 'numeric', month: '2-digit', day: '2-digit' })} />}
             </section>
 

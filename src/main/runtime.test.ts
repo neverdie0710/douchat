@@ -1197,3 +1197,23 @@ describe('DouchatRuntime', () => {
     expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(before)
   })
 })
+
+it.each([false, true])('keeps custom model routing when cloud reconnects and never falls back after removal (built-in: %s)', async (builtIn) => {
+  const { store, runtime } = createRuntime()
+  store.setCurrentAccountId('custom-model-owner')
+  runtime.configureCustomModels([{ id: 'mine', name: 'Mine', kind: 'openai', apiBase: 'https://custom.example/v1', apiKey: 'test-key', models: ['private-model'] }])
+  const binding = runtime.customAgentModel('mine', 'private-model')
+  let agent = builtIn
+    ? store.ensureDefaultCloudContact('custom-model-owner', { provider: 'gateway', model: 'default' }).agent!
+    : store.createAgent({ name: 'Private', role: 'Assistant', instructions: '', color: '#fff', ...binding })
+  if (builtIn) agent = store.updateAgent(agent.id, {}, { binding, followDefault: false })!
+  const internals = runtime as unknown as { resolveModel: (agent: typeof store.agents[number]) => { provider: string; id: string }; canRunLive: (agent: typeof store.agents[number]) => Promise<boolean> }
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: [{ id: 'cloud-default' }] }), { status: 200 })))
+  await runtime.setEndpoint({ baseUrl: 'https://cloud.example/v1', apiKey: 'cloud-key' })
+  expect(store.agent(agent.id)?.provider).toBe('custom:mine')
+  expect(internals.resolveModel(agent)).toMatchObject({ provider: 'custom:mine', id: 'private-model' })
+  expect(await internals.canRunLive(agent)).toBe(true)
+  runtime.configureCustomModels([])
+  expect(() => runtime.customAgentModel('mine', 'private-model')).toThrow('不可用')
+  await expect(internals.canRunLive(agent)).rejects.toThrow('不可用')
+})

@@ -1,3 +1,4 @@
+import { localModelId, withLocalModel } from '../shared/localModels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
 
@@ -48,13 +49,13 @@ export class LocalAgentConnection {
   get hasHistory(): boolean { return this.turnCount > 0 }
   get thread(): string | undefined { return this.threadId }
 
-  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false): Promise<void> {
     const command = await executableCommand(path)
     if (this.failure) throw this.failure
     const args = this.kind === 'codex'
       ? ['app-server']
       : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence', '--allowedTools', 'WebSearch,WebFetch', '--permission-mode', 'dontAsk']
-    this.child = spawn(command.file, [...command.prefix, ...args], {
+    this.child = spawn(command.file, [...command.prefix, ...(this.kind === 'claude' ? withLocalModel('claude', args, model) : args)], {
       cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout.setEncoding('utf8')
@@ -69,9 +70,11 @@ export class LocalAgentConnection {
       this.resolveClosed()
     })
     if (this.kind === 'codex') {
-      await this.request('initialize', { clientInfo: { name: 'douchat', version: '1.0.0' }, capabilities: {} })
+      await this.request('initialize', { clientInfo: { name: 'douchat', version: '1.0.0' }, capabilities: { experimentalApi: true } })
       this.write({ method: 'initialized' })
+      if (discoveryOnly) return
       const response = await this.request('thread/start', {
+        ...(localModelId(model) ? { model: localModelId(model) } : {}),
         cwd, approvalPolicy: 'never', sandbox: 'workspace-write', ephemeral: true,
         config: { 'sandbox_workspace_write.network_access': true, web_search: 'live' }
       })
@@ -80,17 +83,36 @@ export class LocalAgentConnection {
     }
   }
 
+  async models(): Promise<Array<{ id: string; name: string }>> {
+    if (this.kind === 'claude') {
+      const result = await this.request('initialize', {}, true)
+      return (result.models ?? []).filter((item: any) => typeof item.value === 'string' && item.value !== 'default').map((item: any) => ({ id: item.value, name: item.displayName || item.value }))
+    }
+    const models: Array<{ id: string; name: string }> = []
+    let cursor: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const result = await this.request('model/list', { limit: 100, ...(cursor ? { cursor } : {}) })
+      for (const item of result.data ?? []) {
+        const id = item.model ?? item.id
+        if (typeof id === 'string') models.push({ id, name: item.displayName || id })
+      }
+      if (!result.nextCursor || result.nextCursor === cursor) break
+      cursor = result.nextCursor
+    }
+    return models
+  }
+
   private write(packet: Packet): void {
     if (this.failure) throw this.failure
     this.child.stdin.write(`${JSON.stringify(packet)}\n`)
   }
-  private request(method: string, params: Packet): Promise<any> {
+  private request(method: string, params: Packet, control = false): Promise<any> {
     if (this.failure) return Promise.reject(this.failure)
     return new Promise((resolve, reject) => {
       const id = ++this.sequence
       const timer = setTimeout(() => this.close(new Error(`Local agent did not acknowledge ${method} within 60 seconds`)), 60_000)
       this.pending.set(id, { resolve, reject, timer })
-      try { this.write({ id, method, params }) } catch (error) { this.close(error as Error) }
+      try { this.write(control ? { type: 'control_request', request_id: String(id), request: { subtype: method, ...params } } : { id, method, params }) } catch (error) { this.close(error as Error) }
     })
   }
   private read(chunk: string): void {
@@ -107,7 +129,15 @@ export class LocalAgentConnection {
       try { packet = JSON.parse(line) } catch { this.close(new Error('Invalid local agent protocol response')); return }
       if (!packet || typeof packet !== 'object' || Array.isArray(packet)) { this.close(new Error('Invalid local agent protocol packet')); return }
       this.lastEvent = Date.now()
-      if (packet.id !== undefined && !packet.method) {
+      if (packet.type === 'control_response') {
+        const id = Number(packet.response?.request_id)
+        const pending = this.pending.get(id)
+        if (pending) {
+          clearTimeout(pending.timer); this.pending.delete(id)
+          if (packet.response.subtype === 'error') pending.reject(new Error(packet.response.error || 'Model discovery failed'))
+          else pending.resolve(packet.response.response)
+        }
+      } else if (packet.id !== undefined && !packet.method) {
         const pending = this.pending.get(packet.id)
         if (pending) {
           clearTimeout(pending.timer)
@@ -116,8 +146,7 @@ export class LocalAgentConnection {
           else pending.resolve(packet.result)
         }
       } else if (packet.id !== undefined && packet.method) {
-        // Never leave unsupported interactive requests pending indefinitely, or approve them silently.
-        this.write({ id: packet.id, error: { code: -32601, message: 'Interactive requests are not supported in Douchat. Return a message explaining what you need.' } })
+        this.write({ id: packet.id, error: { code: -32601, message: 'Interactive requests are not supported in Douchat.' } })
       } else if (packet.type === 'control_request') {
         this.write({ type: 'control_response', response: { subtype: 'error', request_id: packet.request_id, error: 'Interactive requests are not supported in Douchat' } })
       } else this.listener?.(packet)

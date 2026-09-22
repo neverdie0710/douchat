@@ -29,8 +29,8 @@ export function localAgentDisplayName(localAgentId: string): string {
 
 export function agentSourceLabel(agent: AgentConfig): string {
   return agent.localAgentId
-    ? `${t('Local')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
-    : t('Cloud')
+    ? `${t('Local agent')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
+    : t('Custom model')
 }
 
 export function isDrDou(agent: AgentConfig): boolean {

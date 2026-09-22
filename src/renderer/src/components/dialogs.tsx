@@ -1,10 +1,12 @@
+import type { CustomModelConfig } from '../../../shared/customModels'
+import { CustomModelSelection } from './CustomModelSelection'
 import { NativeDialog } from './NativeDialog'
 import { conversationMembers } from './common'
 import type { SocialSnapshot } from '../../../shared/social'
 import { LocalAgentSelect } from './LocalAgentSelect'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
-import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Cloud, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
+import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import type {
@@ -21,6 +23,7 @@ import type {
   RoutineSchedule,
   UpdateAgentInput
 } from '../../../shared/types'
+import type { ModelOption } from '../../../shared/types'
 import { AgentAvatar, UserAvatar, ConversationAvatar, agentDisplayName, colors, conversationDisplayName } from './common'
 
 const avatarEmojis = [
@@ -33,22 +36,51 @@ const avatarEmojis = [
 export function BotModal({
   agent,
   localAgents,
+  cloudModels = [],
   initialLocalAgentId,
   onSettings,
+  onModelSettings,
+  onCreditsSettings,
   onClose,
   onCreate,
   onUpdate
 }: {
   agent?: AgentConfig
   localAgents: LocalAgent[]
+  cloudModels?: ModelOption[]
   initialLocalAgentId?: string
   onSettings: () => void
+  onModelSettings?: () => void
+  onCreditsSettings?: () => void
   onClose: () => void
   onCreate: (input: CreateAgentInput) => Promise<void>
   onUpdate: (agentId: string, input: UpdateAgentInput) => Promise<void>
 }): ReactElement {
   const [localAgentId, setLocalAgentId] = useState(agent?.localAgentId ?? initialLocalAgentId ?? (!agent ? localAgents.find((item) => item.installed)?.id : '') ?? '')
-  const [agentSource, setAgentSource] = useState<'cloud' | 'local'>(agent?.localAgentId || initialLocalAgentId ? 'local' : 'cloud')
+  const [agentSource, setAgentSource] = useState<'custom' | 'local'>(agent?.localAgentId || initialLocalAgentId ? 'local' : 'custom')
+  const [customModels, setCustomModels] = useState<CustomModelConfig>({ providers: [], defaultModel: '' })
+  const [customProviderId, setCustomProviderId] = useState('cloud')
+  const [customModel, setCustomModel] = useState('douchat-default')
+  const [cloudModel, setCloudModel] = useState('douchat-default')
+  const [modelLoadError, setModelLoadError] = useState('')
+  useEffect(() => {
+    if (agent || !window.douchat?.getCustomModels) return
+    let active = true
+    window.douchat.getCustomModels().then(config => {
+      if (active) {
+        setCustomModels(config)
+        const [providerId, ...modelParts] = config.defaultModel.split('/')
+        const hasDefault = providerId && modelParts.length && config.providers.some(provider => provider.id === providerId && provider.models.includes(modelParts.join('/')))
+        setCustomProviderId(hasDefault ? providerId : 'cloud')
+        setCustomModel(hasDefault ? modelParts.join('/') : 'douchat-default')
+      }
+    }).catch(() => { if (active) setModelLoadError(t("Could not load custom models. Try again in Settings.")) })
+    return () => { active = false }
+  }, [agent])
+  const selectedProvider = customModels.providers.find(provider => provider.id === customProviderId)
+  const selectedCustomModel = customProviderId === 'cloud'
+    ? { providerId: 'cloud', model: 'douchat-default' }
+    : selectedProvider?.models.includes(customModel) ? { providerId: customProviderId, model: customModel } : undefined
   const localAgent = localAgents.find((item) => item.id === localAgentId)
   const [error, setError] = useState('')
   const [name, setName] = useState(agent?.name ?? localAgents.find((item) => item.id === initialLocalAgentId)?.name ?? '')
@@ -85,6 +117,7 @@ export function BotModal({
     if (!name.trim()) return
     if (!agent && !role.trim()) return
     if (!agent && agentSource === 'local' && !localAgent?.installed) return
+    if (!agent && !selectedCustomModel) return
     setSaving(true)
     setError('')
     try {
@@ -105,7 +138,9 @@ export function BotModal({
         instructions: instructions.trim(),
         labels: labels.trim(),
         color,
-        localAgentId: agentSource === 'local' ? localAgentId : ''
+        localAgentId: agentSource === 'local' ? localAgentId : '',
+        ...(agentSource === 'custom' && customProviderId === 'cloud' && cloudModel !== 'douchat-default' ? { cloudModel: { model: cloudModel } } : {}),
+        ...(agentSource === 'custom' && selectedCustomModel?.providerId !== 'cloud' ? { customModel: selectedCustomModel } : {})
       }
       await onCreate(input)
       onClose()
@@ -141,18 +176,18 @@ export function BotModal({
         </label>
         <div className="field-row agent-source-field"><span>{t('Runs with')}</span>
           <div className="agent-source-cards" role="radiogroup" aria-label={t('Runs with')}>
-            <button type="button" role="radio" aria-checked={agentSource === 'cloud'} className={agentSource === 'cloud' ? 'selected' : ''} onClick={() => setAgentSource('cloud')}>
-              <span className="agent-source-icon"><Cloud size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Use cloud model')}</strong><small>{t('Douchat cloud model')}</small></span>
-              <span className="agent-source-radio" aria-hidden="true"><i /></span>
+            <button type="button" role="radio" aria-checked={agentSource === 'custom'} className={agentSource === 'custom' ? 'selected' : ''} onClick={() => setAgentSource('custom')}>
+              <span className="agent-source-icon"><PlugZap size={18} /></span><span className="agent-source-copy"><strong>{t("Custom model")}</strong><small>{t("Use your configured model service")}</small></span><span className="agent-source-radio" aria-hidden="true"><i /></span>
             </button>
             <button type="button" role="radio" aria-checked={agentSource === 'local'} className={agentSource === 'local' ? 'selected' : ''} onClick={() => setAgentSource('local')}>
               <span className="agent-source-icon"><Laptop size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Use local agent')}</strong><small>{t('AI tools on this computer')}</small></span>
+              <span className="agent-source-copy"><strong>{t('Local agent')}</strong><small>{t("Local AI tools on your computer")}</small></span>
               <span className="agent-source-radio" aria-hidden="true"><i /></span>
             </button>
           </div>
         </div>
+        {agentSource === 'custom' && <CustomModelSelection config={customModels} cloudModels={cloudModels} providerId={customProviderId} model={customProviderId === 'cloud' ? cloudModel : customModel} disabled={saving} onChange={(providerId, model) => { setCustomProviderId(providerId); providerId === 'cloud' ? setCloudModel(model) : setCustomModel(model) }} />}
+        {agentSource === 'custom' && <p className="settings-note">{modelLoadError || (customProviderId === 'cloud' ? t("Use Douchat cloud models with pay-as-you-go credits.") : t("Use your own API key. Your model provider handles billing."))} <button type="button" className="local-settings-link" onClick={customProviderId === 'cloud' ? (onCreditsSettings ?? onSettings) : (onModelSettings ?? onSettings)}>{customProviderId === 'cloud' ? t("View credits") : t("Configure model")}</button></p>}
         {agentSource === 'local' && <div className="field-row"><span>{t('Local agent')}</span>
           <LocalAgentSelect agents={localAgents.filter((item) => item.installed)} value={localAgentId} onChange={setLocalAgentId} />
         </div>}
@@ -160,7 +195,7 @@ export function BotModal({
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
-          <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && !localAgent?.installed)}>{t(saving ? 'Saving…' : 'Create agent')}</button>
+          <button className="primary-button" type="submit" disabled={saving || !name.trim() || (agentSource === 'local' && !localAgent?.installed) || (agentSource === 'custom' && !selectedCustomModel)}>{t(saving ? 'Saving…' : 'Create agent')}</button>
         </div>
       </form>
     </NativeDialog>

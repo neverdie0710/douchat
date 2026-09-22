@@ -641,6 +641,32 @@ describe('DouchatStore', () => {
     expect(migratedStore.systemAdminAgentId).toBe(original.agent?.id)
   })
 
+  it.each([
+    { provider: 'custom:mine', model: 'private-model' },
+    { provider: 'gateway', model: 'chosen-cloud-model' }
+  ])('persists a built-in model selection across restart and sync: $provider', (binding) => {
+    const store = createStore()
+    const admin = store.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'original-default' }).agent!
+    const conversationId = store.accountConversations.find(item => item.agentIds.includes(admin.id))?.id
+    store.updateAgent(admin.id, {}, { binding, followDefault: false })
+    expect(store.agent(admin.id)).toMatchObject({ ...binding, userOverrides: { modelBinding: binding } })
+    store.close()
+    const reopened = new DouchatStore(join(temporaryDirectories.at(-1)!, 'douchat.db'))
+    try {
+      const synced = reopened.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'new-default' })
+      expect(synced.agent).toMatchObject({ id: admin.id, ...binding, systemRole: 'admin', capabilities: ['manage_agents'] })
+      expect(synced.conversation?.id).toBe(conversationId)
+      // Profile edits and raw model fields must not erase a validated choice.
+      reopened.updateAgent(admin.id, { name: 'My admin', provider: 'forged', model: 'forged' })
+      expect(reopened.agent(admin.id)).toMatchObject({ name: 'My admin', ...binding })
+      reopened.updateAgent(admin.id, {}, { binding: { provider: 'gateway', model: 'new-default' }, followDefault: true })
+      expect(reopened.agent(admin.id)?.userOverrides?.modelBinding).toBeUndefined()
+      expect(reopened.agent(admin.id)).toMatchObject({ provider: 'gateway', model: 'new-default' })
+      expect(reopened.ensureDefaultCloudContact('user-1', { provider: 'gateway', model: 'latest-default' }).agent)
+        .toMatchObject({ provider: 'gateway', model: 'latest-default', name: 'My admin' })
+    } finally { reopened.close() }
+  })
+
   it('does not let ordinary create or update payloads grant or clear the system role', () => {
     const store = createStore()
     const forged = store.createAgent({

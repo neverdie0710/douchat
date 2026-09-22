@@ -111,7 +111,7 @@ export function InspectorRail({
               {currentUserMatches && <button type="button" onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`}><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><span><strong>{highlight(currentUserName)}</strong></span></button>}
               {!matchingMembers.length && !currentUserMatches && <p>{t('No matching agents')}</p>}
             </div> : <div className="member-grid">
-              {person && <button type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect())} title={person.name}><UserAvatar src={person.image || ''} name={person.name} size={40} /><span className="member-name-label">{person.name}<ContactKindBadge human /></span></button>}
+              {person && <button type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect())} title={person.name}><div className="member-avatar-wrap"><UserAvatar src={person.image || ''} name={person.name} size={40} /><ContactKindBadge human /></div><span className="member-name-label"><span className="member-name-text">{person.name}</span></span></button>}
               {orderedMembers.map((member) => (
                 <button
                   key={member.id}
@@ -120,15 +120,15 @@ export function InspectorRail({
                   onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}
                   title={`${agentDisplayName(member)} · ${agentDisplayRole(member)}`}
                 >
-                  <AgentAvatar agent={member} size={40} />
-                  <span className="member-name-label">{agentDisplayName(member)}<ContactKindBadge local={Boolean(member.localAgentId)} /></span>
+                  <div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} /><ContactKindBadge local={Boolean(member.localAgentId)} /></div>
+                  <span className="member-name-label"><span className="member-name-text">{agentDisplayName(member)}</span></span>
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>
               ))}
-              {conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId).map((person) => <button key={person.id} style={{ order: conversation.socialRoom?.members[0]?.id === person.id ? 0 : person.order ?? members.length + 1 }} type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect(), person.id)} title={person.name}><UserAvatar src={person.image || ''} name={person.name} size={40} /><span className="member-name-label">{person.name}<ContactKindBadge human /></span></button>)}
+              {conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId).map((person) => <button key={person.id} style={{ order: conversation.socialRoom?.members[0]?.id === person.id ? 0 : person.order ?? members.length + 1 }} type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect(), person.id)} title={person.name}><div className="member-avatar-wrap"><UserAvatar src={person.image || ''} name={person.name} size={40} /><ContactKindBadge human /></div><span className="member-name-label"><span className="member-name-text">{person.name}</span></span></button>)}
               {conversation.type === 'group' && <button type="button" className="member-tile" style={{ order: !conversation.socialRoom || conversation.socialRoom.members[0]?.id === conversation.ownerId ? 0 : conversation.socialRoom.members.find((person) => person.id === conversation.ownerId)?.order ?? members.length + 2 }} onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`} title={`${currentUserName} · ${t('You')}`}>
-                <UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} />
-                <span className="member-name-label">{currentUserName}<ContactKindBadge human /></span>
+                <div className="member-avatar-wrap"><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><ContactKindBadge human /></div>
+                <span className="member-name-label"><span className="member-name-text">{currentUserName}</span></span>
               </button>}
               {<button className="member-tile add" style={{ order: 10000 }} onClick={onAddMembers} aria-label={t('Add a member')}>
                 <span className="member-add">

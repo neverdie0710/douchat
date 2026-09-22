@@ -1,5 +1,8 @@
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { codexThreadId, localAgentArgs, localAgentEnvironment, localAgentExitError, localAgentReply, localAgentText, shouldRetryClaudeWithAccountLogin } from './localAgentRuntime'
+import { codexThreadId, localAgentExecutable, localAgentArgs, localAgentEnvironment, localAgentExitError, localAgentReply, localAgentText, shouldRetryClaudeWithAccountLogin } from './localAgentRuntime'
 describe('local agent output', () => {
   it('trusts only the Gemini child workspace without mutating the parent environment', () => {
     const env = { PATH: '/bin' }
@@ -25,8 +28,15 @@ describe('local agent output', () => {
     expect(shouldRetryClaudeWithAccountLogin('claude', conflict, env)).toBe(true)
     expect(localAgentEnvironment('claude', env, true)).toEqual({ PATH: '/bin', SAFE_VALUE: 'kept' })
     expect(env.ANTHROPIC_API_KEY).toBe('secret-api-key')
-    expect(shouldRetryClaudeWithAccountLogin('claude', new Error('Credit balance is too low'), env)).toBe(false)
+    expect(shouldRetryClaudeWithAccountLogin('claude', new Error('Credit balance is too low'), env)).toBe(true)
     expect(shouldRetryClaudeWithAccountLogin('codex', conflict, env)).toBe(false)
+  })
+  it('only retries an explicit Claude API credit rejection with a conflicting API key', () => {
+    const error = new Error('Claude Code: Credit balance is too low')
+    expect(shouldRetryClaudeWithAccountLogin('claude', error, { ANTHROPIC_API_KEY: 'test' })).toBe(true)
+    expect(shouldRetryClaudeWithAccountLogin('claude', error, {})).toBe(false)
+    expect(shouldRetryClaudeWithAccountLogin('codex', error, { ANTHROPIC_API_KEY: 'test' })).toBe(false)
+    expect(shouldRetryClaudeWithAccountLogin('claude', new Error('Tool failed: Credit balance is too low'), { ANTHROPIC_API_KEY: 'test' })).toBe(false)
   })
   it('extracts final replies without leaking CLI metadata', () => {
     expect(localAgentText('claude', '{"result":"Hello","session_id":"private"}')).toBe('Hello')
@@ -92,4 +102,27 @@ describe('local agent output', () => {
     expect(localAgentArgs('openclaw', prompt, '/tmp/output')).toEqual(expect.arrayContaining(['agent', 'exec', '--message-file', '-', '--json']))
     expect(localAgentArgs('omp', prompt, '/tmp/output')).toContain('--no-tools')
   })
+})
+
+it('uses an installed macOS Grok compatibility binary while keeping strict sandboxing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'douchat-grok-test-'))
+  const official = '/official/grok'
+  const compatible = join(home, '.douchat', 'local-tools', 'grok', process.arch, 'grok')
+  try {
+    expect(await localAgentExecutable('grok', official, 'darwin', home)).toBe(official)
+    await mkdir(join(compatible, '..'), { recursive: true })
+    await writeFile(compatible, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    expect(await localAgentExecutable('grok', official, 'darwin', home)).toBe(compatible)
+    expect(await localAgentExecutable('grok', official, 'win32', home)).toBe(official)
+    expect(await localAgentExecutable('claude', official, 'darwin', home)).toBe(official)
+    expect(localAgentArgs('grok', 'hello', '/tmp/reply')).toEqual(expect.arrayContaining(['--sandbox', 'strict', '--permission-mode', 'dontAsk']))
+  } finally { await rm(home, { recursive: true, force: true }) }
+})
+
+it('trusts Cursor only when launching in an application-owned workspace', () => {
+  expect(localAgentArgs('cursor', 'hello', '/tmp/reply')).not.toContain('--trust')
+  const args = localAgentArgs('cursor', 'hello', '/tmp/reply', true)
+  expect(args).toContain('--trust')
+  expect(args).toEqual(expect.arrayContaining(['--mode', 'ask']))
+  expect(args).not.toContain('--force')
 })

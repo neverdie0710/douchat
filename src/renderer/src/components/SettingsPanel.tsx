@@ -1,16 +1,17 @@
+import { CustomModelSettings } from './CustomModelSettings'
 import { messageSendError } from '../messageQueue'
 import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
-import { setPreferences, usePreferences, t, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, X } from 'lucide-react'
+import { setPreferences, usePreferences, t, tr, type LanguagePreference } from '../preferences'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
 import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'about'
+export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'about'
 
 export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
@@ -107,7 +108,8 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         </div>
         <div className="local-agent-row-aside">
           {version && <span className="local-agent-version" title={agent.version}>{version}</span>}
-          <button type="button" className="secondary-button" disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{maintaining === agent.id ? '正在准备…' : agent.custom ? '安装说明' : agent.installed ? '更新' : '安装'}</button>
+          {agent.installed && !agent.custom && (!agent.updateStatus || agent.updateStatus === 'unknown') && <span className="local-agent-version" title={t('Could not confirm the latest version. Detect again later.')}>{t('Version unconfirmed')}</span>}
+          {(agent.custom || !agent.installed || agent.updateStatus === 'available') && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.custom ? 'Installation instructions' : agent.installed ? 'Update' : 'Install')}</button>}
           {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
         </div>
       </article>
@@ -121,6 +123,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
         <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Credits')}</span></button>
         <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
+        <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -155,7 +158,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
         </header>
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
-        {maintaining && <p role="status">正在准备安装或更新，首次下载运行环境可能需要几分钟，请稍候。</p>}
+        {maintaining && <p role="status">{t('Preparing to install or update. Downloading the runtime for the first time may take a few minutes.')}</p>}
         {customError && <p className="settings-error" role="alert">{t(customError)}</p>}
         <section aria-label={t('Installed agents')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
           {installed.map(row)}
@@ -163,7 +166,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         </section>
         {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
         {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : <AboutTab />}
+      </> : tab === 'models' ? <CustomModelSettings /> : <AboutTab />}
     </main>
     </section>
   </NativeDialog>
@@ -430,7 +433,7 @@ function AboutTab(): ReactElement {
           <span>douchat.ai</span>
         </div>
         <div className="about-action">
-          <a className="secondary-button about-website-button" href="https://douchat.ai" target="_blank" rel="noreferrer">
+          <a className="secondary-button about-website-button" href="https://douchat.ai/?utm_source=douchat-desktop" target="_blank" rel="noreferrer">
             {t('Open website')}<ExternalLink size={14} />
           </a>
         </div>

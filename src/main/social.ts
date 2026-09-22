@@ -236,7 +236,9 @@ export class SocialClient {
     try {
       await this.request({ action: 'send', roomId: conversation.remoteRoomId, content, images, agentId, agentIds, id: pending!.id }, identity)
       this.pendingSends.delete(key)
-      this.store.setMessageDeliveryState(localId)
+      // A send receipt can arrive before the task snapshot (or after a watch update).
+      const confirmedTasks = this.store.topicMessages(conversationId, conversation.activeTopicId).find((message) => message.id === localId)?.socialTasks
+      this.store.setMessageDeliveryState(localId, agentIds.length && !confirmedTasks?.length ? 'confirming' : undefined)
     } catch (error) {
       this.store.setMessageDeliveryState(localId, 'failed')
       throw error
@@ -264,7 +266,14 @@ export class SocialClient {
     }
     if (input.action === 'remove-members' || input.action === 'rename-room') {
       const result = await this.request<SocialResult>(input)
-      await this.syncInbox(true)
+      const snapshot = await this.syncInbox(true)
+      if (input.action === 'remove-members') {
+        const room = snapshot.rooms.find((entry) => entry.id === input.roomId)
+        if (room && (room.members.some((person) => input.friendIds.includes(person.id)) || room.agents.some((agent) =>
+          input.agentIds.includes(agent.id) || (agent.ownerId === snapshot.userId && input.agentIds.includes(agent.localId)) || input.friendIds.includes(agent.ownerId)))) {
+          throw new Error('群成员尚未移除，请刷新后重试。')
+        }
+      }
       return result
     }
     if (input.action === 'invite-members') {

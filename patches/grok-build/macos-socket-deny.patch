@@ -1,0 +1,141 @@
+diff --git a/crates/codegen/xai-grok-sandbox/examples/socket_compat_check.rs b/crates/codegen/xai-grok-sandbox/examples/socket_compat_check.rs
+new file mode 100644
+index 0000000..8740682
+--- /dev/null
++++ b/crates/codegen/xai-grok-sandbox/examples/socket_compat_check.rs
+@@ -0,0 +1,28 @@
++use xai_grok_sandbox::{ProfileName, SandboxManager};
++use std::os::unix::net::{UnixListener, UnixStream};
++fn main() {
++    let workspace = std::path::PathBuf::from(format!("/private/tmp/grok-check-{}", std::process::id()));
++    let home = workspace.join("home");
++    let socket_dir = home.join(".docker/run");
++    std::fs::create_dir_all(&socket_dir).unwrap();
++    let target = workspace.join("real.sock");
++    let alias = socket_dir.join("docker.sock");
++    let _listener = UnixListener::bind(&target).unwrap();
++    std::os::unix::fs::symlink(&target, &alias).unwrap();
++    // This standalone test has no other threads or reads of environment yet.
++    unsafe { std::env::set_var("HOME", &home); std::env::set_var("GROK_HOME", home.join(".grok")); }
++    let mut sandbox = SandboxManager::new(ProfileName::Strict, &workspace);
++    sandbox.apply(&workspace).unwrap();
++    assert!(sandbox.is_applied());
++    for path in [&alias, &target] {
++        match UnixStream::connect(path) {
++            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => println!("socket denied"),
++            Err(e) => panic!("unproven denial: {e}"),
++            Ok(_) => panic!("socket protection missing"),
++        }
++        assert!(std::fs::remove_file(path).is_err(), "denied socket can be unlinked");
++        assert!(std::fs::rename(path, workspace.join("moved.sock")).is_err(), "denied socket can be renamed");
++    }
++    std::fs::write(workspace.join("allowed.txt"), "control").unwrap();
++    println!("strict active: connections and mutation denied for alias and target; workspace write allowed");
++}
+diff --git a/crates/codegen/xai-grok-sandbox/src/deny/mod.rs b/crates/codegen/xai-grok-sandbox/src/deny/mod.rs
+index f50a451..22e3e33 100644
+--- a/crates/codegen/xai-grok-sandbox/src/deny/mod.rs
++++ b/crates/codegen/xai-grok-sandbox/src/deny/mod.rs
+@@ -244,6 +244,8 @@ pub(crate) fn apply_deny_paths_to_capability_set(
+                     format!("(literal \"{escaped}\")")
+                 };
+                 emit_seatbelt_deny(caps, &filter)?;
++                // Unix socket connections are network operations, independent of file-read/write.
++                caps.add_platform_rule(format!("(deny network-outbound (path \"{escaped}\"))"))?;
+                 rule_paths.push(form);
+             }
+         }
+diff --git a/crates/codegen/xai-grok-sandbox/src/runtime_sockets.rs b/crates/codegen/xai-grok-sandbox/src/runtime_sockets.rs
+index d209839..692462b 100644
+--- a/crates/codegen/xai-grok-sandbox/src/runtime_sockets.rs
++++ b/crates/codegen/xai-grok-sandbox/src/runtime_sockets.rs
+@@ -143,6 +143,25 @@ pub(crate) fn materialize_runtime_socket_deny_paths_from(
+             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+             Err(error) => return Err(with_context(error)),
+         };
++        #[cfg(target_os = "macos")]
++        if metadata.file_type().is_symlink() {
++            use std::os::unix::fs::FileTypeExt;
++            let linked = std::fs::read_link(&path).map_err(with_context)?;
++            let linked = if linked.is_absolute() { linked } else { canonical_parent.join(linked) };
++            let target = dunce::canonicalize(linked.parent().ok_or_else(|| with_context(io::Error::other("missing target parent")))?)
++                .map_err(with_context)?.join(linked.file_name().ok_or_else(|| with_context(io::Error::other("missing target name")))?);
++            match std::fs::symlink_metadata(&target) {
++                Ok(meta) if meta.file_type().is_socket() => {},
++                Err(error) if error.kind() == io::ErrorKind::NotFound => {},
++                Err(error) => return Err(with_context(error)),
++                Ok(_) => return Err(with_context(io::Error::new(io::ErrorKind::InvalidInput,
++                    "endpoint symlink target is not a socket"))),
++            }
++            // Seatbelt denies both the alias and its resolved target. Retain
++            // both explicitly so neither spelling loses protection.
++            if !paths.contains(&target) { paths.push(target); }
++        }
++        #[cfg(not(target_os = "macos"))]
+         if metadata.file_type().is_symlink() {
+             return Err(with_context(io::Error::new(
+                 io::ErrorKind::InvalidInput,
+diff --git a/crates/codegen/xai-grok-sandbox/src/runtime_sockets_tests.rs b/crates/codegen/xai-grok-sandbox/src/runtime_sockets_tests.rs
+index 70c1fa5..70ed874 100644
+--- a/crates/codegen/xai-grok-sandbox/src/runtime_sockets_tests.rs
++++ b/crates/codegen/xai-grok-sandbox/src/runtime_sockets_tests.rs
+@@ -240,7 +240,7 @@ fn materialized_socket_path_is_stable_after_mode_zero_mask() {
+ }
+ 
+ #[test]
+-#[cfg(unix)]
++#[cfg(all(unix, not(target_os = "macos")))]
+ fn materialized_socket_paths_reject_endpoint_symlinks() {
+     let root = temp_runtime_root("endpoint-symlink");
+     let target = root.join("target.sock");
+@@ -251,7 +251,7 @@ fn materialized_socket_paths_reject_endpoint_symlinks() {
+     let error = materialize_runtime_socket_deny_paths_from([endpoint])
+         .expect_err("an endpoint symlink must not redirect the automatic mask");
+     assert!(
+-        error.to_string().contains("endpoint is a symlink"),
++        (error.to_string().contains("endpoint is a symlink") || error.to_string().contains("endpoint symlink target is not a socket")),
+         "unexpected error: {error}"
+     );
+     let _ = std::fs::remove_dir_all(root);
+@@ -506,3 +506,41 @@ fn materialized_dbus_candidates_skip_missing_keep_existing() {
+     assert_eq!(paths, vec![present]);
+     let _ = std::fs::remove_dir_all(root);
+ }
++
++#[cfg(target_os = "macos")]
++#[test]
++fn materialized_socket_symlink_denies_alias_and_real_socket() {
++    let root = temp_runtime_root("real-socket-symlink");
++    let target = root.join("real.sock");
++    let alias = root.join("docker.sock");
++    let _listener = std::os::unix::net::UnixListener::bind(&target).unwrap();
++    std::os::unix::fs::symlink(&target, &alias).unwrap();
++    let paths = materialize_runtime_socket_deny_paths_from([alias.clone()]).unwrap();
++    assert!(paths.contains(&dunce::canonicalize(&target).unwrap()));
++    assert!(paths.contains(&dunce::canonicalize(&root).unwrap().join("docker.sock")));
++    std::fs::remove_dir_all(root).unwrap();
++}
++
++#[cfg(target_os = "macos")]
++#[test]
++fn dangling_socket_symlink_retains_denies() {
++    let root = temp_runtime_root("dangling");
++    let alias = root.join("docker.sock");
++    std::os::unix::fs::symlink("real.sock", &alias).unwrap();
++    let paths = materialize_runtime_socket_deny_paths_from([alias]).unwrap();
++    let canonical_root = dunce::canonicalize(&root).unwrap();
++    assert!(paths.contains(&canonical_root.join("real.sock")));
++    assert!(paths.contains(&canonical_root.join("docker.sock")));
++    std::fs::remove_dir_all(root).unwrap();
++}
++
++#[cfg(target_os = "macos")]
++#[test]
++fn socket_symlink_to_regular_file_remains_rejected() {
++    let root = temp_runtime_root("not-socket");
++    std::fs::write(root.join("file"), "control").unwrap();
++    let alias = root.join("docker.sock");
++    std::os::unix::fs::symlink("file", &alias).unwrap();
++    assert!(materialize_runtime_socket_deny_paths_from([alias]).is_err());
++    std::fs::remove_dir_all(root).unwrap();
++}

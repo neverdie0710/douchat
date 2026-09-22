@@ -1,3 +1,7 @@
+import { listLocalAgentModels } from './localAgentModels'
+import { localModelId, configurableLocalAgents } from '../shared/localModels'
+import { CustomModelStore } from './customModels'
+import type { CustomProviderInput, CustomModelTest } from '../shared/customModels'
 import { configureManagedNode, ensureManagedNode } from './managedNode'
 import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
 import { mkdirSync } from 'node:fs'
@@ -9,7 +13,7 @@ import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, safeStorage, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -32,6 +36,7 @@ import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
 import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, validateLocalAgent } from './localAgents'
+import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl } from './authProtocol'
@@ -65,6 +70,20 @@ const webAppUrl = normalizeWebAppUrl(
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
+const customModels = new CustomModelStore(join(app.getPath('userData'), 'custom-models'), {
+  encrypt: (value) => {
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error('系统密钥存储不可用，请启用系统钥匙串后重试。')
+    return safeStorage.encryptString(value).toString('base64')
+  },
+  decrypt: (value) => safeStorage.decryptString(Buffer.from(value, 'base64'))
+})
+function reloadCustomModels(): void {
+  runtime.configureCustomModels([])
+  if (store.currentAccountId) {
+    try { runtime.configureCustomModels(customModels.records(store.currentAccountId)) }
+    catch { console.warn('[douchat] Custom model keys could not be loaded for this account') }
+  }
+}
 const diagnostics = new DiagnosticLog(join(app.getPath('userData'), 'logs'))
 try {
   const crashDirectory = join(diagnostics.directory, 'crashes')
@@ -278,6 +297,7 @@ function broadcastAuth(state: DesktopAuthState): void {
     for (const window of codeArtifactWindows.values()) window.close()
     codeArtifacts.clear()
     store.setCurrentAccountId(nextSocialAccount)
+    reloadCustomModels()
     scheduler?.accountChanged()
     // Models and credentials are account state. Force the connection catalog
     // to be rebuilt even when both the old and new account are signed in.
@@ -641,7 +661,12 @@ app.whenReady().then(() => {
     await openMaintenanceTerminal(plan.command)
     return true
   })
-  ipcMain.handle('douchat:detect-local-agents', () => { resetShellPath(); return detectLocalAgents() })
+  ipcMain.handle('douchat:list-local-agent-models', (_event, agentId: string) => {
+    const agent = store.accountAgents.find(item => item.id === agentId)
+    if (!agent?.localAgentId) throw new Error('Local agent not found')
+    return listLocalAgentModels(agent.localAgentId)
+  })
+  ipcMain.handle('douchat:detect-local-agents', async () => { resetShellPath(); return checkLocalAgentUpdates(await detectLocalAgents()) })
   ipcMain.handle('douchat:open-local-agent-terminal', (event, id: unknown) => {
     if (!isDouchatRenderer(event.sender) || id !== 'claude') throw new Error('Invalid local agent terminal request')
     return openLocalAgentTerminal(id, {
@@ -652,7 +677,7 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
     await addCustomLocalAgent(input)
     resetShellPath()
-    return detectLocalAgents()
+    return checkLocalAgentUpdates(await detectLocalAgents())
   })
   ipcMain.handle('douchat:remove-custom-local-agent', async (event, id: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
@@ -660,7 +685,7 @@ app.whenReady().then(() => {
       throw new Error('Remove contacts using this local agent before deleting it.')
     }
     await removeCustomLocalAgent(id)
-    return detectLocalAgents()
+    return checkLocalAgentUpdates(await detectLocalAgents())
   })
   ipcMain.handle('douchat:search-messages', (_event, id: string, query: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === id)) throw new Error('Chat not found')
@@ -692,15 +717,34 @@ app.whenReady().then(() => {
     return snapshot
   }
 
-  ipcMain.handle('douchat:create-agent', async (_event, input: CreateAgentInput) => {
+  ipcMain.handle('douchat:custom-models', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return customModels.list(store.currentAccountId)
+  })
+  ipcMain.handle('douchat:save-custom-models', (event, providers: CustomProviderInput[], defaultModel: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    const result = customModels.save(store.currentAccountId, providers, defaultModel)
+    reloadCustomModels()
+    push()
+    return result
+  })
+  ipcMain.handle('douchat:test-custom-model', (event, input: CustomModelTest) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return customModels.test(store.currentAccountId, input)
+  })
+  ipcMain.handle('douchat:create-agent', async (event, input: CreateAgentInput) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    if ((input.customModel || input.cloudModel) && input.localAgentId) throw new Error('请选择一种运行方式。')
+    if (input.customModel && input.cloudModel) throw new Error('请选择一种模型来源。')
     const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
     const binding = input.localAgentId
       ? { provider: 'local', model: 'default' }
-      : runtime.defaultCloudAgentModel()
+      : input.customModel ? runtime.customAgentModel(input.customModel.providerId, input.customModel.model) : input.cloudModel ? runtime.cloudAgentModel(input.cloudModel.model) : runtime.defaultCloudAgentModel()
+    const { customModel: _selection, cloudModel: _cloudSelection, ...agentInput } = input
     const agent = store.createAgent({
-      ...input,
+      ...agentInput,
       localAgentName: localAgent?.custom ? localAgent.name : undefined,
       ...binding
     })
@@ -717,12 +761,23 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:update-agent', async (_event, agentId: string, input: UpdateAgentInput) => {
     if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
+    const existing = store.accountAgents.find(agent => agent.id === agentId)!
+    const { customModel, cloudModel, ...update } = input
+    if (customModel && cloudModel) throw new Error('请选择一种模型来源。')
+    if ((customModel || cloudModel) && (existing.localAgentId || input.localAgentId)) throw new Error('请选择一种运行方式。')
+    const selectedBinding = customModel ? runtime.customAgentModel(customModel.providerId, customModel.model) : cloudModel ? runtime.cloudAgentModel(cloudModel.model) : undefined
+    input = { ...update, ...selectedBinding }
+    if (input.model !== undefined && (input.localAgentId || existing.localAgentId)) {
+      const model = localModelId(input.model)
+      if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
+      input = { ...input, model: model ?? 'default' }
+    }
     const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
     const { localAgentName: _ignoredLocalAgentName, ...safeInput } = input
     store.updateAgent(agentId, {
       ...safeInput,
       ...(input.localAgentId !== undefined ? { localAgentName: localAgent?.custom ? localAgent.name : undefined } : {})
-    })
+    }, selectedBinding ? { binding: selectedBinding, followDefault: cloudModel?.model === 'douchat-default' } : undefined)
     // Identity and model edits take effect on the next turn, not mid-session.
     runtime.disposeAgent(agentId)
     return push()

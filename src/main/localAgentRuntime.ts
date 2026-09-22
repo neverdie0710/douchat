@@ -1,15 +1,28 @@
+import { withLocalModel } from '../shared/localModels'
 import { LocalAgentConnection, killLocalProcess, type ProgressListener } from './localAgentConnection'
 import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import { executableCommand } from './windowsCommand'
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import type { AgentConfig, LocalAgent, MessageAttachment } from '../shared/types'
 import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 
-export function localAgentArgs(id: string, prompt: string, output: string): string[] {
+/** Optional locally built Grok with the macOS socket-denial compatibility patch.
+ * Keep the official CLI untouched and retain strict sandbox arguments below. */
+export async function localAgentExecutable(id: string, installedPath: string, platform = process.platform, home = homedir()): Promise<string> {
+  if (id !== 'grok' || platform !== 'darwin') return installedPath
+  const compatible = join(home, '.douchat', 'local-tools', 'grok', process.arch, 'grok')
+  try {
+    await access(compatible, constants.X_OK)
+    return compatible
+  } catch { return installedPath }
+}
+
+export function localAgentArgs(id: string, prompt: string, output: string, appOwnedWorkspace = false): string[] {
   switch (id) {
     case 'codex': return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'web_search="live"', '--output-last-message', output, '-']
     case 'claude': return ['-p', '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch', '--', prompt]
@@ -20,7 +33,7 @@ export function localAgentArgs(id: string, prompt: string, output: string): stri
       '--allow', 'Read', '--allow', 'Grep', '--allow', 'WebFetch', '--allow', 'WebSearch',
       '--sandbox', 'strict'
     ]
-    case 'cursor': return ['--print', '--output-format', 'json', '--mode', 'ask', '--', prompt]
+    case 'cursor': return [...(appOwnedWorkspace ? ['--trust'] : []), '--print', '--output-format', 'json', '--mode', 'ask', '--', prompt]
     case 'opencode': return ['run', '--format', 'json', '--', prompt]
     case 'kimi': return ['--prompt', prompt, '--output-format', 'text']
     case 'openclaw': return ['agent', 'exec', '--message-file', '-', '--json', '--code-mode', 'direct']
@@ -84,7 +97,7 @@ const CLAUDE_ACCOUNT_AUTH_CONFLICTS = [
 
 /** Only for the fresh, application-owned temporary workspace created below.
  * Claude account-login fallback is intentionally opt-in: a working API-key
- * setup keeps its normal precedence, while the specific connector conflict
+ * setup keeps its normal precedence, while an initial authentication/billing failure
  * can retry against Claude Code's persisted claude.ai login. */
 export function localAgentEnvironment(
   id: string,
@@ -105,7 +118,10 @@ export function shouldRetryClaudeWithAccountLogin(
 ): boolean {
   if (id !== 'claude' || !(cause instanceof Error)) return false
   if (!CLAUDE_ACCOUNT_AUTH_CONFLICTS.some((name) => Boolean(env[name]))) return false
-  return /claude\.ai connectors are disabled because/i.test(cause.message) && /auth source/i.test(cause.message)
+  const connectorConflict = /claude\.ai connectors are disabled because/i.test(cause.message) && /auth source/i.test(cause.message)
+  const exhaustedApiKey = Boolean(env.ANTHROPIC_API_KEY)
+    && /^(?:Claude Code:\s*)?Credit balance is too low[.!]?$/i.test(cause.message.trim())
+  return connectorConflict || exhaustedApiKey
 }
 
 export interface LocalAgentImage {
@@ -205,9 +221,9 @@ export async function runLocalAgent(
       ? `${prompt}\n\nThe human attached ${imagePaths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${imagePaths.length === 1 ? '' : 's'} before answering:\n${imagePaths.join('\n')}`
       : prompt
     const output = join(directory, 'reply.txt')
-    const command = await executableCommand(agent.path!)
+    const command = await executableCommand(await localAgentExecutable(agent.id, agent.path!))
     const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? [effectivePrompt] : localAgentArgs(agent.id, effectivePrompt, output))], {
+      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? [effectivePrompt] : withLocalModel(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.model))], {
         cwd: directory, env: childEnvironment, windowsHide: true, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe']
       })
@@ -285,6 +301,7 @@ export interface LocalRunOptions {
   onProgress?: ProgressListener
   /** Internal retry for the specific Claude account-login configuration conflict. */
   claudeAccountLogin?: boolean
+  /** Tools exposed to Codex app-server as client-side dynamic tools. */
 }
 interface ConnectedSession {
   config: AgentConfig
@@ -342,7 +359,7 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     const directory = mkdtemp(join(tmpdir(), 'douchat-session-'))
     const ready = Promise.all([validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
       .then(async ([agent, env, cwd]) => {
-        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin))
+        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model)
         return { agent, env, directory: cwd }
       })
     entry = { config, sessionKey: options.sessionKey!, connection, directory, ready, busy: true }

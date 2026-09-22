@@ -60,6 +60,19 @@ describe('group contact profile', () => {
     container.remove()
   })
 
+  it('shows a local model and opens its configuration from the profile menu', async () => {
+    Object.defineProperty(window, 'douchat', { configurable: true, value: { listLocalAgentModels: vi.fn().mockResolvedValue({ models: [{ id: 'provider/test', name: 'Test Model' }] }) } })
+    const configure = vi.fn()
+    const local = { ...agents[0], localAgentId: 'opencode', model: 'provider/test' }
+    await act(async () => root.render(<ContactCard snapshot={{ ...snapshot, agents: [local] }} selection={{ kind: 'bot', id: local.id }}
+      onConfigureModel={configure} onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+    expect(container.textContent).toContain('Test Model')
+    expect(container.textContent).not.toContain('provider/test')
+    await act(async () => (container.querySelector('[aria-label="Agent menu"]') as HTMLButtonElement).click())
+    const item = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Configure model')!
+    await act(async () => item.click())
+    expect(configure).toHaveBeenCalledWith(local)
+  })
   it('shows another owner’s agent without editing or direct messaging controls', async () => {
     await act(async () => root.render(<ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: 'alpha' }} readOnly ownerName="Alice"
       onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
@@ -139,8 +152,8 @@ describe('group contact profile', () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Agent menu"]')!.click())
     expect(container.textContent).toContain('Edit agent')
     expect(container.textContent).not.toContain('Delete agent')
-    expect(container.querySelector('.contact-profile-identity p')?.textContent).toBe('Cloud')
-    expect([...container.querySelectorAll('.contact-field')].find((field) => field.textContent?.startsWith('Source'))?.textContent).toBe('SourceCloud')
+    expect(container.querySelector('.contact-profile-identity p')?.textContent).toBe('Built-in')
+    expect([...container.querySelectorAll('.contact-field')].find((field) => field.textContent?.startsWith('Run mode'))?.textContent).toBe('Run modeCloud')
 
     await act(async () => container.querySelector<HTMLButtonElement>('.contact-profile-actions button')!.click())
     expect(onStartDirect).toHaveBeenCalledWith(admin.id)

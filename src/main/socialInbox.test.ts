@@ -273,6 +273,22 @@ it('shows a sending bubble before a slow request resolves and reconciles it with
   expect(alice.store.topicMessages(id, 'main')[0].deliveryState).toBeUndefined()
 })
 
+it('keeps agent delivery status visible between the send receipt and task synchronization', async () => {
+  const remote = server()
+  const alice = account('alice')
+  const group: SocialRoom = { ...room, kind: 'group', name: 'Team', agents: [{ id: 'helper', localId: 'helper', ownerId: 'alice', name: 'Helper' }] }
+  const conversation = alice.store.syncFriendConversation('alice', group, [])
+  const refresh = vi.spyOn(alice.client, 'syncInbox').mockResolvedValue({ userId: 'alice', friendships: [], rooms: [group] })
+  await alice.client.sendMessage(conversation.id, '@Helper Hello')
+  expect(alice.store.topicMessages(conversation.id, 'main')[0]).toMatchObject({ deliveryState: 'confirming' })
+  const task = { ...remote.messages[0], agentName: 'Helper', status: 'pending' as const }
+  alice.store.syncFriendConversation('alice', group, [task])
+  const synced = alice.store.topicMessages(conversation.id, 'main')[0]
+  expect(synced.deliveryState).toBeUndefined()
+  expect(synced.socialTasks).toEqual([expect.objectContaining({ agentId: 'helper', status: 'pending' })])
+  refresh.mockRestore()
+})
+
 it('uses incremental cursors, skips unchanged rooms and still fetches old task completions', async () => {
   const alice = account('alice')
   let revision = 'one'
@@ -354,4 +370,16 @@ it('applies bundled notification messages without another metadata or message re
   expect(fetcher).not.toHaveBeenCalled()
   const chat = alice.store.accountConversations[0]
   expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['First', 'Instant'])
+})
+
+it('rejects a removal receipt when the refreshed group still contains the selected agent', async () => {
+  const alice = account('alice')
+  const group: SocialRoom = { ...room, kind: 'group', agents: [{ id: 'remote-agent', localId: 'local-agent', ownerId: 'alice', name: 'Helper' }] }
+  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', friendships: [], rooms: [group] } })
+    return Response.json({ data: { messages: [] } })
+  }))
+  await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).rejects.toThrow('尚未移除')
+  group.agents = []
+  await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).resolves.toBeDefined()
 })

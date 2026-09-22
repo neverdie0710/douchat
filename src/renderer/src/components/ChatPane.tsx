@@ -3,7 +3,7 @@ import { mentionableAgents } from './common'
 import type { SocialAgent, SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
-import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, X } from 'lucide-react'
+import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
@@ -864,7 +864,7 @@ export function MessageRow({
         <div className={`message-bubble user-bubble ${hasAttachments ? 'has-attachments' : ''} ${!message.text && hasAttachments ? 'image-only' : ''}`}>
           {message.text && <UserMessageText text={message.text} />}
           {message.socialTasks && <SocialTaskStatus tasks={message.socialTasks} agents={socialAgents ?? []} />}
-          {message.deliveryState && <small className="message-delivery-state" role="status">{message.deliveryState === 'sending' ? '发送中…' : '发送未确认，请在队列中重试'}</small>}
+          {message.deliveryState && <small className="message-delivery-state" role="status">{message.deliveryState === 'sending' ? '发送中…' : message.deliveryState === 'confirming' ? '已发送，正在同步接单状态…' : '发送未确认，请在队列中重试'}</small>}
           <MessageAttachments attachments={message.attachments} />
         </div>
         {onOpenUserProfile ? (
@@ -1105,7 +1105,18 @@ export function ChatPane({
       node.scrollTop = node.scrollHeight
       initialScroll.current = false
     }
-  }, [messages, activity?.phase, activity?.label])
+  }, [messages, activity?.phase, activity?.label, queuedMessages, pendingImages, quotedMessage])
+
+  // Composer/queue growth changes the visible timeline even without a new message.
+  useLayoutEffect(() => {
+    const node = scrollRef.current
+    if (!node || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (nearBottom.current && !prependPosition.current) node.scrollTop = node.scrollHeight
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [conversation?.id, topic?.id])
 
   async function loadOlder(): Promise<void> {
     const node = scrollRef.current
@@ -1504,6 +1515,14 @@ export function ChatPane({
             ))}
           </div>
         )}
+        {queuedMessages.length > 0 && <ol className="composer-queue" aria-label="待发送消息">
+          {queuedMessages.map((item) => <li className={`composer-queue-item${item.error ? ' is-failed' : ''}`} key={item.id}>
+            <ListEnd className="composer-queue-marker" size={15} aria-hidden="true" />
+            <span className="composer-queue-copy"><span className="composer-queue-text" title={item.text}>{item.text}</span>{item.error && <small role="alert"><TriangleAlert size={13} /><span>{messageSendError(item.error)}</span></small>}</span>
+            <button type="button" className="composer-queue-promote" title={item.error ? '重试发送' : '移到队首，当前回复结束后优先发送'} onClick={() => onPromoteQueued?.(item.id)}><CornerDownRight size={14} aria-hidden="true" /><span>{item.error ? '重试' : '优先发送'}</span></button>
+            <button type="button" aria-label="移除排队消息" title="移除排队消息" onClick={() => onRemoveQueued?.(item.id)}><Trash2 size={15} /></button>
+          </li>)}
+        </ol>}
         <div className={`composer ${draft.trim() || pendingImages.length ? 'has-content' : ''}`}>
           {quotedMessage && <MessageQuote
             author={quotedMessage.authorId === 'user' ? userName : quotedMessage.authorName}
@@ -1542,13 +1561,6 @@ export function ChatPane({
             disabled={!conversation}
             readOnly={voiceState !== 'idle'}
           />
-          {queuedMessages.length > 0 && <div className="composer-queue" aria-label="待发送消息">
-            {queuedMessages.map((item, index) => <div className={`composer-queue-item${item.error ? ' is-failed' : ''}`} key={item.id}>
-              <span><span className="composer-queue-text">{index + 1}. {item.text}</span>{item.error && <small role="alert"><TriangleAlert size={13} /><span>{messageSendError(item.error)}</span></small>}</span>
-              <button type="button" onClick={() => onPromoteQueued?.(item.id)}>{item.error ? '重试' : '插队'}</button>
-              <button type="button" aria-label="移除排队消息" onClick={() => onRemoveQueued?.(item.id)}><X size={14} /></button>
-            </div>)}
-          </div>}
           {attachmentError && <div className="composer-attachment-error" role="alert">{attachmentError}</div>}
           {SHOW_VOICE_INPUT && voiceError && (
             <div className="composer-voice-error" role="alert">
@@ -1592,14 +1604,14 @@ export function ChatPane({
               <Square size={13} fill="currentColor" />
             </button>
           )}
-            <button
+            {!working && <button
               className="send-button"
               onClick={() => void send()}
               disabled={sending || voiceState !== 'idle' || (!draft.trim() && !pendingImages.length)}
               aria-label={t('Send message')}
             >
-              {working ? '排队发送' : t('Send')}
-            </button>
+              {t('Send')}
+            </button>}
           </div>
           </div>
         </div>
