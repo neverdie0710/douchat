@@ -193,6 +193,32 @@ it('addresses multiple agents explicitly and renders only one human message', as
   expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['@One @Two 报个数', 'One here', 'Two here'])
 })
 
+it('attributes delegated requests and legacy cached handoffs to agents instead of their owners', () => {
+  const alice = account('alice')
+  const shared: SocialRoom = { ...room, id: 'delegate-room', kind: 'group', agents: [
+    { id: 'source', localId: 'source', ownerId: 'alice', name: 'Source' },
+    { id: 'target', localId: 'target', ownerId: 'bob', name: 'Target' }
+  ] }
+  const base: SocialMessage = { id: 'human', roomId: shared.id, authorId: 'alice', authorName: 'Alice', content: 'Please work', status: 'sent', createdAt: room.createdAt }
+  const source: SocialMessage = { ...base, id: 'human:task:source', parentMessageId: 'human', agentId: 'source', agentName: 'Source', status: 'succeeded', reply: 'I asked Target.' }
+  const child: SocialMessage = { ...base, id: `${source.id}:delegate`, authorName: 'Source', content: 'Your turn', agentId: 'target', agentName: 'Target', status: 'pending' }
+  const chat = alice.store.syncFriendConversation('alice', shared, [base, source, child])!
+  const delegatedId = `${chat.id}:${child.id}`
+  expect(alice.store.topicMessages(chat.id, 'main').find(message => message.id === delegatedId)).toMatchObject({ authorId: 'source', authorName: 'Source', text: 'Your turn' })
+  // Simulate an old installed version's cache, then a sync with no old messages.
+  const legacy = alice.store.topicMessages(chat.id, 'main').find(message => message.id === delegatedId)!
+  legacy.authorId = 'user'
+  ;(alice.store as any).db.prepare('UPDATE messages SET data = ? WHERE id = ?').run(JSON.stringify(legacy), delegatedId)
+  alice.store.syncFriendConversation('alice', shared, [])
+  expect(alice.store.topicMessages(chat.id, 'main').find(message => message.id === delegatedId)?.authorId).toBe('source')
+  alice.store.syncFriendConversation('alice', shared, [{ ...child, authorId: 'source', status: 'succeeded', reply: 'Target here' },
+    { ...child, id: `${child.id}:delegate`, authorId: 'bob', authorName: 'Target', agentId: 'source', agentName: 'Source', content: 'Back to Source' }])
+  const messages = alice.store.topicMessages(chat.id, 'main')
+  expect(messages.filter(message => message.authorId === 'user').map(message => message.text)).toEqual(['Please work'])
+  expect(messages.find(message => message.text === 'Back to Source')?.authorId).toBe('target')
+  expect(messages.find(message => message.text === 'Target here')?.authorId).toBe('target')
+})
+
 it('syncs a shared group after its last other human is removed', async () => {
   const alice = account('alice')
   const shared: SocialRoom = { ...room, id: 'remaining-group', kind: 'group', name: 'Team', agents: [{ id: 'own', localId: 'own', ownerId: 'alice', name: 'Own' }] }

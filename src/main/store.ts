@@ -1346,7 +1346,13 @@ export class DouchatStore {
         const messageId = `${id}:${message.id}`
         if (message.roomId !== room.id || cleared.has(messageId) || (message.parentMessageId && cleared.has(`${id}:${message.parentMessageId}`))) continue
         if (!message.parentMessageId) this.setMessageDeliveryState(messageId)
-        if (!message.parentMessageId && !this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', messageId)) {
+        const existingMessage = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', messageId)
+        if (!message.parentMessageId && existingMessage && message.id.includes(':delegate')) {
+          existingMessage.authorId = message.authorId === ownerId ? 'user' : message.authorId
+          existingMessage.authorName = message.authorName
+          this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(existingMessage), messageId)
+        }
+        if (!message.parentMessageId && !existingMessage) {
         this.insertMessage({ id: messageId, conversationId: id, topicId: conversation.activeTopicId,
           authorId: message.authorId === ownerId ? 'user' : message.authorId, authorName: message.authorName,
           text: message.content, attachments: attachments.get(message.id), kind: 'message', createdAt: Date.parse(message.createdAt) })
@@ -1373,6 +1379,19 @@ export class DouchatStore {
             else { this.insertMessage(reply); unread++ }
           }
         }
+      }
+      // Older syncs stored delegation requests under the human owner's avatar.
+      // Recover the actual caller from its parent task, even when that task was
+      // hidden under a multi-agent human message or is outside the current page.
+      for (const delegated of this.all<ChatMessage>("SELECT data FROM messages WHERE conversationId = ? AND id LIKE '%:delegate'", id)) {
+        const parentTaskId = delegated.id.slice(`${id}:`.length, -':delegate'.length)
+        const parentId = parentTaskId.includes(':delegate') ? parentTaskId : parentTaskId.split(':task:')[0]
+        const parent = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', `${id}:${parentId}`)
+        const task = parent?.socialTasks?.find(task => task.id === parentTaskId)
+        if (!task || delegated.authorId === task.agentId) continue
+        delegated.authorId = task.agentId
+        delegated.authorName = task.agentName
+        this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(delegated), delegated.id)
       }
       this.putConversation(conversation)
       if (unread) this.addUnread(id, unread)
