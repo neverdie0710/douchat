@@ -1,0 +1,238 @@
+{
+  "report": {
+    "scenario": "werewolf-scripted-human",
+    "trial": 3,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "好人",
+    "rounds": 2,
+    "turns": 24,
+    "humanActions": 4,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 41578
+  },
+  "messages": [
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:0",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "简化狼人杀开始。判官由规则服务担任，不参赛。2 狼、1 预言家、3 平民，无特殊遗言技能；狼全灭好人胜，狼人数不少于好人则狼人胜。\n按座次发言，私下投票，首次合法投票生效；平票辩论重投一次，再平票随机抽签。Agent 连续两次行动格式无效则跳过发言或弃权；连续三个行动槽异常或模型服务持续不可用则暂停。真人无响应时等待，可暂停或结束。",
+      "kind": "system",
+      "createdAt": 1790103289279
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:7",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 夜。狼人私下讨论并选择目标，预言家随后查验；夜间行动不会公开。",
+      "kind": "system",
+      "createdAt": 1790103289279
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:11",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "天亮了，验收工程师昨夜出局。",
+      "kind": "system",
+      "createdAt": 1790103295113
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:12",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 轮白天。请依次发言：@验收项目经理 → @验收产品经理 → @验收测试工程师 → @验收设计师 → @测试真人。",
+      "kind": "system",
+      "createdAt": 1790103295113
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:13",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-c0edfb",
+      "authorName": "验收项目经理",
+      "text": "我是预言家，昨晚查验了验收产品经理，他是狼人。请大家跟我一起投票把他投出去。",
+      "kind": "message",
+      "createdAt": 1790103299530
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:14",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-59f34c",
+      "authorName": "验收产品经理",
+      "text": "项目经理跳预言家，但预言家通常第一轮不会直接查我这个后置位吧？这可能是悍跳，想强推我。我才是真预言家，昨晚查验了验收工程师（已出局），他是好人。大家不要被误导！",
+      "kind": "message",
+      "createdAt": 1790103301527
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:15",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-20c232",
+      "authorName": "验收测试工程师",
+      "text": "我发言。项目经理直接跳预言家查杀，但验人逻辑有点奇怪，第一夜查已出局的人意义不大。产品经理虽然反驳，但两人对跳，我暂时无法完全信谁。建议听听后面设计师和真人的看法，再投票。",
+      "kind": "message",
+      "createdAt": 1790103306740
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:16",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-75f08e",
+      "authorName": "验收设计师",
+      "text": "我是设计师，目前场上情况复杂，项目经理和产品经理对跳预言家。项目经理查杀产品经理，产品经理反跳预言家查已出局的工程师是好人。我暂时无法判断，但工程师已死，查验他确实收益不高。建议大家谨慎，听完真人发言再投票。",
+      "kind": "message",
+      "createdAt": 1790103310609
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:17",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "user",
+      "authorName": "测试真人",
+      "text": "这是我的第 1 轮观察：我会结合其他人的描述判断。",
+      "kind": "message",
+      "createdAt": 1790103310622
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:18",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "请存活玩家私下投票。每人一票，禁止自投；全部收齐后公开。",
+      "kind": "system",
+      "createdAt": 1790103310622
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:19",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 轮投票结果：验收项目经理 → 验收产品经理；验收产品经理 → 验收项目经理；验收测试工程师 → 验收产品经理；验收设计师 → 验收产品经理；测试真人 → 验收项目经理",
+      "kind": "system",
+      "createdAt": 1790103315615
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:20",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "验收产品经理出局。",
+      "kind": "system",
+      "createdAt": 1790103315615
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:21",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 2 夜。狼人私下讨论并选择目标，预言家随后查验；夜间行动不会公开。",
+      "kind": "system",
+      "createdAt": 1790103315615
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:24",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "天亮了，验收项目经理昨夜出局。",
+      "kind": "system",
+      "createdAt": 1790103319002
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:25",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 2 轮白天。请依次发言：@验收测试工程师 → @验收设计师 → @测试真人。",
+      "kind": "system",
+      "createdAt": 1790103319002
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:26",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-20c232",
+      "authorName": "验收测试工程师",
+      "text": "项目经理出局了，他之前跳预言家查杀产品经理，现在两人双倒，说明其中至少有一狼。我是好人，现在场上还剩设计师和真人，我需要听听你们的发言，看看有没有矛盾点。",
+      "kind": "message",
+      "createdAt": 1790103320506
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:27",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "bot-75f08e",
+      "authorName": "验收设计师",
+      "text": "项目经理出局，第一轮双倒，场上现在只剩三个人。我是好人，现在就看测试工程师和真人了。如果有狼，很可能就在你们中间。",
+      "kind": "message",
+      "createdAt": 1790103322986
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:28",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "user",
+      "authorName": "测试真人",
+      "text": "这是我的第 2 轮观察：我会结合其他人的描述判断。",
+      "kind": "message",
+      "createdAt": 1790103322999
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:29",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "请存活玩家私下投票。每人一票，禁止自投；全部收齐后公开。",
+      "kind": "system",
+      "createdAt": 1790103322999
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:30",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 2 轮投票结果：验收测试工程师 → 验收设计师；验收设计师 → 验收测试工程师；测试真人 → 验收测试工程师",
+      "kind": "system",
+      "createdAt": 1790103330844
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:31",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "验收测试工程师出局。",
+      "kind": "system",
+      "createdAt": 1790103330844
+    },
+    {
+      "id": "2f708d6d-cef6-4cc6-8bfd-09588e198b3b:event:32",
+      "conversationId": "group-904205c0",
+      "topicId": "83ddf827-82ae-4d82-8ce5-41ad3bb8b10a",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "游戏结束：好人获胜。\n身份揭晓：验收项目经理：预言家；验收产品经理：狼人；验收工程师：平民；验收测试工程师：狼人；验收设计师：平民；测试真人：平民",
+      "kind": "system",
+      "createdAt": 1790103330844
+    }
+  ]
+}

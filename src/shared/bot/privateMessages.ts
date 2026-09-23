@@ -1,6 +1,7 @@
 import type { BotMember } from './mentions'
 
 export interface PrivateDelivery {
+  intent?: 'inform' | 'request'
   id: string
   sender: { id: string; name: string }
   /** "human" is a delivery address, never an @mention alias. */
@@ -18,12 +19,12 @@ const CLOSE = '[[/private]]'
  * Private blocks never pass through Markdown, work logs or the public history. */
 export function parsePrivateReply(text: string): {
   publicText: string
-  deliveries: { to: string; content: string }[]
+  deliveries: { to: string; content: string; intent?: 'inform' }[]
   incomplete: boolean
   invalid: boolean
 } {
   const lower = text.toLowerCase()
-  const deliveries: { to: string; content: string }[] = []
+  const deliveries: { to: string; content: string; intent?: 'inform' }[] = []
   let publicText = ''
   let cursor = 0
   let incomplete = false
@@ -47,11 +48,11 @@ export function parsePrivateReply(text: string): {
       incomplete = true
       break
     }
-    const header = text.slice(start, headerEnd + 2).match(/^\[\[private:([^\]\r\n]+)\]\]$/i)
+    const header = text.slice(start, headerEnd + 2).match(/^\[\[private(-info)?:([^\]\r\n]+)\]\]$/i)
     const content = text.slice(headerEnd + 2, end).trim()
     if (!header || !content || content.toLowerCase().includes('[[private') || content.length > 12_000 || deliveries.length >= 20)
       invalid = true
-    else deliveries.push({ to: header[1].trim(), content })
+    else deliveries.push({ to: header[2].trim(), content, ...(header[1] ? { intent: 'inform' as const } : {}) })
     cursor = end + CLOSE.length
   }
   return { publicText, deliveries, incomplete, invalid }
@@ -87,6 +88,7 @@ export function privateReplyDeliveries(
       sender: { id: sender.id, name: sender.name },
       recipient,
       content: delivery.content,
+      ...(delivery.intent ? { intent: delivery.intent } : {}),
       createdAt: Date.now(),
       ...(topicId ? { topicId } : {})
     })

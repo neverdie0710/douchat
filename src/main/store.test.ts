@@ -15,6 +15,21 @@ function createStore(): DouchatStore {
   return new DouchatStore(join(directory, 'douchat.db'), { seedDemo: true })
 }
 
+it('isolates persisted group health by group and account', () => {
+  const store = createStore()
+  const owner = store.currentAccountId
+  const health = { dobi: { fingerprint: 'config-v1', status: 'healthy' as const, checkedAt: 123, latencyMs: 42, failures: 0 } }
+  store.saveGroupHealth('crew', health)
+  expect(store.groupHealth('crew')).toEqual(health)
+  expect(store.groupHealth('direct-dobi')).toEqual({})
+  store.setCurrentAccountId('someone-else')
+  expect(store.groupHealth('crew')).toEqual({})
+  store.saveGroupHealth('crew', {})
+  store.setCurrentAccountId(owner)
+  expect(store.groupHealth('crew')).toEqual(health)
+  store.close()
+})
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
@@ -22,6 +37,22 @@ afterEach(() => {
 })
 
 describe('DouchatStore', () => {
+  it('preserves a renamed group through member updates, removal and restart', () => {
+    const store = createStore()
+    const member = store.createAgent({ name: 'Member', role: '', instructions: '', color: '', provider: 'local', model: 'default', localAgentId: 'codex' })
+    const group = store.createGroup({ name: '', agentIds: [member.id] })
+    store.updateAgent(member.id, { name: 'Updated member' })
+    expect(store.conversation(group.id)?.name).toBe('Updated member')
+    store.updateConversation(group.id, { name: 'local agents' })
+    store.updateAgent(member.id, { name: 'Another name' })
+    expect(store.conversation(group.id)?.name).toBe('local agents')
+    store.deleteAgent(member.id)
+    expect(store.conversation(group.id)?.name).toBe('local agents')
+    store.close()
+    const reopened = new DouchatStore(join(temporaryDirectories.at(-1)!, 'douchat.db'))
+    expect(reopened.conversation(group.id)?.name).toBe('local agents')
+    reopened.close()
+  })
   it('persists agent permission choices across restarts', () => {
     const store = createStore()
     const agent = store.createAgent({ name: 'Permission test', role: '', instructions: '', color: '', provider: 'local', model: 'default', localAgentId: 'codex' })
@@ -61,7 +92,7 @@ describe('DouchatStore', () => {
     const store = createStore()
     const agent = store.agents[0]
     expect(store.claimSocialAgent(agent.id, 'local-demo-account').ownerId).toBe('local-demo-account')
-    expect(() => store.claimSocialAgent(agent.id, 'bob')).toThrow('自己的')
+    expect(() => store.claimSocialAgent(agent.id, 'bob')).toThrow('your own')
     store.updateAgent(agent.id, { ownerId: 'bob', name: 'Updated' } as UpdateAgentInput)
     expect(store.agent(agent.id)?.ownerId).toBe('local-demo-account')
     store.saveSocialTaskResult({ id: 'task', ownerId: 'local-demo-account', claim: 'claim', reply: 'Done', failed: false })
@@ -80,7 +111,7 @@ describe('DouchatStore', () => {
     const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
     expect(store.claimSocialAgent(admin.id, 'alice').systemRole).toBe('admin')
     store.setCurrentAccountId('bob')
-    expect(() => store.claimSocialAgent(admin.id, 'bob')).toThrow('自己的')
+    expect(() => store.claimSocialAgent(admin.id, 'bob')).toThrow('your own')
   })
 
   it('persists menu preferences and restores hidden chats when new messages arrive', () => {

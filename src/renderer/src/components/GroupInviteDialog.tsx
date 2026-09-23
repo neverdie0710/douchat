@@ -72,7 +72,7 @@ export function GroupInviteDialog({ conversation, agents, userName, userAvatar, 
       {invite && <p className="group-invite-expiry">{tr('Valid until {date}', { date: new Date(invite.expiresAt).toLocaleString() })}</p>}
       <div className="group-invite-feedback" aria-live="polite">
         {confirmReset && <p>{t('The old invitation link will stop working.')}</p>}
-        {error && <p className="group-invite-error" role="alert">{error}</p>}
+        {error && <p className="group-invite-error" role="alert">{t(error)}</p>}
         {status && status !== t('Copied') && <p role="status">{status}</p>}
       </div>
     </section>

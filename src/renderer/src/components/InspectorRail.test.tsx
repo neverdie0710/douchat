@@ -76,6 +76,23 @@ describe('chat details rail', () => {
     ))
   }
 
+  it('explains explicit shared-group replies without changing local group defaults', async () => {
+    await renderRail({ ...group, socialRoom: { id: 'shared', name: 'Team', kind: 'group', members: [], agents: [], createdAt: '' } })
+    expect(container.querySelector('.shared-agent-response-hint')?.textContent).toContain('Ordinary messages and @all do not start agent tasks')
+    await renderRail(group)
+    expect(container.querySelector('.shared-agent-response-hint')).toBeNull()
+  })
+
+  it('marks group-specific unavailable members and removes the marker after recovery', async () => {
+    await renderRail(group, vi.fn(), { ...snapshot, groupMemberHealth: { [group.id]: { alpha: { status: 'unavailable', checkedAt: 1 } } } })
+    expect(container.querySelector('.member-avatar-wrap .member-unavailable')?.getAttribute('aria-label')).toBe('Temporarily unavailable')
+    expect(container.querySelector('.member-unavailable')?.textContent).toBe('')
+    await renderRail(group, vi.fn(), { ...snapshot, groupMemberHealth: { [group.id]: { alpha: { status: 'healthy', checkedAt: 2 } } } })
+    expect(container.querySelector('.member-unavailable')).toBeNull()
+    await renderRail(direct, vi.fn(), { ...snapshot, groupMemberHealth: { [group.id]: { alpha: { status: 'unavailable', checkedAt: 1 } } } })
+    expect(container.querySelector('.member-unavailable')).toBeNull()
+  })
+
   it('places the current user after the agents and opens their profile settings', async () => {
     const onSelectUser = vi.fn()
     await renderRail(group, onSelectUser)
@@ -98,7 +115,7 @@ describe('chat details rail', () => {
     expect(tiles.sort((a, b) => Number((a as HTMLElement).style.order) - Number((b as HTMLElement).style.order)).map((tile) => tile.textContent)).toEqual(['Dobi', 'Alpha', 'Friend'])
   })
 
-  it('renames a group inline when Enter is pressed', async () => {
+  it.each(['Enter', 'blur'])('renames a group inline on %s', async (trigger) => {
     await renderRail()
     const edit = container.querySelector<HTMLButtonElement>('[aria-label="Edit group chat name: Team room"]')!
     expect(edit.querySelector('svg')).not.toBeNull()
@@ -110,7 +127,9 @@ describe('chat details rail', () => {
       valueSetter?.call(input, 'Renamed room')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    await act(async () => input.dispatchEvent(trigger === 'blur'
+      ? new FocusEvent('focusout', { bubbles: true })
+      : new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
 
     expect(updateConversation).toHaveBeenCalledWith(group.id, { name: 'Renamed room' })
   })

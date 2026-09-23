@@ -1,17 +1,18 @@
 import { CustomModelSettings } from './CustomModelSettings'
+import { SchedulingSettings } from './SchedulingSettings'
 import { messageSendError } from '../messageQueue'
 import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import { setPreferences, usePreferences, t, tr, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
 import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'about'
+export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about'
 
 export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
@@ -125,6 +126,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
         <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
+        <button id="scheduling-tab" role="tab" aria-selected={tab === 'scheduling'} aria-controls="settings-content" className={tab === 'scheduling' ? 'active' : ''} onClick={() => onTab('scheduling')}><Workflow size={18} /><span>{t('Scheduling')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
     </aside>
@@ -166,7 +168,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         </section>
         {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
         {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : tab === 'models' ? <CustomModelSettings /> : <AboutTab />}
+      </> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
     </main>
     </section>
   </NativeDialog>

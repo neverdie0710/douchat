@@ -22,8 +22,8 @@ it('keeps keys out of public state and isolates accounts while retaining omitted
   expect(store.list('b').providers).toEqual([])
   store.save('a', [{ ...provider, apiKey: undefined, name: 'Renamed' }], config.defaultModel)
   expect(store.records('a')[0].apiKey).toBe(provider.apiKey)
-  expect(() => store.save('b', [{ ...provider, apiKey: undefined }], '')).toThrow('密钥')
-  expect(() => store.save('a', [{ ...provider, apiBase: 'https://other.example', apiKey: undefined }], '')).toThrow('重新输入')
+  expect(() => store.save('b', [{ ...provider, apiKey: undefined }], '')).toThrow('API key')
+  expect(() => store.save('a', [{ ...provider, apiBase: 'https://other.example', apiKey: undefined }], '')).toThrow('Enter the API key again')
   expect(store.save('a', [], config.defaultModel)).toEqual({ providers: [], defaultModel: '' })
 })
 it('normalizes complete and versioned endpoints without duplicate v1', () => {

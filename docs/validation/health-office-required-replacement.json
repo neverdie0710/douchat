@@ -1,0 +1,78 @@
+{
+  "report": {
+    "scenario": "office-required-replacement",
+    "staleProbeInjected": "OpenClaw",
+    "passed": true,
+    "status": "completed",
+    "firstReplyMs": 15961,
+    "elapsedMs": 15963,
+    "speakers": [
+      "DeepSeek"
+    ],
+    "sourceBatch": "health-2026-09-23T02-55-11-080Z"
+  },
+  "messages": [
+    {
+      "conversationId": "group-90141d64",
+      "topicId": "04c1cf97-5fd1-4492-b6bd-8971cdca4e68",
+      "authorId": "user",
+      "authorName": "You",
+      "text": "@OpenClaw 为内部报销审批 MVP 写三条技术实现建议，只讨论，不执行外部操作；不可用时请合适的成员接替，完成后结束。",
+      "kind": "message",
+      "recipients": [
+        {
+          "id": "openclaw-b77d98",
+          "name": "OpenClaw"
+        }
+      ],
+      "id": "08da32c4-bd4c-4431-96e3-de8643b29082",
+      "createdAt": 1790132111172
+    },
+    {
+      "id": "08da32c4-bd4c-4431-96e3-de8643b29082:unavailable:openclaw-b77d98",
+      "conversationId": "group-90141d64",
+      "topicId": "04c1cf97-5fd1-4492-b6bd-8971cdca4e68",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：OpenClaw 暂不可用，由可用成员接替未完成的任务。",
+      "createdAt": 1790132122103
+    },
+    {
+      "conversationId": "group-90141d64",
+      "topicId": "04c1cf97-5fd1-4492-b6bd-8971cdca4e68",
+      "authorId": "deepseek-b2de57",
+      "authorName": "DeepSeek",
+      "text": "OpenClaw 这轮不可用，我作为接替者直接把交付补上，只做讨论、不碰任何外部系统。",
+      "kind": "message",
+      "replyGroupId": "d223fec2-1bac-4ad8-a8fc-c604cee8a5c3",
+      "recipients": [],
+      "id": "7c4171ee-b634-4c7e-a97c-ae98c67cc4a0",
+      "createdAt": 1790132127131
+    },
+    {
+      "conversationId": "group-90141d64",
+      "topicId": "04c1cf97-5fd1-4492-b6bd-8971cdca4e68",
+      "authorId": "deepseek-b2de57",
+      "authorName": "DeepSeek",
+      "text": "**内部报销审批 MVP 的三条技术实现建议**\n\n1. **审批链配置化 + 显式状态机**。报销单用固定状态机（草稿 → 已提交 → 审批中 → 通过/驳回 → 已支付/已作废），每次流转只允许合法边，非法跳转直接拒绝。审批节点不写死在代码里，按「金额区间 + 费用类型」查配置表动态生成审批任务，这样改规则不用发版。\n2. **审批动作必须幂等且防并发**。前端提交审批带 Idempotency-Key，服务端落唯一索引；同一审批任务用行锁或版本号乐观锁，杜绝双人同时点通过造成的重复流转。金额一律按「分」存整型，避免浮点误差；驳回必须带理由且可回退到指定节点重提。\n3. **全量审计 + 解耦外部同步**。所有状态变更写 append-only 审计表（谁、何时、改前值、改后值、来源 IP），审计记录只增不改。发票/凭证文件放对象存储、库里只存引用；与财务、HR 系统的对接走 outbox 异步投递 + 重试，MVP 阶段不要做同步双写，失败也不阻塞审批主流程。",
+      "kind": "message",
+      "replyGroupId": "d223fec2-1bac-4ad8-a8fc-c604cee8a5c3",
+      "recipients": [],
+      "id": "6ac347c5-cb15-40cf-911e-25f7740959d9",
+      "createdAt": 1790132127131
+    },
+    {
+      "conversationId": "group-90141d64",
+      "topicId": "04c1cf97-5fd1-4492-b6bd-8971cdca4e68",
+      "authorId": "deepseek-b2de57",
+      "authorName": "DeepSeek",
+      "text": "三条建议已交付，本轮结束。",
+      "kind": "message",
+      "replyGroupId": "d223fec2-1bac-4ad8-a8fc-c604cee8a5c3",
+      "recipients": [],
+      "id": "edf65122-7a6d-44db-b60f-7a19af5209a2",
+      "createdAt": 1790132127131
+    }
+  ]
+}

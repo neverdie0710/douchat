@@ -29,7 +29,7 @@ export function InspectorRail({
   person?: SocialPerson
   onSelectPerson?: (anchor: ProfileAnchor, personId?: string) => void
   searchMessages?: (query: string) => Promise<ChatMessage[]>
-  snapshot: Pick<AppSnapshot, 'messages' | 'agents' | 'userName' | 'userAvatar' | 'agentStatuses' | 'routines' | 'runs'>
+  snapshot: Pick<AppSnapshot, 'groupMemberHealth' | 'messages' | 'agents' | 'userName' | 'userAvatar' | 'agentStatuses' | 'routines' | 'runs'>
   conversation?: Conversation
   members: AgentConfig[]
   selectedAgentId?: string
@@ -97,6 +97,10 @@ export function InspectorRail({
   const orderedMembers = members
   const agent = members.find((item) => item.id === selectedAgentId) ?? members[0] ?? snapshot.agents[0]
   const currentUserName = snapshot.userName || t('You')
+  const unavailable = (id: string) => !!conversation && snapshot.groupMemberHealth?.[conversation.id]?.[id]?.status === 'unavailable'
+  const availabilityDot = (id: string) => unavailable(id)
+    ? <span className="member-unavailable" role="img" aria-label={t('Temporarily unavailable')} title={`${t('Temporarily unavailable')} · ${t('Excluded from group tasks until a successful health check')}`} />
+    : null
   const normalizedMemberQuery = memberQuery.trim().toLocaleLowerCase()
   const matchingMembers = orderedMembers.filter((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(normalizedMemberQuery))
   const currentUserMatches = currentUserName.toLocaleLowerCase().includes(normalizedMemberQuery)
@@ -107,7 +111,7 @@ export function InspectorRail({
           <section className="member-section">
             {conversation.type === 'group' && <label className="group-member-search"><Search size={16} /><input aria-label={t('Search group members')} placeholder={t('Search group members')} value={memberQuery} onChange={(event) => setMemberQuery(event.target.value)} />{memberQuery && <button type="button" aria-label={t('Clear search')} onClick={() => setMemberQuery('')}><X size={14} /></button>}</label>}
             {conversation.type === 'group' && memberQuery.trim() ? <div className="group-member-results">
-              {matchingMembers.map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><AgentAvatar agent={member} size={40} /><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
+              {matchingMembers.map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} />{availabilityDot(member.id)}</div><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
               {currentUserMatches && <button type="button" onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`}><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><span><strong>{highlight(currentUserName)}</strong></span></button>}
               {!matchingMembers.length && !currentUserMatches && <p>{t('No matching agents')}</p>}
             </div> : <div className="member-grid">
@@ -120,7 +124,7 @@ export function InspectorRail({
                   onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}
                   title={`${agentDisplayName(member)} · ${agentDisplayRole(member)}`}
                 >
-                  <div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} /><ContactKindBadge local={Boolean(member.localAgentId)} /></div>
+                  <div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} /><ContactKindBadge local={Boolean(member.localAgentId)} />{availabilityDot(member.id)}</div>
                   <span className="member-name-label"><span className="member-name-text">{agentDisplayName(member)}</span></span>
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>
@@ -139,6 +143,7 @@ export function InspectorRail({
               {conversation.type === 'group' && <button className="member-tile add" style={{ order: 10000 }} onClick={onRemoveMembers} aria-label={t('Remove group members')}><span className="member-add"><Minus size={26} strokeWidth={1.5} /></span><span>{t('Remove')}</span></button>}
             </div>}
             {conversation.type === 'group' && !memberQuery.trim() && <div className="group-conversation-details">
+              {conversation.socialRoom && <p className="shared-agent-response-hint">{t('Shared group agents respond only when explicitly mentioned or selected as a task recipient. Ordinary messages and @all do not start agent tasks.')}</p>}
               <section className="group-name-setting">
                 <h2>{t('Group chat name')}</h2>
                 {editingName ? <input
@@ -148,7 +153,7 @@ export function InspectorRail({
                   value={nameDraft}
                   onChange={(event) => setNameDraft(event.target.value)}
                   onFocus={(event) => event.currentTarget.select()}
-                  onBlur={() => { if (!busy) { setNameDraft(conversation.name); setEditingName(false) } }}
+                  onBlur={() => { if (!busy) void saveGroupName() }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') { event.preventDefault(); void saveGroupName() }
                     if (event.key === 'Escape') { event.preventDefault(); setNameDraft(conversation.name); setEditingName(false) }
@@ -172,7 +177,7 @@ export function InspectorRail({
                 <label>{t('Pin to top')}<button type="button" className="detail-switch" role="switch" aria-label={t('Pin to top')} aria-checked={!!conversation.pinned} disabled={busy} onClick={() => void update(() => window.douchat.setConversationPinned(conversation.id, !conversation.pinned))} /></label>
               </div>
               {confirmClear ? <div className="detail-clear-confirm"><p>{t('Clear all messages in this chat? This cannot be undone.')}</p><button disabled={busy} onClick={() => setConfirmClear(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.clearConversation(conversation.id))}>{t('Clear chat history')}</button></div> : <button className="detail-clear" onClick={() => setConfirmClear(true)}>{t('Clear chat history')}</button>}
-              {error && <p role="alert">{error}</p>}
+              {error && <p role="alert">{t(error)}</p>}
             </div> : null}
 
           </section>
@@ -224,7 +229,7 @@ function ChatHistoryDialog({ conversation, messages, agents, userName, userAvata
         <button type="button" aria-label={t('Close')} title={t('Close')} onClick={onClose}><X size={18} /></button>
       </header>
       <label className="records-search"><Search size={18} /><input autoFocus value={query} onChange={(event) => onQuery(event.target.value)} placeholder={t('Search')} aria-label={t('Search chat history')} /></label>
-      {error && <p className="records-error" role="alert">{error}</p>}
+      {error && <p className="records-error" role="alert">{t(error)}</p>}
       <div className="records-list" aria-live="polite">
         {!messages.length && <div className="records-empty"><Search size={28} /><strong>{query.trim() ? t('No matching messages') : t('No chat history yet')}</strong><p>{query.trim() ? t('Try another keyword.') : t('Messages from this conversation will appear here.')}</p></div>}
         {messages.map((message) => {

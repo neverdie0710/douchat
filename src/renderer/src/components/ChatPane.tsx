@@ -1,3 +1,4 @@
+import { legacyGroupNotice } from '../../../shared/groupText'
 import { messageSendError, type QueuedMessage } from '../messageQueue'
 import { mentionableAgents } from './common'
 import type { SocialAgent, SocialPerson } from '../../../shared/social'
@@ -255,7 +256,13 @@ function activityDetailLabel(activity: ConversationActivityState): string {
   if (activity.action?.status === 'running') return messageActionLabel(activity.action)
   if (activity.action?.status === 'failed') return t('Trying another approach')
   if (activity.action?.status === 'succeeded') return t('Preparing the result')
-  if (activity.phase === 'planning') return t('Coordinating the group')
+  if (activity.phase === 'planning') {
+    if (activity.planningStage === 'health') return t('Checking group member availability')
+    if (activity.planningStage === 'decision') return t('Choosing a leader and reply order')
+    if (activity.planningStage === 'plan') return t('Preparing the task plan')
+    if (activity.planningStage === 'recovery') return t('Arranging the next step after a member failure')
+    return t('Coordinating the group')
+  }
   if (activity.phase === 'greeting') return t('Preparing a greeting')
   if (activity.phase === 'delivering') return t('Delivering a message')
   return t('Thinking about the next step')
@@ -273,18 +280,26 @@ export function ChatActivity({
     .filter((agent): agent is AgentConfig => Boolean(agent))
   const detail = activityDetailLabel(activity)
 
-  return (
-    <div className="typing-row">
-      {activeAgents.map((agent) => <AgentAvatar key={agent.id} agent={agent} size={36} />)}
+  if (!activeAgents.length && activity.phase === 'planning') return (
+    <div className="system-message" role="status" aria-live="polite">
+      {activity.serviceName && <>{activity.serviceName} · </>}
+      <span className="typing-activity-text" key={detail}>{detail}</span>
+      <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+    </div>
+  )
+
+  return <>{(activeAgents.length ? activeAgents : [undefined]).map(agent => (
+    <div className="typing-row" key={agent?.id ?? 'service'}>
+      {agent && <AgentAvatar agent={agent} size={36} />}
       <div className="typing-content" role="status" aria-live="polite">
-        <span className="typing-label">{activeAgents.map(agentDisplayName).join('、') || t(activity.label)}</span>
+        <span className="typing-label">{agent ? agentDisplayName(agent) : activity.serviceName || t(activity.label)}</span>
         <span className={`typing-bubble typing-activity${activity.localProgress ? ' is-local-progress' : ''}`}>
           <span className="typing-activity-text" key={detail}>{detail}</span>
           <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
         </span>
       </div>
     </div>
-  )
+  ))}</>
 }
 
 function deliveryRecipientName(delivery: MessageDelivery): string {
@@ -689,6 +704,8 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
     : message.text.length > 200 || shortSummary.guidance
       ? shortSummary
       : null
+  const localization = message.localization ?? legacyGroupNotice(message)
+  if (localization) return <div className="system-message">{tr(localization.key, localization.values)}</div>
   if (!summary) return <div className="system-message">{t(message.text)}</div>
 
   return (
@@ -709,7 +726,7 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
                     .finally(() => setLaunching(false))
                 }}>{t(launching ? 'Opening…' : 'Update Grok')}</button>
               )}
-              {summary.action?.kind === 'update-local-agent' && actionError && <span role="alert">{actionError}</span>}
+              {summary.action?.kind === 'update-local-agent' && actionError && <span role="alert">{t(actionError)}</span>}
               {summary.action?.kind === 'open-douchat-credits' && onOpenCredits && (
                 <button className="system-inline-action" type="button" onClick={onOpenCredits}>
                   {t(summary.action.label)}
@@ -769,7 +786,7 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
               </button>
             )}
           </div>
-          {actionError ? <p className="system-action-error">{actionError}</p> : null}
+          {actionError ? <p className="system-action-error">{t(actionError)}</p> : null}
         </div>
       )}
     </div>
@@ -1063,7 +1080,8 @@ export function ChatPane({
   const voiceBaseRef = useRef('')
   const voiceTranscriptRef = useRef('')
   const working = Boolean(activity)
-  const conversationName = conversation ? conversationDisplayName(conversation, agents) : ''
+  const fullConversationName = conversation ? conversationDisplayName(conversation, agents) : ''
+  const conversationName = conversation ? conversationDisplayName(conversation, agents, true) : ''
   const timelineMessages = person ? messages : visibleConversationMessages(conversation, messages)
   const timelineGroups = groupConversationMessages(timelineMessages.filter((message) => !deletedIds.has(message.id)))
 
@@ -1390,10 +1408,13 @@ export function ChatPane({
       <header className="workspace-header window-drag">
         <div className="workspace-identity">
           <div>
-            <strong>
-              {conversationName || 'Douchat'}
-              {conversation?.type === 'group' ? ` (${members.length + (conversation.socialRoom?.members.length ?? 0)})` : ''}
-            </strong>
+            <button type="button" className="workspace-title no-drag" onClick={onToggleInspector}
+              aria-label={`${t('Chat details')}: ${fullConversationName}`} title={fullConversationName} aria-expanded={inspectorOpen}>
+              <strong>
+                {conversationName || 'Douchat'}
+                {conversation?.type === 'group' && conversationName === fullConversationName ? ` (${members.length + (conversation.socialRoom?.members.length ?? 1)})` : ''}
+              </strong>
+            </button>
           </div>
         </div>
         <div className="workspace-header-actions no-drag">
@@ -1518,7 +1539,7 @@ export function ChatPane({
         {queuedMessages.length > 0 && <ol className="composer-queue" aria-label="待发送消息">
           {queuedMessages.map((item) => <li className={`composer-queue-item${item.error ? ' is-failed' : ''}`} key={item.id}>
             <ListEnd className="composer-queue-marker" size={15} aria-hidden="true" />
-            <span className="composer-queue-copy"><span className="composer-queue-text" title={item.text}>{item.text}</span>{item.error && <small role="alert"><TriangleAlert size={13} /><span>{messageSendError(item.error)}</span></small>}</span>
+            <span className="composer-queue-copy"><span className="composer-queue-text" title={item.text}>{item.text}</span>{item.error && <small role="alert"><TriangleAlert size={13} /><span>{t(messageSendError(item.error))}</span></small>}</span>
             <button type="button" className="composer-queue-promote" title={item.error ? '重试发送' : '移到队首，当前回复结束后优先发送'} onClick={() => onPromoteQueued?.(item.id)}><CornerDownRight size={14} aria-hidden="true" /><span>{item.error ? '重试' : '优先发送'}</span></button>
             <button type="button" aria-label="移除排队消息" title="移除排队消息" onClick={() => onRemoveQueued?.(item.id)}><Trash2 size={15} /></button>
           </li>)}

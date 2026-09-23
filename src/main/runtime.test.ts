@@ -27,9 +27,10 @@ interface ReplyOptions {
 }
 
 interface DecisionPayload {
+  currentLeaderMemberId?: string
   leadMember: { id: string } | null
-  members: { id: string }[]
-  messages: { id: string; role: string }[]
+  members: { id: string; name: string }[]
+  messages: { id: string; role: string; content?: string }[]
   completedTurns: { memberId: string }[]
 }
 
@@ -69,6 +70,7 @@ interface RoutineToolLike {
  * decision: the lead first, then one specialist, then stop.
  */
 function stubModel(runtime: DouchatRuntime): void {
+  vi.spyOn(runtime as any, 'refreshHealth').mockResolvedValue({})
   const internals = runtime as unknown as {
     liveAuth: Map<string, boolean>
     runReply: (options: ReplyOptions) => Promise<{ text: string }>
@@ -84,12 +86,14 @@ function stubModel(runtime: DouchatRuntime): void {
     const stop = { mode: 'none', memberIds: [], triggerMessageIds: [] }
     const latestUser = [...payload.messages].reverse().find((message) => message.role === 'user')
     if (!latestUser) return { text: JSON.stringify(stop) }
+    const addressed = payload.members.find(member => latestUser.content?.includes('@' + member.name))
+    if (addressed) return { text: JSON.stringify(payload.completedTurns.length ? stop : { mode: 'single', memberIds: [addressed.id], triggerMessageIds: [latestUser.id] }) }
     const answered = new Set(payload.completedTurns.map((turn) => turn.memberId))
     const next = answered.size
       ? payload.members.find((member) => !answered.has(member.id))
-      : payload.members.find((member) => member.id === payload.leadMember?.id)
+      : payload.members.find((member) => member.id === (payload.currentLeaderMemberId ?? payload.leadMember?.id))
     if (!next || answered.size >= 2) return { text: JSON.stringify(stop) }
-    return { text: JSON.stringify({ mode: 'single', memberIds: [next.id], triggerMessageIds: [latestUser.id] }) }
+    return { text: JSON.stringify({ leaderMemberId: payload.currentLeaderMemberId, mode: 'single', memberIds: [next.id], triggerMessageIds: [latestUser.id] }) }
   }
 }
 
@@ -160,10 +164,10 @@ describe('DouchatRuntime', () => {
   it('rejects shared tasks for a different owner or a cancelled session before model execution', async () => {
     const { store, runtime } = createRuntime()
     const agent = store.agents[0]
-    await expect(runtime.executeSocialTask('bob', agent.id, 'task', 'Do work', new AbortController().signal)).rejects.toThrow('不属于')
+    await expect(runtime.executeSocialTask('bob', agent.id, 'task', 'Do work', new AbortController().signal)).rejects.toThrow('does not belong')
     const abort = new AbortController()
     abort.abort()
-    await expect(runtime.executeSocialTask('local-demo-account', agent.id, 'task', 'Do work', abort.signal)).rejects.toThrow('取消')
+    await expect(runtime.executeSocialTask('local-demo-account', agent.id, 'task', 'Do work', abort.signal)).rejects.toThrow('cancelled')
   })
 
   it('returns generated image bytes with a shared task reply', async () => {
@@ -186,7 +190,7 @@ describe('DouchatRuntime', () => {
     vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
     expect(await runtime.executeSocialTask('alice', admin.id, 'shared-task', 'Help the group', new AbortController().signal)).toEqual({ text: 'Done' })
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({ config: expect.objectContaining({ id: admin.id }), context: 'group' }))
-    await expect(runtime.executeSocialTask('bob', admin.id, 'foreign-task', 'Run', new AbortController().signal)).rejects.toThrow('不属于')
+    await expect(runtime.executeSocialTask('bob', admin.id, 'foreign-task', 'Run', new AbortController().signal)).rejects.toThrow('does not belong')
     expect(reply).toHaveBeenCalledTimes(1)
   })
 
@@ -332,8 +336,8 @@ describe('DouchatRuntime', () => {
     expect(reminder.content[0].text).toContain('仅执行一次')
 
     const prompt = internals.systemPrompt(agent, 'direct', true)
-    expect(prompt).toContain('“盯一下”')
-    expect(prompt).toContain('“钉一下”')
+    expect(prompt).toContain('original language')
+    expect(prompt).toContain('only when the human requests it')
     expect(prompt).toContain('every day at 09:00')
     expect(internals.systemPrompt(agent, 'controller', true)).not.toContain('create_routine')
   })
@@ -562,7 +566,7 @@ describe('DouchatRuntime', () => {
     expect(runtime.defaultCloudAgentModel()).toEqual({ provider: 'gateway', model: 'default' })
     await runtime.connect()
     expect(runtime.snapshot().models).toEqual([
-      { provider: 'gateway', model: 'douchat-default', label: 'Douchat Cloud · douchat-default' }
+      { provider: 'gateway', model: 'douchat-default', label: 'Douchat Cloud' }
     ])
     expect(runtime.defaultCloudAgentModel()).toEqual({ provider: 'gateway', model: 'douchat-default' })
     expect(runtime.snapshot().endpoint).toMatchObject({ source: 'account', hasApiKey: true })
@@ -785,7 +789,7 @@ describe('DouchatRuntime', () => {
     expect(new Set(dobiBubbles.map((message) => message.replyGroupId)).size).toBe(1)
   })
 
-  it('routes the next unaddressed group message through the lead again', async () => {
+  it('keeps the healthy leader for a contextual follow-up', async () => {
     const { store, runtime } = createRuntime()
     const topicId = store.activeTopicId('crew')
     await runtime.sendMessage('crew', 'plan the launch')
@@ -810,11 +814,11 @@ describe('DouchatRuntime', () => {
     const messages = store.topicMessages('crew', store.activeTopicId('crew'))
     expect(messages.at(-1)).toMatchObject({
       kind: 'system',
-      text: 'No member of this group could complete the request.'
+      text: 'upstream unavailable'
     })
     expect(store.runs.at(-1)).toMatchObject({
       status: 'failed',
-      error: 'No member of this group could complete the request'
+      error: 'upstream unavailable'
     })
   })
 
@@ -827,7 +831,7 @@ describe('DouchatRuntime', () => {
 
     const added = store.topicMessages('crew', topicId).slice(before)
     expect(added[0].recipients).toEqual([{ id: 'lin', name: 'Lin' }])
-    expect(new Set(added.filter((message) => message.authorId !== 'user').map((message) => message.authorId))).toEqual(
+    expect(new Set(added.filter((message) => message.kind === 'message' && message.authorId !== 'user').map((message) => message.authorId))).toEqual(
       new Set(['lin'])
     )
   })
@@ -837,7 +841,13 @@ describe('DouchatRuntime', () => {
     store.deleteConversation('direct-dobi')
     const prompts: string[] = []
     const internals = runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }
-    internals.runReply = async ({ config, prompt }) => {
+    internals.runReply = async ({ config, context, prompt }) => {
+      if (context === 'controller') {
+        expect(prompt).not.toContain('agent-secret'); expect(prompt).not.toContain('human-secret')
+        const p = JSON.parse(prompt.slice(prompt.indexOf('{')))
+        const target = p.completedTurns.length ? 'lin' : 'dobi'
+        return { text: JSON.stringify({ mode: 'single', memberIds: [target], triggerMessageIds: [p.messages[0].id] }) }
+      }
       if (config.id === 'dobi') return { text: 'Words delivered. [[private:lin]]agent-secret[[/private]][[private:human]]human-secret[[/private]]' }
       prompts.push(prompt)
       return { text: 'Ready.' }
@@ -1013,6 +1023,10 @@ describe('DouchatRuntime', () => {
     }
     const calls: string[] = []
     internals.runReply = async ({ config, context, prompt }) => {
+      if (context === 'controller') {
+        const p = JSON.parse(prompt.slice(prompt.indexOf('{')))
+        return { text: JSON.stringify(p.completedTurns.length ? { mode: 'none', memberIds: [], triggerMessageIds: [] } : { mode: 'single', memberIds: ['lin'], triggerMessageIds: [p.messages.at(-1).id] }) }
+      }
       calls.push(config.id)
       if (context === 'direct') {
         internals.activeRun.set(config.id, store.runs.at(-1)!.id)
@@ -1046,6 +1060,28 @@ describe('DouchatRuntime', () => {
     // A topic that already has a transcript is never greeted again.
     await runtime.greet('direct-dobi')
     expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(1)
+  })
+
+  it.each(['zh-CN', 'en'] as const)('welcomes a new account offline in %s without repeating or using a model', async (language) => {
+    const { store, runtime } = createRuntime()
+    store.setCurrentAccountId('new-user')
+    const { agent, conversation } = store.ensureDefaultCloudContact('new-user', { provider: 'gateway', model: 'default' })
+    runtime.setInterfaceLanguage(language)
+    const internal = runtime as unknown as { canRunLive: () => Promise<boolean>; runReply: (options: ReplyOptions) => Promise<{ text: string }> }
+    const live = vi.spyOn(internal, 'canRunLive').mockResolvedValue(false)
+    const reply = vi.spyOn(internal, 'runReply')
+    await Promise.all([runtime.greet(conversation!.id), runtime.greet(conversation!.id)])
+    const messages = store.messages.filter(message => message.conversationId === conversation!.id)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ authorId: agent!.id, kind: 'message' })
+    for (const text of language === 'zh-CN' ? ['创建联系人', '拉群协作', '解释代码', '设置提醒'] : ['Create a contact', 'Start a group', 'explain code', 'Set a reminder']) {
+      expect(messages[0].text).toContain(text)
+    }
+    store.createTopic(conversation!.id)
+    await runtime.greet(conversation!.id)
+    expect(store.messages.filter(message => message.conversationId === conversation!.id)).toHaveLength(1)
+    expect(live).not.toHaveBeenCalled()
+    expect(reply).not.toHaveBeenCalled()
   })
 
   it('uses the selected interface language for proactive greetings', async () => {
@@ -1214,6 +1250,6 @@ it.each([false, true])('keeps custom model routing when cloud reconnects and nev
   expect(internals.resolveModel(agent)).toMatchObject({ provider: 'custom:mine', id: 'private-model' })
   expect(await internals.canRunLive(agent)).toBe(true)
   runtime.configureCustomModels([])
-  expect(() => runtime.customAgentModel('mine', 'private-model')).toThrow('不可用')
-  await expect(internals.canRunLive(agent)).rejects.toThrow('不可用')
+  expect(() => runtime.customAgentModel('mine', 'private-model')).toThrow('unavailable')
+  await expect(internals.canRunLive(agent)).rejects.toThrow('unavailable')
 })

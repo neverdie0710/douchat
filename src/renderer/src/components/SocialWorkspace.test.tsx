@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 import type { AgentConfig, DouchatApi } from '../../../shared/types'
-vi.mock('../preferences', () => ({ usePreferences: () => ({ language: 'en' }), resolveInterfaceLanguage: () => 'en' }))
+vi.mock('../preferences', () => ({ t: (text: string) => text, usePreferences: () => ({ language: 'en' }), resolveInterfaceLanguage: () => 'en' }))
 vi.mock('./common', () => ({ UserAvatar: () => <span /> }))
 import { SocialWorkspace } from './SocialWorkspace'
 afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
@@ -28,6 +28,15 @@ it('offers only owned agents as task recipients and keeps peer agent ownership v
     expect(container.querySelector('[aria-label="Remove from group: Bob agent"]')).toBeNull()
     expect(container.querySelector('[aria-label="Remove from group: Alice agent"]')).not.toBeNull()
     expect(socialAction).toHaveBeenCalledWith({ action: 'messages', roomId: 'group' })
+    await act(async () => {
+      select.value = 'a'; select.dispatchEvent(new Event('change', { bubbles: true }))
+      const textarea = container.querySelector('textarea')!
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Review the plan')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector('form.social-composer')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(socialAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'send', agentId: 'a' }))
+    expect(select.value).toBe('') // The next human reply must not inherit the task recipient.
     await act(async () => root.render(<SocialWorkspace agents={agents} userId="alice" onAddFriend={vi.fn()} embedded roomId="group" />))
     expect(container.querySelector('.social-sidebar')).toBeNull()
     expect(container.querySelector('.social-workspace.embedded')).not.toBeNull()

@@ -1,6 +1,6 @@
 import { agentPermissions } from '../shared/agentPermissions'
-import { addressesEveryone, mentionedMembers } from '../shared/bot/mentions'
-import type { AgentConfig, ChatMessage, MessageAttachment, MessageImageInput } from '../shared/types'
+import { mentionedMembers } from '../shared/bot/mentions'
+import type { AgentConfig, MessageAttachment, MessageImageInput } from '../shared/types'
 import { randomUUID } from 'node:crypto'
 import type { DesktopAuth } from './desktopAuth'
 import type { DouchatStore } from './store'
@@ -33,21 +33,16 @@ export function privacySafeSocialSnapshot(snapshot: SocialSnapshot): SocialSnaps
   }
 }
 
-export function sharedGroupReplyTargets(content: string, ownAgents: SocialAgent[], history: ChatMessage[]): string[] {
-  if (addressesEveryone(content)) return ownAgents.map((agent) => agent.id)
-  // Only continue a reply to this account's message, never another person's exchange.
-  let speaker: string | undefined
-  for (const message of [...history].reverse()) {
-    if (message.kind !== 'message' || message.error) continue
-    if (message.authorId === 'user') {
-      const addressed = mentionedMembers(message.text, ownAgents)
-      if (addressed.length === 1) return [addressed[0].id]
-      return speaker ? [speaker] : ownAgents.slice(0, 1).map((agent) => agent.id)
-    }
-    if (!ownAgents.some((agent) => agent.id === message.authorId)) break
-    speaker ??= message.authorId
+export function sharedGroupReplyTargets(content: string, agents: SocialAgent[], humans: { id: string; name: string }[] = []): string[] {
+  // Shared conversations are human-first. History, question marks and @all are
+  // not permission to start agents owned by this or any other account.
+  const members = [...humans, ...agents]
+  const addressed = mentionedMembers(content, members)
+  const nameKey = (name: string) => name.normalize('NFKC').toLocaleLowerCase()
+  if (addressed.some(member => members.filter(other => nameKey(other.name) === nameKey(member.name)).length > 1)) {
+    throw new Error('This mention matches multiple members. Use a unique member name or select a task recipient.')
   }
-  return ownAgents.slice(0, 1).map((agent) => agent.id)
+  return addressed.filter(member => agents.some(agent => agent.id === member.id)).map(member => member.id)
 }
 
 function sharedAgentProfile(agent: AgentConfig) {
@@ -55,6 +50,17 @@ function sharedAgentProfile(agent: AgentConfig) {
   return { interactionHumans: permissions.groupHumans, interactionAgents: permissions.groupAgents, name: agent.name, avatar: agent.avatar ?? '', avatarEmoji: agent.avatarEmoji ?? '',
     avatarSeed: agent.avatarSeed ?? '', color: agent.color, localAgentId: agent.localAgentId ?? '',
     systemRole: agent.systemRole ?? '' }
+}
+
+function checkHumanAgentTargets(ids: string[], agents: SocialAgent[], requesterId: string): void {
+  for (const id of ids) {
+    const agent = agents.find(member => member.id === id)
+    if (!agent) throw new Error('The selected agent is no longer a member of this group.')
+    if (agent.ownerId === requesterId) continue
+    if (agent.interactionHumans === 'deny') throw new Error(`The owner of "${agent.name}" has disabled requests from group members.`)
+    if (!agent.interactionHumans) throw new Error(`Permissions for "${agent.name}" have not synchronized. Ask the owner to reconnect.`)
+    // `ask` is not consent: the executing owner's runtime still requests approval.
+  }
 }
 
 /** Tokens and execution claims never cross the preload boundary. */
@@ -70,7 +76,7 @@ export class SocialClient {
   private identity() {
     const state = this.auth.getState()
     const token = this.auth.getAccessToken()
-    if (state.status !== 'signed-in' || !token) throw new Error('请先登录。')
+    if (state.status !== 'signed-in' || !token) throw new Error("Sign in first.")
     return { id: state.user.id, token }
   }
   private async request<T>(body?: object, identity = this.identity(), signal?: AbortSignal): Promise<T> {
@@ -81,10 +87,10 @@ export class SocialClient {
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000)
     })
     const current = this.identity()
-    if (current.id !== identity.id || current.token !== identity.token) throw new Error('账号已切换，请重试。')
-    if (response.status === 401) { await this.auth.invalidateSession(); throw new Error('登录已过期，请重新登录。') }
+    if (current.id !== identity.id || current.token !== identity.token) throw new Error("The account changed. Try again.")
+    if (response.status === 401) { await this.auth.invalidateSession(); throw new Error("Your session expired. Sign in again.") }
     const payload = await response.json().catch(() => null)
-    if (!response.ok || payload?.data === undefined) throw new Error(payload?.message || '聊天服务连接失败，请稍后重试。')
+    if (!response.ok || payload?.data === undefined) throw new Error(payload?.message || "The chat service connection failed. Try again later.")
     return payload.data as T
   }
   async snapshot(): Promise<SocialSnapshot> { return privacySafeSocialSnapshot(await this.request()) }
@@ -204,17 +210,9 @@ export class SocialClient {
       return { name: image.name, mimeType: image.mimeType, base64: Buffer.from(image.data).toString('base64') }
     })
     const room = conversation.socialRoom
-    const mentioned = mentionedMembers(content, room?.agents ?? [])
-    const blocked = mentioned.find((agent) => agent.ownerId !== identity.id && (!agent.interactionHumans || agent.interactionHumans === 'deny'))
-    if (blocked) throw new Error(blocked.interactionHumans === 'deny'
-      ? `「${blocked.name}」的主人未开放群成员调用，请联系主人调整 Agent 权限。`
-      : `「${blocked.name}」的调用权限尚未同步，请主人更新并重新连接 Douchat 后再试。`)
-    if (conversation.socialRoom && images.length) throw new Error('群聊暂不支持图片。')
-    const ownAgents = room?.agents.filter((agent) => agent.ownerId === identity.id) ?? []
-    const addressedPeople = mentionedMembers(content, room?.members ?? [])
-    const everyone = room?.agents.filter((agent) => agent.ownerId === identity.id || agent.interactionHumans === 'allow' || agent.interactionHumans === 'ask') ?? []
-    const agentIds = addressesEveryone(content) ? everyone.map((agent) => agent.id) : mentioned.length ? mentioned.map((agent) => agent.id) : addressedPeople.length ? []
-      : sharedGroupReplyTargets(content, ownAgents, this.store.topicMessages(conversation.id, conversation.activeTopicId))
+    const agentIds = sharedGroupReplyTargets(content, room?.agents ?? [], room?.members ?? [])
+    checkHumanAgentTargets(agentIds, room?.agents ?? [], identity.id)
+    if (conversation.socialRoom && images.length) throw new Error("Images are not yet supported in shared group chats.")
     const agentId = agentIds[0]
     const signature = JSON.stringify([content, images, agentIds])
     const key = `${identity.id}:${conversationId}`
@@ -250,7 +248,19 @@ export class SocialClient {
   }
   async action(input: SocialAction): Promise<SocialResult> {
     const allowed = ['group-invite', 'rename-room', 'remove-members', 'invite-members', 'add-members', 'lookup', 'request', 'respond', 'create-room', 'add-agent', 'remove-agent', 'messages', 'send']
-    if (!input || !allowed.includes(input.action)) throw new Error('不支持的操作。')
+    if (!input || !allowed.includes(input.action)) throw new Error("Unsupported operation.")
+    if (input.action === 'send') {
+      // The legacy workspace has an explicit recipient picker. Apply the same
+      // default silence and permissions as the standard inbox, using a fresh roster.
+      const identity = this.identity()
+      const snapshot = await this.request<SocialSnapshot>(undefined, identity)
+      if (snapshot.userId !== identity.id) throw new Error('Chat account mismatch')
+      const room = snapshot.rooms.find(item => item.id === input.roomId)
+      if (!room) throw new Error('Chat not found')
+      const agentIds = input.agentId ? [input.agentId] : sharedGroupReplyTargets(input.content, room.agents, room.members)
+      checkHumanAgentTargets(agentIds, room.agents, identity.id)
+      return this.request({ ...input, agentId: agentIds[0], agentIds }, identity)
+    }
     if (input.action === 'group-invite') {
       const conversation = this.store.accountConversations.find((item) => item.id === input.conversationId)
       if (!conversation || conversation.type !== 'group') throw new Error('Chat not found')
@@ -271,7 +281,7 @@ export class SocialClient {
         const room = snapshot.rooms.find((entry) => entry.id === input.roomId)
         if (room && (room.members.some((person) => input.friendIds.includes(person.id)) || room.agents.some((agent) =>
           input.agentIds.includes(agent.id) || (agent.ownerId === snapshot.userId && input.agentIds.includes(agent.localId)) || input.friendIds.includes(agent.ownerId)))) {
-          throw new Error('群成员尚未移除，请刷新后重试。')
+          throw new Error("The group member has not been removed. Refresh and try again.")
         }
       }
       return result
@@ -284,7 +294,7 @@ export class SocialClient {
       const agents = localIds.map((id) => this.store.claimSocialAgent(id, identity.id))
       let roomId = conversation.remoteRoomId
       if (!roomId) {
-        if (this.runtime.snapshot().activity.some((activity) => activity.conversationId === conversation.id)) throw new Error('请等当前回复完成后再邀请好友。')
+        if (this.runtime.snapshot().activity.some((activity) => activity.conversationId === conversation.id)) throw new Error("Wait for the current reply to finish before inviting friends.")
         const result = await this.request<SocialResult>({ action: 'create-room', kind: 'group', name: conversation.name, friendIds: input.friendIds, clientId: conversation.id }, identity)
         if (!result.roomId) throw new Error('Chat could not be created')
         roomId = result.roomId
@@ -369,7 +379,7 @@ export class SocialClient {
           let images: SocialImage[] | undefined
           let failed = false
           try {
-            if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error('任务权限校验失败。')
+            if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error("Task permission check failed.")
             this.activeTask = { localId: task.agent.localId, taskId: task.id }
             const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
               requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',

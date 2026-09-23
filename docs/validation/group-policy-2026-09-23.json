@@ -1,0 +1,1639 @@
+{
+  "sourceBatch": "policy-2026-09-23T04-16-24-329Z",
+  "description": "Real configured OpenRouter models; isolated groups; injected pre-execution reply failures; scripted human messages. Jev escalation uses real group-member model calls.",
+  "results": [
+    {
+      "report": {
+        "model": "~typesafe/jev-latest",
+        "scenario": "attendance-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 2,
+        "recovery": true,
+        "elapsedMs": 18198,
+        "leader": "工程师",
+        "speakers": [
+          "工程师",
+          "审阅员"
+        ],
+        "fallbackCount": 1
+      },
+      "events": [
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "71ae95a5-d211-4944-a062-ef437c74ef76",
+          "createdAt": 1790137211903
+        },
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Decision fallback",
+          "detail": "决策需要 Leader 复核。 Using a group member to plan this step.",
+          "id": "060b5e98-0dab-42cc-8d90-882799bab0bb",
+          "createdAt": 1790137212249
+        },
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-d8b5fa\",\"participationOnly\":true,\"assignments\":{\"bot-d8b5fa\":\"只报 1\",\"bot-d6f7f9\":\"只报 2\",\"bot-306126\":\"只报 3\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-d8b5fa\",\"bot-d6f7f9\",\"bot-306126\"],\"triggerMessageIds\":[\"6dc28350-cbad-4074-8a8b-9602205fa086\"]}",
+          "id": "71c8018a-9378-41ae-9f60-bec2545b2b78",
+          "createdAt": 1790137226737
+        },
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"recovery\"}",
+          "id": "a8a3b5bb-ab60-49c7-b156-cf4ab3133420",
+          "createdAt": 1790137226742
+        },
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Leader takeover",
+          "detail": "工程师",
+          "id": "f8094d0a-d326-480e-8dbb-363b3c4c609f",
+          "createdAt": 1790137227012
+        },
+        {
+          "runId": "fc587a99-41e6-42f0-85f4-4667b4fdec1b",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"none\",\"memberIds\":[],\"triggerMessageIds\":[],\"leaderMemberId\":\"bot-d6f7f9\",\"recoveryAction\":\"skip\"}",
+          "id": "f250350f-f6a5-4021-a256-5aa65d5c70fc",
+          "createdAt": 1790137227012
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "大家按群成员顺序先来报个数，每人一句话，协调员先报 1；不可用成员通报跳过，不用总结。",
+          "kind": "message",
+          "id": "6dc28350-cbad-4074-8a8b-9602205fa086",
+          "createdAt": 1790137210892
+        },
+        {
+          "id": "6dc28350-cbad-4074-8a8b-9602205fa086:dispatch",
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@协调员 → @工程师 → @审阅员（按顺序处理）。",
+          "createdAt": 1790137226737
+        },
+        {
+          "id": "6dc28350-cbad-4074-8a8b-9602205fa086:unavailable:bot-d8b5fa",
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：协调员 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137226741
+        },
+        {
+          "id": "6dc28350-cbad-4074-8a8b-9602205fa086:decision::bot-d8b5fa:recovery:bot-d8b5fa:6dc28350-cbad-4074-8a8b-9602205fa086:notice",
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "工程师 调度通知：跳过该成员，其他成员继续。",
+          "createdAt": 1790137227012
+        },
+        {
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "bot-d6f7f9",
+          "authorName": "工程师",
+          "text": "我报 2。",
+          "kind": "message",
+          "recipients": [],
+          "id": "7ee27360-76a6-46bf-857d-d335aeada4c9",
+          "createdAt": 1790137227954
+        },
+        {
+          "conversationId": "group-86e9f8f6",
+          "topicId": "282c7056-8b70-472a-8bae-ba7f7b8459e3",
+          "authorId": "bot-306126",
+          "authorName": "审阅员",
+          "text": "3",
+          "kind": "message",
+          "recipients": [],
+          "id": "b755bc13-2b74-4a2f-9f30-924e2a4cb3a0",
+          "createdAt": 1790137229085
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "~typesafe/jev-latest"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-d8b5fa",
+            "participationOnly": true,
+            "assignments": {
+              "bot-d8b5fa": "只报 1",
+              "bot-d6f7f9": "只报 2",
+              "bot-306126": "只报 3"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-d8b5fa",
+              "bot-d6f7f9",
+              "bot-306126"
+            ],
+            "triggerMessageIds": [
+              "6dc28350-cbad-4074-8a8b-9602205fa086"
+            ]
+          }
+        },
+        "decision::bot-d8b5fa:recovery:bot-d8b5fa:6dc28350-cbad-4074-8a8b-9602205fa086": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "none",
+            "memberIds": [],
+            "triggerMessageIds": [],
+            "leaderMemberId": "bot-d6f7f9",
+            "recoveryAction": "skip"
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "~typesafe/jev-latest",
+        "scenario": "explicit-required-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 2,
+        "recovery": true,
+        "elapsedMs": 34909,
+        "leader": "协调员",
+        "speakers": [
+          "审阅员"
+        ],
+        "fallbackCount": 2
+      },
+      "events": [
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "ac9011e4-28bd-48bb-8774-cffcc4042356",
+          "createdAt": 1790137230876
+        },
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision fallback",
+          "detail": "成员选择不确定。 Using a group member to plan this step.",
+          "id": "1fc03af3-cf28-4630-ab2a-9a469b16dd43",
+          "createdAt": 1790137231166
+        },
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-452598\"],\"triggerMessageIds\":[\"924075c8-8ea1-4115-8216-9bfb94c40d7a\"],\"addressedMemberId\":\"bot-452598\",\"leaderMemberId\":\"bot-20eb51\",\"assignments\":{\"bot-452598\":\"@工程师 请为内部报销 MVP 提供三条具体实现建议，完成后结束。\"}}",
+          "id": "eb8a2443-df94-45b4-9f3f-f746122cfd8e",
+          "createdAt": 1790137256539
+        },
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"recovery\"}",
+          "id": "84a9bc73-304a-424b-bb8d-cdcbf4c6aa71",
+          "createdAt": 1790137256546
+        },
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision fallback",
+          "detail": "故障处理需要 Leader 复核。 Using a group member to plan this step.",
+          "id": "424c7962-54b3-4244-8199-f7aeaaeda67f",
+          "createdAt": 1790137256805
+        },
+        {
+          "runId": "fa57efaa-f17c-476e-a3a9-a7a5aad44959",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-20eb51\",\"recoveryAction\":\"replace\",\"mode\":\"single\",\"memberIds\":[\"bot-dffe00\"],\"triggerMessageIds\":[\"924075c8-8ea1-4115-8216-9bfb94c40d7a\"]}",
+          "id": "d5a66b0c-de40-45cf-a3d7-a9a35ac6abd7",
+          "createdAt": 1790137260459
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-83e3bd64",
+          "topicId": "6182064a-cfdb-47a7-9812-61465454e78c",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "@工程师 为内部报销 MVP 提供三条具体实现建议，不可用时请合适的成员接替。只讨论，不操作外部系统，完成后结束。",
+          "kind": "message",
+          "recipients": [
+            {
+              "id": "bot-452598",
+              "name": "工程师"
+            }
+          ],
+          "id": "924075c8-8ea1-4115-8216-9bfb94c40d7a",
+          "createdAt": 1790137229092
+        },
+        {
+          "id": "924075c8-8ea1-4115-8216-9bfb94c40d7a:dispatch",
+          "conversationId": "group-83e3bd64",
+          "topicId": "6182064a-cfdb-47a7-9812-61465454e78c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@工程师（按顺序处理）。",
+          "createdAt": 1790137256539
+        },
+        {
+          "id": "924075c8-8ea1-4115-8216-9bfb94c40d7a:unavailable:bot-452598",
+          "conversationId": "group-83e3bd64",
+          "topicId": "6182064a-cfdb-47a7-9812-61465454e78c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：工程师 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137256544
+        },
+        {
+          "id": "924075c8-8ea1-4115-8216-9bfb94c40d7a:decision::bot-452598:recovery:bot-452598:924075c8-8ea1-4115-8216-9bfb94c40d7a:notice",
+          "conversationId": "group-83e3bd64",
+          "topicId": "6182064a-cfdb-47a7-9812-61465454e78c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 调度通知：由 @审阅员 接替未完成的任务。",
+          "createdAt": 1790137260460
+        },
+        {
+          "conversationId": "group-83e3bd64",
+          "topicId": "6182064a-cfdb-47a7-9812-61465454e78c",
+          "authorId": "bot-dffe00",
+          "authorName": "审阅员",
+          "text": "由于工程师不可用，我接替完成任务。以下是针对内部报销 MVP 的三条实现建议：\n1. 采用基于角色的访问控制（RBAC），按部门、职级限制报销额度与审批流。\n2. 集成电子发票识别与验真 API，自动填充报销单关键字段，减少手工录入。\n3. 设计可配置的审批链引擎，支持金额阈值与异常自动触发多级审核。\n\n任务已完成，建议供团队参考。",
+          "kind": "message",
+          "recipients": [],
+          "id": "ffcc4354-c35d-4f61-a5e0-98165e896503",
+          "createdAt": 1790137263995
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "~typesafe/jev-latest"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "single",
+            "memberIds": [
+              "bot-452598"
+            ],
+            "triggerMessageIds": [
+              "924075c8-8ea1-4115-8216-9bfb94c40d7a"
+            ],
+            "addressedMemberId": "bot-452598",
+            "leaderMemberId": "bot-20eb51",
+            "assignments": {
+              "bot-452598": "@工程师 请为内部报销 MVP 提供三条具体实现建议，完成后结束。"
+            }
+          }
+        },
+        "decision::bot-452598:recovery:bot-452598:924075c8-8ea1-4115-8216-9bfb94c40d7a": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-20eb51",
+            "recoveryAction": "replace",
+            "mode": "single",
+            "memberIds": [
+              "bot-dffe00"
+            ],
+            "triggerMessageIds": [
+              "924075c8-8ea1-4115-8216-9bfb94c40d7a"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "~typesafe/jev-latest",
+        "scenario": "human-checkpoint",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": true,
+        "configuredCalls": 2,
+        "recovery": false,
+        "elapsedMs": 60337,
+        "leader": "协调员",
+        "speakers": [
+          "协调员",
+          "工程师",
+          "工程师",
+          "审阅员",
+          "协调员"
+        ],
+        "fallbackCount": 2
+      },
+      "events": [
+        {
+          "runId": "a4e12b91-4ed8-4441-9c4e-fd5c6d6d81db",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "1a002cd2-baab-489c-9770-2f236bb66d32",
+          "createdAt": 1790137265102
+        },
+        {
+          "runId": "a4e12b91-4ed8-4441-9c4e-fd5c6d6d81db",
+          "type": "status",
+          "label": "Decision fallback",
+          "detail": "决策需要 Leader 复核。 Using a group member to plan this step.",
+          "id": "1f529b12-5824-499b-8333-65e8cd626ff8",
+          "createdAt": 1790137265391
+        },
+        {
+          "runId": "a4e12b91-4ed8-4441-9c4e-fd5c6d6d81db",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-90869c\"],\"triggerMessageIds\":[\"49f32971-d58e-4c19-9944-557793266ebf\"],\"addressedMemberId\":\"bot-90869c\",\"waitForHuman\":true,\"leaderMemberId\":\"bot-90869c\",\"assignments\":{\"bot-90869c\":\"询问用户关于报销 MVP 审批层级的范围问题，等待用户回答后再继续后续安排。\"}}",
+          "id": "9863120c-9d63-4110-beec-a8b0d0f19bee",
+          "createdAt": 1790137280518
+        },
+        {
+          "runId": "06cf9248-c1ab-4f2e-b2f7-7c2d42882afd",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "922c1bd9-b331-403f-ba14-3e4355a6b2cb",
+          "createdAt": 1790137287808
+        },
+        {
+          "runId": "06cf9248-c1ab-4f2e-b2f7-7c2d42882afd",
+          "type": "status",
+          "label": "Decision fallback",
+          "detail": "决策需要 Leader 复核。 Using a group member to plan this step.",
+          "id": "6c4024d7-f846-4be4-a10b-69106bdcbc1f",
+          "createdAt": 1790137288136
+        },
+        {
+          "runId": "06cf9248-c1ab-4f2e-b2f7-7c2d42882afd",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-90869c\",\"supervise\":true,\"requireSummary\":true,\"assignments\":{\"bot-90869c\":\"在最后汇总工程师和审阅员的讨论结果，形成关于单级主管审批、20人内试用的报销 MVP 最终方案（仅讨论，不超过三句话）。\",\"bot-62caa0\":\"基于单级主管审批和20人试用场景，给出报销 MVP 的实现建议（不超过三句话）。\",\"bot-125d57\":\"基于单级主管审批和20人试用场景，给出报销 MVP 的验收标准（不超过三句话）。\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-62caa0\",\"bot-125d57\",\"bot-90869c\"],\"triggerMessageIds\":[\"36176f19-36d0-47f8-a101-d54947e0eff7\"]}",
+          "id": "4743330e-bd26-4546-9b50-c48d5c4f3eb7",
+          "createdAt": 1790137311904
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "请项目组合作设计内部报销 MVP。请协调员先问我一个关于审批层级的范围问题，等我回答以后，再由工程师给出实现建议、审阅员给出验收标准、协调员最终汇总。每人不超过三句话，只讨论。",
+          "kind": "message",
+          "id": "49f32971-d58e-4c19-9944-557793266ebf",
+          "createdAt": 1790137264002
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "bot-90869c",
+          "authorName": "协调员",
+          "text": "关于报销 MVP 的审批层级范围，请问 MVP 是否需要支持多级审批（如员工→主管→财务），还是仅需单级审批（员工提交，主管批准）即可？",
+          "kind": "message",
+          "recipients": [],
+          "id": "98164534-a149-406b-88ec-8b7dd5950aac",
+          "createdAt": 1790137287793
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "确认只做单级主管审批，最多 20 人内部试用，现在请按计划继续到最终方案。",
+          "kind": "message",
+          "id": "36176f19-36d0-47f8-a101-d54947e0eff7",
+          "createdAt": 1790137287799
+        },
+        {
+          "id": "36176f19-36d0-47f8-a101-d54947e0eff7:dispatch",
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@工程师 → @审阅员 → @协调员（按顺序处理）。",
+          "createdAt": 1790137311904
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "bot-62caa0",
+          "authorName": "工程师",
+          "text": "报销 MVP 建议：前端用轻量表单（如 Ant Design Form），后端用 Spring Boot 实现单级审批流（员工提交 → 主管审批 → 状态更新）。数据库设计包含用户表、报销申请表、审批记录表，用状态字段控制流程流转。试用期间先硬编码用户数据，后续再接权限系统。",
+          "kind": "message",
+          "replyGroupId": "7fe833fc-879f-470c-9426-6c4a2455ae9a",
+          "recipients": [],
+          "id": "106b1ca3-730a-4afe-8717-21a6203f3bda",
+          "createdAt": 1790137314572
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "bot-62caa0",
+          "authorName": "工程师",
+          "text": "@审阅员 请基于上述建议制定验收标准。",
+          "kind": "message",
+          "replyGroupId": "7fe833fc-879f-470c-9426-6c4a2455ae9a",
+          "recipients": [
+            {
+              "id": "bot-125d57",
+              "name": "审阅员"
+            }
+          ],
+          "id": "6d7ea7c3-c2a6-4152-8eb6-28820a3ee452",
+          "createdAt": 1790137314572
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "bot-125d57",
+          "authorName": "审阅员",
+          "text": "报销 MVP 验收标准：功能上需支持员工提交报销单、主管审批通过/驳回，且状态实时更新；试用期间需限制仅20人可见入口；数据完整性要求审批记录可追溯、无空单提交。",
+          "kind": "message",
+          "recipients": [],
+          "id": "8090cd75-c459-41fd-a447-6831bdff0e90",
+          "createdAt": 1790137316974
+        },
+        {
+          "conversationId": "group-d1291451",
+          "topicId": "b832f17f-017d-4ab3-8b20-af5fd0763591",
+          "authorId": "bot-90869c",
+          "authorName": "协调员",
+          "text": "基于工程师的实现建议和审阅员的验收标准，报销 MVP 方案如下：采用 Spring Boot 后端与轻量前端表单，实现员工提交、主管单级审批的全流程；数据库包含用户、报销申请及审批记录表，通过状态字段流转；20 人试用期间硬编码用户权限，确保审批可追溯且界面入口受限。",
+          "kind": "message",
+          "recipients": [],
+          "id": "6ee7660c-22d8-45f3-8652-853307d51355",
+          "createdAt": 1790137324327
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "~typesafe/jev-latest"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-90869c",
+            "supervise": true,
+            "requireSummary": true,
+            "assignments": {
+              "bot-90869c": "在最后汇总工程师和审阅员的讨论结果，形成关于单级主管审批、20人内试用的报销 MVP 最终方案（仅讨论，不超过三句话）。",
+              "bot-62caa0": "基于单级主管审批和20人试用场景，给出报销 MVP 的实现建议（不超过三句话）。",
+              "bot-125d57": "基于单级主管审批和20人试用场景，给出报销 MVP 的验收标准（不超过三句话）。"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-62caa0",
+              "bot-125d57",
+              "bot-90869c"
+            ],
+            "triggerMessageIds": [
+              "36176f19-36d0-47f8-a101-d54947e0eff7"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "leader",
+        "scenario": "attendance-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 0,
+        "recovery": true,
+        "elapsedMs": 24364,
+        "leader": "工程师",
+        "speakers": [
+          "工程师",
+          "审阅员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "843a3b24-b4ce-4914-be11-7d2193abb55d",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"initial\"}",
+          "id": "3dfce2ac-4401-498f-a21f-d1cb760607e4",
+          "createdAt": 1790136986105
+        },
+        {
+          "runId": "843a3b24-b4ce-4914-be11-7d2193abb55d",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-6d3697\",\"participationOnly\":true,\"assignments\":{\"bot-6d3697\":\"报数 1，一句话。\",\"bot-795b14\":\"报数 2，一句话。\",\"bot-5760ba\":\"报数 3，一句话。\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-6d3697\",\"bot-795b14\",\"bot-5760ba\"],\"triggerMessageIds\":[\"d9228577-70d5-4dcf-9180-cbb18103d5ac\"]}",
+          "id": "efffc0f4-b17b-45d6-9bab-f590f7d32dae",
+          "createdAt": 1790137002076
+        },
+        {
+          "runId": "843a3b24-b4ce-4914-be11-7d2193abb55d",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"recovery\"}",
+          "id": "e7ab4fc0-19c5-4a02-84a4-17b3a888ab60",
+          "createdAt": 1790137002080
+        },
+        {
+          "runId": "843a3b24-b4ce-4914-be11-7d2193abb55d",
+          "type": "status",
+          "label": "Leader takeover",
+          "detail": "工程师",
+          "id": "6c8bb87b-886d-4d36-bc0c-ee004fcc1307",
+          "createdAt": 1790137005598
+        },
+        {
+          "runId": "843a3b24-b4ce-4914-be11-7d2193abb55d",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"none\",\"memberIds\":[],\"triggerMessageIds\":[],\"leaderMemberId\":\"bot-795b14\",\"recoveryAction\":\"skip\"}",
+          "id": "c604d815-3d55-4c54-8bfd-f73ba2f1f58d",
+          "createdAt": 1790137005599
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "大家按群成员顺序先来报个数，每人一句话，协调员先报 1；不可用成员通报跳过，不用总结。",
+          "kind": "message",
+          "id": "d9228577-70d5-4dcf-9180-cbb18103d5ac",
+          "createdAt": 1790136984426
+        },
+        {
+          "id": "d9228577-70d5-4dcf-9180-cbb18103d5ac:dispatch",
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@协调员 → @工程师 → @审阅员（按顺序处理）。",
+          "createdAt": 1790137002076
+        },
+        {
+          "id": "d9228577-70d5-4dcf-9180-cbb18103d5ac:unavailable:bot-6d3697",
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：协调员 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137002079
+        },
+        {
+          "id": "d9228577-70d5-4dcf-9180-cbb18103d5ac:decision::bot-6d3697:recovery:bot-6d3697:d9228577-70d5-4dcf-9180-cbb18103d5ac:notice",
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "工程师 调度通知：跳过该成员，其他成员继续。",
+          "createdAt": 1790137005599
+        },
+        {
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "bot-795b14",
+          "authorName": "工程师",
+          "text": "2。",
+          "kind": "message",
+          "recipients": [],
+          "id": "392ae67c-4443-40e3-a34b-da9ebac60f56",
+          "createdAt": 1790137006738
+        },
+        {
+          "conversationId": "group-4bc6748d",
+          "topicId": "44caf430-d834-48f0-a15a-f883ab4995ab",
+          "authorId": "bot-5760ba",
+          "authorName": "审阅员",
+          "text": "3。",
+          "kind": "message",
+          "recipients": [],
+          "id": "48cbeaab-32fb-485b-9d04-ffeb80160b3f",
+          "createdAt": 1790137008787
+        }
+      ],
+      "decisionSettings": {
+        "mode": "leader",
+        "providerId": "openrouter",
+        "model": ""
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-6d3697",
+            "participationOnly": true,
+            "assignments": {
+              "bot-6d3697": "报数 1，一句话。",
+              "bot-795b14": "报数 2，一句话。",
+              "bot-5760ba": "报数 3，一句话。"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-6d3697",
+              "bot-795b14",
+              "bot-5760ba"
+            ],
+            "triggerMessageIds": [
+              "d9228577-70d5-4dcf-9180-cbb18103d5ac"
+            ]
+          }
+        },
+        "decision::bot-6d3697:recovery:bot-6d3697:d9228577-70d5-4dcf-9180-cbb18103d5ac": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "none",
+            "memberIds": [],
+            "triggerMessageIds": [],
+            "leaderMemberId": "bot-795b14",
+            "recoveryAction": "skip"
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "leader",
+        "scenario": "explicit-required-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 0,
+        "recovery": true,
+        "elapsedMs": 36149,
+        "leader": "协调员",
+        "speakers": [
+          "审阅员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "88cc9a08-544f-495d-8f5c-b4b497a52831",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"initial\"}",
+          "id": "ba471655-5f66-404e-9bc7-9868be31400b",
+          "createdAt": 1790137009652
+        },
+        {
+          "runId": "88cc9a08-544f-495d-8f5c-b4b497a52831",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-053bc0\"],\"triggerMessageIds\":[\"c1f053b7-7254-4388-bd77-911a275e4ed4\"],\"addressedMemberId\":\"bot-053bc0\",\"leaderMemberId\":\"bot-4795a6\",\"assignments\":{\"bot-053bc0\":\"为内部报销 MVP 提供三条具体实现建议，只讨论，不操作外部系统，完成后结束。\"}}",
+          "id": "2a15c13d-2a68-4eca-a6e9-927f98c59ef3",
+          "createdAt": 1790137030037
+        },
+        {
+          "runId": "88cc9a08-544f-495d-8f5c-b4b497a52831",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"recovery\"}",
+          "id": "707a8e3d-83d1-4edb-8bf1-2889bcfd13af",
+          "createdAt": 1790137030040
+        },
+        {
+          "runId": "88cc9a08-544f-495d-8f5c-b4b497a52831",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-4795a6\",\"recoveryAction\":\"replace\",\"mode\":\"single\",\"memberIds\":[\"bot-888233\"],\"triggerMessageIds\":[\"c1f053b7-7254-4388-bd77-911a275e4ed4\"]}",
+          "id": "6e6ba9b1-7135-4d6f-bb89-62be6a5c76d0",
+          "createdAt": 1790137034488
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-c8568582",
+          "topicId": "282e5ffe-f230-45e4-afb0-f0244de18d5c",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "@工程师 为内部报销 MVP 提供三条具体实现建议，不可用时请合适的成员接替。只讨论，不操作外部系统，完成后结束。",
+          "kind": "message",
+          "recipients": [
+            {
+              "id": "bot-053bc0",
+              "name": "工程师"
+            }
+          ],
+          "id": "c1f053b7-7254-4388-bd77-911a275e4ed4",
+          "createdAt": 1790137008790
+        },
+        {
+          "id": "c1f053b7-7254-4388-bd77-911a275e4ed4:dispatch",
+          "conversationId": "group-c8568582",
+          "topicId": "282e5ffe-f230-45e4-afb0-f0244de18d5c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@工程师（按顺序处理）。",
+          "createdAt": 1790137030037
+        },
+        {
+          "id": "c1f053b7-7254-4388-bd77-911a275e4ed4:unavailable:bot-053bc0",
+          "conversationId": "group-c8568582",
+          "topicId": "282e5ffe-f230-45e4-afb0-f0244de18d5c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：工程师 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137030039
+        },
+        {
+          "id": "c1f053b7-7254-4388-bd77-911a275e4ed4:decision::bot-053bc0:recovery:bot-053bc0:c1f053b7-7254-4388-bd77-911a275e4ed4:notice",
+          "conversationId": "group-c8568582",
+          "topicId": "282e5ffe-f230-45e4-afb0-f0244de18d5c",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 调度通知：由 @审阅员 接替未完成的任务。",
+          "createdAt": 1790137034488
+        },
+        {
+          "conversationId": "group-c8568582",
+          "topicId": "282e5ffe-f230-45e4-afb0-f0244de18d5c",
+          "authorId": "bot-888233",
+          "authorName": "审阅员",
+          "text": "## 内部报销 MVP 实现建议\n\n基于 MVP 的核心原则（最小可行产品、快速验证），以下是三条具体实现建议：\n\n---\n\n### 1. **单页面表单 + 邮件通知**\n\n实现一个简单的报销申请表单页面，包含：金额、费用类别、日期、备注、附件上传。提交后通过邮件通知审批人，审批人通过邮件链接进行批准/驳回。使用现有的邮件服务（如 SendGrid 或企业微信机器人）作为通知通道，无需搭建复杂的消息系统。\n\n**优势**：开发量最小，一周内可上线，验证报销流程是否跑通。\n\n---\n\n### 2. **状态追踪用数据库字段实现**\n\n在报销记录表中用一个 `status` 字段（枚举值：pending/approved/rejected）管理流转状态。审批人通过一个简单的审批页面更新状态。不需要搭建工作流引擎或状态机，用 SQL 查询即可生成待办列表和历史记录。\n\n**优势**：实现简单，后期如需复杂流程可平滑迁移到正式工作流系统。\n\n---\n\n### 3. **附件存储用云存储直传**\n\n报销单的发票/凭证图片直接上传到云存储（如阿里云 OSS、AWS S3），数据库只保存文件 URL。前端使用预签名 URL 实现直传，后端不代理文件流。这样可以避免服务器带宽压力，也方便后续扩展图片识别（OCR）功能。\n\n**优势**：架构解耦，后续加 OCR 自动填充金额等智能功能时无需重构上传逻辑。\n\n---\n\n以上建议聚焦于 MVP 阶段的快速验证，后续可根据用户反馈逐步迭代。",
+          "kind": "message",
+          "recipients": [],
+          "id": "1ed5f6f0-b816-47d8-8751-1c20ee7982e0",
+          "createdAt": 1790137044936
+        }
+      ],
+      "decisionSettings": {
+        "mode": "leader",
+        "providerId": "openrouter",
+        "model": ""
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "single",
+            "memberIds": [
+              "bot-053bc0"
+            ],
+            "triggerMessageIds": [
+              "c1f053b7-7254-4388-bd77-911a275e4ed4"
+            ],
+            "addressedMemberId": "bot-053bc0",
+            "leaderMemberId": "bot-4795a6",
+            "assignments": {
+              "bot-053bc0": "为内部报销 MVP 提供三条具体实现建议，只讨论，不操作外部系统，完成后结束。"
+            }
+          }
+        },
+        "decision::bot-053bc0:recovery:bot-053bc0:c1f053b7-7254-4388-bd77-911a275e4ed4": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-4795a6",
+            "recoveryAction": "replace",
+            "mode": "single",
+            "memberIds": [
+              "bot-888233"
+            ],
+            "triggerMessageIds": [
+              "c1f053b7-7254-4388-bd77-911a275e4ed4"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "leader",
+        "scenario": "human-checkpoint",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": true,
+        "configuredCalls": 0,
+        "recovery": false,
+        "elapsedMs": 56299,
+        "leader": "协调员",
+        "speakers": [
+          "协调员",
+          "协调员",
+          "工程师",
+          "工程师",
+          "审阅员",
+          "协调员",
+          "协调员",
+          "协调员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "98d16a88-5797-4169-8789-e07689ea9bec",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"initial\"}",
+          "id": "1c8569ec-75a9-45d0-8fcc-33a7699967ce",
+          "createdAt": 1790137045840
+        },
+        {
+          "runId": "98d16a88-5797-4169-8789-e07689ea9bec",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-b765ac\"],\"triggerMessageIds\":[\"3fb26e23-6e30-4143-b063-94f4a7d94b2c\"],\"addressedMemberId\":\"bot-b765ac\",\"waitForHuman\":true,\"leaderMemberId\":\"bot-b765ac\",\"assignments\":{\"bot-b765ac\":\"作为协调员，先向人类询问关于报销MVP审批层级的范围问题。\"}}",
+          "id": "7ee2d140-630d-4aba-81c7-c5629fddc00d",
+          "createdAt": 1790137062562
+        },
+        {
+          "runId": "728774ae-b482-41c1-bb36-5d3b9276f20a",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"leader\",\"phase\":\"initial\"}",
+          "id": "6c6ed5b1-4e8a-463e-a2f4-abff75c58c51",
+          "createdAt": 1790137066665
+        },
+        {
+          "runId": "728774ae-b482-41c1-bb36-5d3b9276f20a",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-b765ac\",\"supervise\":true,\"requireSummary\":true,\"assignments\":{\"bot-b765ac\":\"作为协调员，最终汇总报销MVP的方案（含审批层级、实现建议和验收标准），不超过三句话，只讨论。\",\"bot-8401f3\":\"作为工程师，基于单级主管审批、最多20人内部试用的范围，给出报销MVP的实现建议，不超过三句话，只讨论。\",\"bot-96d2f2\":\"作为审阅员，基于单级主管审批、最多20人内部试用的范围，给出报销MVP的验收标准，不超过三句话，只讨论。\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-8401f3\",\"bot-96d2f2\",\"bot-b765ac\"],\"triggerMessageIds\":[\"2b20e870-90b1-46a6-a70b-4974b82ff64f\"]}",
+          "id": "a454d583-0f7e-48a0-b395-df2ae3843179",
+          "createdAt": 1790137090715
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "请项目组合作设计内部报销 MVP。请协调员先问我一个关于审批层级的范围问题，等我回答以后，再由工程师给出实现建议、审阅员给出验收标准、协调员最终汇总。每人不超过三句话，只讨论。",
+          "kind": "message",
+          "id": "3fb26e23-6e30-4143-b063-94f4a7d94b2c",
+          "createdAt": 1790137044941
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-b765ac",
+          "authorName": "协调员",
+          "text": "你好，我是协调员。在设计报销MVP的审批层级时，我们主要需要确定审批的深度和广度。",
+          "kind": "message",
+          "replyGroupId": "857398e2-2711-4bfe-b73c-d30919866931",
+          "recipients": [],
+          "id": "f71df4f9-1d33-4dcb-a729-efe6c6faf54a",
+          "createdAt": 1790137066659
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-b765ac",
+          "authorName": "协调员",
+          "text": "请问审批层级需要支持几级审批？例如，是否只需要直线经理一级审批，还是需要部门负责人、财务等多级审批？",
+          "kind": "message",
+          "replyGroupId": "857398e2-2711-4bfe-b73c-d30919866931",
+          "recipients": [],
+          "deliveries": [
+            {
+              "id": "group-8a720a23:65dbea8d:private:0",
+              "recipientId": "human",
+              "recipientName": "You",
+              "content": ""
+            }
+          ],
+          "id": "f1a3d684-fbc0-41a4-8f00-9e23859e76ee",
+          "createdAt": 1790137066659
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "确认只做单级主管审批，最多 20 人内部试用，现在请按计划继续到最终方案。",
+          "kind": "message",
+          "id": "2b20e870-90b1-46a6-a70b-4974b82ff64f",
+          "createdAt": 1790137066663
+        },
+        {
+          "id": "2b20e870-90b1-46a6-a70b-4974b82ff64f:dispatch",
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@工程师 → @审阅员 → @协调员（按顺序处理）。",
+          "createdAt": 1790137090715
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-8401f3",
+          "authorName": "工程师",
+          "text": "基于20人试用和单级审批，技术选型建议直接使用飞书/钉钉等平台的原生审批流，无需自建复杂后端。前端聚焦费用录入、上传凭证、及进度查询页面。审批节点直接映射为直属主管审批即可。",
+          "kind": "message",
+          "replyGroupId": "688154d7-8034-4af2-9d76-87a761a9259b",
+          "recipients": [],
+          "id": "d4c747b9-ffbd-41a6-b30b-e78382dad18d",
+          "createdAt": 1790137094464
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-8401f3",
+          "authorName": "工程师",
+          "text": "@审阅员，技术实现逻辑已给出，请基于此制定验收标准。",
+          "kind": "message",
+          "replyGroupId": "688154d7-8034-4af2-9d76-87a761a9259b",
+          "recipients": [
+            {
+              "id": "bot-96d2f2",
+              "name": "审阅员"
+            }
+          ],
+          "id": "9b44a7cc-d105-4793-85fe-77ff61050347",
+          "createdAt": 1790137094465
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-96d2f2",
+          "authorName": "审阅员",
+          "text": "验收标准如下：\n1. 报销单必须关联唯一凭证图片且内容清晰。\n2. 流程必须支持单级主管审批并显示实时状态。\n3. 支持按条件查询历史记录及金额统计。",
+          "kind": "message",
+          "recipients": [],
+          "id": "85445807-d365-4a21-9124-d82726bb0510",
+          "createdAt": 1790137097362
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-b765ac",
+          "authorName": "协调员",
+          "text": "基于单级主管审批和20人试用的范围，报销MVP的最终方案如下：",
+          "kind": "message",
+          "replyGroupId": "fdd0e7eb-0e8c-47da-b6c3-d5c49dc37a2e",
+          "recipients": [],
+          "id": "d367a67c-0585-42a3-bf3f-02cf0467a696",
+          "createdAt": 1790137101235
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-b765ac",
+          "authorName": "协调员",
+          "text": "审批层级采用单级主管审批，实现上建议复用企业现有协作平台的审批模块快速搭建，无需自建后端。",
+          "kind": "message",
+          "replyGroupId": "fdd0e7eb-0e8c-47da-b6c3-d5c49dc37a2e",
+          "recipients": [],
+          "id": "3df173f9-d0fd-48d5-bc69-ab03f7dc2368",
+          "createdAt": 1790137101235
+        },
+        {
+          "conversationId": "group-8a720a23",
+          "topicId": "57c11863-15ca-46a6-b0a4-9d5ea5ef4729",
+          "authorId": "bot-b765ac",
+          "authorName": "协调员",
+          "text": "验收重点在于凭证关联、审批流转实时状态以及基础的记录查询统计功能是否完整可用。",
+          "kind": "message",
+          "replyGroupId": "fdd0e7eb-0e8c-47da-b6c3-d5c49dc37a2e",
+          "recipients": [],
+          "id": "efcffdbc-d569-43b7-a3d5-51eb593e5774",
+          "createdAt": 1790137101235
+        }
+      ],
+      "decisionSettings": {
+        "mode": "leader",
+        "providerId": "openrouter",
+        "model": ""
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-b765ac",
+            "supervise": true,
+            "requireSummary": true,
+            "assignments": {
+              "bot-b765ac": "作为协调员，最终汇总报销MVP的方案（含审批层级、实现建议和验收标准），不超过三句话，只讨论。",
+              "bot-8401f3": "作为工程师，基于单级主管审批、最多20人内部试用的范围，给出报销MVP的实现建议，不超过三句话，只讨论。",
+              "bot-96d2f2": "作为审阅员，基于单级主管审批、最多20人内部试用的范围，给出报销MVP的验收标准，不超过三句话，只讨论。"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-8401f3",
+              "bot-96d2f2",
+              "bot-b765ac"
+            ],
+            "triggerMessageIds": [
+              "2b20e870-90b1-46a6-a70b-4974b82ff64f"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "xiaomi/mimo-v2.5",
+        "scenario": "attendance-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 2,
+        "recovery": true,
+        "elapsedMs": 24112,
+        "leader": "工程师",
+        "speakers": [
+          "工程师",
+          "审阅员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "1cbe8eb8-db51-4f60-bd23-e396eb2ea930",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "70e5e95a-4fc9-437e-8ef5-0fea3929e1af",
+          "createdAt": 1790137102131
+        },
+        {
+          "runId": "1cbe8eb8-db51-4f60-bd23-e396eb2ea930",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-4b34d8\",\"participationOnly\":true,\"assignments\":{\"bot-4b34d8\":\"报数 1\",\"bot-e3708d\":\"报数 2\",\"bot-97b288\":\"报数 3\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-4b34d8\",\"bot-e3708d\",\"bot-97b288\"],\"triggerMessageIds\":[\"5f734792-c808-44bc-b3c8-6b47dfa8fda4\"]}",
+          "id": "851def7b-140b-4113-9d58-a2cf98e83d54",
+          "createdAt": 1790137119952
+        },
+        {
+          "runId": "1cbe8eb8-db51-4f60-bd23-e396eb2ea930",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"recovery\"}",
+          "id": "fcafc52c-663d-4b6c-b4c9-493ae0acc041",
+          "createdAt": 1790137119956
+        },
+        {
+          "runId": "1cbe8eb8-db51-4f60-bd23-e396eb2ea930",
+          "type": "status",
+          "label": "Leader takeover",
+          "detail": "工程师",
+          "id": "f2a12f32-4f94-414b-8e47-2b2c53f3c721",
+          "createdAt": 1790137123369
+        },
+        {
+          "runId": "1cbe8eb8-db51-4f60-bd23-e396eb2ea930",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"none\",\"memberIds\":[],\"triggerMessageIds\":[],\"leaderMemberId\":\"bot-e3708d\",\"recoveryAction\":\"skip\"}",
+          "id": "3a88d2ba-56d3-4e9a-ab7d-f51b5d1c3cb2",
+          "createdAt": 1790137123370
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "大家按群成员顺序先来报个数，每人一句话，协调员先报 1；不可用成员通报跳过，不用总结。",
+          "kind": "message",
+          "id": "5f734792-c808-44bc-b3c8-6b47dfa8fda4",
+          "createdAt": 1790137101241
+        },
+        {
+          "id": "5f734792-c808-44bc-b3c8-6b47dfa8fda4:dispatch",
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@协调员 → @工程师 → @审阅员（按顺序处理）。",
+          "createdAt": 1790137119953
+        },
+        {
+          "id": "5f734792-c808-44bc-b3c8-6b47dfa8fda4:unavailable:bot-4b34d8",
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：协调员 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137119955
+        },
+        {
+          "id": "5f734792-c808-44bc-b3c8-6b47dfa8fda4:decision::bot-4b34d8:recovery:bot-4b34d8:5f734792-c808-44bc-b3c8-6b47dfa8fda4:notice",
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "工程师 调度通知：跳过该成员，其他成员继续。",
+          "createdAt": 1790137123370
+        },
+        {
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "bot-e3708d",
+          "authorName": "工程师",
+          "text": "2",
+          "kind": "message",
+          "recipients": [],
+          "id": "d9846876-7539-4323-91e6-9fa66e1c3fb5",
+          "createdAt": 1790137124592
+        },
+        {
+          "conversationId": "group-ca4ed3ea",
+          "topicId": "ada79e68-4314-4481-9558-fd4f4d2ab3f5",
+          "authorId": "bot-97b288",
+          "authorName": "审阅员",
+          "text": "3",
+          "kind": "message",
+          "recipients": [],
+          "id": "741f66d5-039d-4352-9978-7726930bac26",
+          "createdAt": 1790137125347
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "xiaomi/mimo-v2.5"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-4b34d8",
+            "participationOnly": true,
+            "assignments": {
+              "bot-4b34d8": "报数 1",
+              "bot-e3708d": "报数 2",
+              "bot-97b288": "报数 3"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-4b34d8",
+              "bot-e3708d",
+              "bot-97b288"
+            ],
+            "triggerMessageIds": [
+              "5f734792-c808-44bc-b3c8-6b47dfa8fda4"
+            ]
+          }
+        },
+        "decision::bot-4b34d8:recovery:bot-4b34d8:5f734792-c808-44bc-b3c8-6b47dfa8fda4": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "none",
+            "memberIds": [],
+            "triggerMessageIds": [],
+            "leaderMemberId": "bot-e3708d",
+            "recoveryAction": "skip"
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "xiaomi/mimo-v2.5",
+        "scenario": "explicit-required-fault",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": false,
+        "configuredCalls": 3,
+        "recovery": true,
+        "elapsedMs": 31674,
+        "leader": "协调员",
+        "speakers": [
+          "协调员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "7deb13d4-1954-498c-b982-49fd4fc63747",
+          "createdAt": 1790137126271
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Leader elected",
+          "detail": "工程师",
+          "id": "7176e2b4-fe9e-4488-9515-7db7ce6a0d88",
+          "createdAt": 1790137140576
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-5101c0\"],\"triggerMessageIds\":[\"178821e7-23bf-436e-91dd-f8afdb5fc112\"],\"addressedMemberId\":\"bot-5101c0\",\"leaderMemberId\":\"bot-5101c0\",\"assignments\":{\"bot-5101c0\":\"@工程师 为内部报销 MVP 提供三条具体实现建议，只讨论，不操作外部系统，完成后结束。\"}}",
+          "id": "084248fa-58cd-43aa-8fb3-05bc03f239a0",
+          "createdAt": 1790137140577
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"recovery\"}",
+          "id": "0f1409ab-c887-4bc3-a8a3-dd801c463307",
+          "createdAt": 1790137140580
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Leader takeover",
+          "detail": "协调员",
+          "id": "e45e3fff-7fdb-4e58-872a-9d707a764554",
+          "createdAt": 1790137145067
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-769c09\",\"recoveryAction\":\"replace\",\"mode\":\"single\",\"memberIds\":[\"bot-769c09\"],\"triggerMessageIds\":[\"178821e7-23bf-436e-91dd-f8afdb5fc112\"]}",
+          "id": "1094e68e-b35d-402e-856f-a738e25fbe17",
+          "createdAt": 1790137145067
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"continuation\"}",
+          "id": "ce5d9268-7e1c-4bfa-97b4-0c319b1c72f4",
+          "createdAt": 1790137148111
+        },
+        {
+          "runId": "05090d55-b18a-401f-accf-0aae13e2d07f",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"none\",\"memberIds\":[],\"triggerMessageIds\":[],\"leaderMemberId\":\"bot-769c09\",\"assignments\":{}}",
+          "id": "28c2c8aa-232e-4142-ac35-3d0c74d2586c",
+          "createdAt": 1790137157024
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-e360fd97",
+          "topicId": "6b39d49d-fce5-4d3f-b25b-77b6c7c224e9",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "@工程师 为内部报销 MVP 提供三条具体实现建议，不可用时请合适的成员接替。只讨论，不操作外部系统，完成后结束。",
+          "kind": "message",
+          "recipients": [
+            {
+              "id": "bot-5101c0",
+              "name": "工程师"
+            }
+          ],
+          "id": "178821e7-23bf-436e-91dd-f8afdb5fc112",
+          "createdAt": 1790137125355
+        },
+        {
+          "id": "178821e7-23bf-436e-91dd-f8afdb5fc112:unavailable:bot-5101c0",
+          "conversationId": "group-e360fd97",
+          "topicId": "6b39d49d-fce5-4d3f-b25b-77b6c7c224e9",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "调度通知：工程师 暂不可用，正在决定后续安排。",
+          "createdAt": 1790137140578
+        },
+        {
+          "id": "178821e7-23bf-436e-91dd-f8afdb5fc112:decision::bot-5101c0:recovery:bot-5101c0:178821e7-23bf-436e-91dd-f8afdb5fc112:notice",
+          "conversationId": "group-e360fd97",
+          "topicId": "6b39d49d-fce5-4d3f-b25b-77b6c7c224e9",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 调度通知：由 @协调员 接替未完成的任务。",
+          "createdAt": 1790137145067
+        },
+        {
+          "conversationId": "group-e360fd97",
+          "topicId": "6b39d49d-fce5-4d3f-b25b-77b6c7c224e9",
+          "authorId": "bot-769c09",
+          "authorName": "协调员",
+          "text": "@审阅员 接替工程师完成以下任务：为内部报销 MVP 提供三条具体实现建议。只讨论，不操作外部系统，完成后结束。",
+          "kind": "message",
+          "recipients": [
+            {
+              "id": "bot-13af13",
+              "name": "审阅员"
+            }
+          ],
+          "id": "79dac700-6802-4e6e-a43f-d5e9f50665a5",
+          "createdAt": 1790137148109
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "xiaomi/mimo-v2.5"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "single",
+            "memberIds": [
+              "bot-5101c0"
+            ],
+            "triggerMessageIds": [
+              "178821e7-23bf-436e-91dd-f8afdb5fc112"
+            ],
+            "addressedMemberId": "bot-5101c0",
+            "leaderMemberId": "bot-5101c0",
+            "assignments": {
+              "bot-5101c0": "@工程师 为内部报销 MVP 提供三条具体实现建议，只讨论，不操作外部系统，完成后结束。"
+            }
+          }
+        },
+        "decision::bot-5101c0:recovery:bot-5101c0:178821e7-23bf-436e-91dd-f8afdb5fc112": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-769c09",
+            "recoveryAction": "replace",
+            "mode": "single",
+            "memberIds": [
+              "bot-769c09"
+            ],
+            "triggerMessageIds": [
+              "178821e7-23bf-436e-91dd-f8afdb5fc112"
+            ]
+          }
+        },
+        "decision:1/bot-769c09:bot-5101c0": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "mode": "none",
+            "memberIds": [],
+            "triggerMessageIds": [],
+            "leaderMemberId": "bot-769c09",
+            "assignments": {}
+          }
+        }
+      }
+    },
+    {
+      "report": {
+        "model": "xiaomi/mimo-v2.5",
+        "scenario": "human-checkpoint",
+        "passed": true,
+        "status": "completed",
+        "checkpoint": true,
+        "configuredCalls": 2,
+        "recovery": false,
+        "elapsedMs": 53862,
+        "leader": "协调员",
+        "speakers": [
+          "协调员",
+          "工程师",
+          "工程师",
+          "审阅员",
+          "审阅员",
+          "协调员"
+        ],
+        "fallbackCount": 0
+      },
+      "events": [
+        {
+          "runId": "49f99544-9886-40d0-9e97-6c5a7ac1c3d5",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "8c0f0520-7154-4d9a-acd8-563fdcf7b5cd",
+          "createdAt": 1790137158894
+        },
+        {
+          "runId": "49f99544-9886-40d0-9e97-6c5a7ac1c3d5",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"mode\":\"single\",\"memberIds\":[\"bot-36f34c\"],\"triggerMessageIds\":[\"ac2f9aea-a288-4bd5-b3b5-5692a3f859e8\"],\"waitForHuman\":true,\"leaderMemberId\":\"bot-36f34c\",\"assignments\":{\"bot-36f34c\":\"根据用户明确要求，首先询问关于报销审批层级的范围问题。请使用 mode=none 等待人类回答。\"}}",
+          "id": "3a8b905a-a369-4a13-b03e-24062c17200d",
+          "createdAt": 1790137170064
+        },
+        {
+          "runId": "ef9d3b42-3a46-4e3a-bf87-5a74f7bca297",
+          "type": "status",
+          "label": "Decision requested",
+          "detail": "{\"mode\":\"model\",\"model\":\"xiaomi/mimo-v2.5\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+          "id": "904a2154-b54b-4c6d-9ee3-8c1f7c8b25b5",
+          "createdAt": 1790137172087
+        },
+        {
+          "runId": "ef9d3b42-3a46-4e3a-bf87-5a74f7bca297",
+          "type": "status",
+          "label": "Decision applied",
+          "detail": "{\"leaderMemberId\":\"bot-36f34c\",\"supervise\":true,\"requireSummary\":true,\"assignments\":{\"bot-36f34c\":\"最终汇总内部报销 MVP 方案（单级主管审批，最多20人内部试用）。\",\"bot-3efd85\":\"给出内部报销 MVP 的实现建议（单级主管审批，最多20人内部试用）。\",\"bot-a0c9b4\":\"给出内部报销 MVP 的验收标准（单级主管审批，最多20人内部试用）。\"},\"mode\":\"sequential\",\"memberIds\":[\"bot-3efd85\",\"bot-a0c9b4\",\"bot-36f34c\"],\"triggerMessageIds\":[\"d3774fe8-7d04-467a-bdb6-2fdba0085ab4\"]}",
+          "id": "99bc21a9-6d12-4de7-b23c-3f2f5b9f49c1",
+          "createdAt": 1790137194023
+        }
+      ],
+      "messages": [
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "请项目组合作设计内部报销 MVP。请协调员先问我一个关于审批层级的范围问题，等我回答以后，再由工程师给出实现建议、审阅员给出验收标准、协调员最终汇总。每人不超过三句话，只讨论。",
+          "kind": "message",
+          "id": "ac2f9aea-a288-4bd5-b3b5-5692a3f859e8",
+          "createdAt": 1790137157029
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-36f34c",
+          "authorName": "协调员",
+          "text": "你好，为了明确 MVP 的范围，请问报销审批层级需要支持到哪一级？是仅需直属主管审批，还是需要部门经理或财务等多级审批？",
+          "kind": "message",
+          "recipients": [],
+          "id": "2e75c033-396d-4f45-a74b-ceb3bc34de03",
+          "createdAt": 1790137172079
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "user",
+          "authorName": "You",
+          "text": "确认只做单级主管审批，最多 20 人内部试用，现在请按计划继续到最终方案。",
+          "kind": "message",
+          "id": "d3774fe8-7d04-467a-bdb6-2fdba0085ab4",
+          "createdAt": 1790137172084
+        },
+        {
+          "id": "d3774fe8-7d04-467a-bdb6-2fdba0085ab4:dispatch",
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "system",
+          "authorName": "Douchat",
+          "kind": "system",
+          "text": "协调员 分配任务：@工程师 → @审阅员 → @协调员（按顺序处理）。",
+          "createdAt": 1790137194023
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-3efd85",
+          "authorName": "工程师",
+          "text": "建议采用轻量化 SaaS 方案。使用低代码平台或无服务器架构（Serverless）快速构建表单与审批流。后端直接利用微信/钉钉等现有组织架构完成主管验证，避免重复开发。",
+          "kind": "message",
+          "replyGroupId": "2974d119-5038-4229-8978-fb32e52d1da9",
+          "recipients": [],
+          "id": "51df163b-72b5-4c01-9d01-0f7124d14245",
+          "createdAt": 1790137199270
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-3efd85",
+          "authorName": "工程师",
+          "text": "数据存储建议使用托管数据库，并在 MVP 阶段配置好基础的审计日志。这样既能保证合规性，也方便后续平滑迁移至正式系统。\n\n@协调员",
+          "kind": "message",
+          "replyGroupId": "2974d119-5038-4229-8978-fb32e52d1da9",
+          "recipients": [
+            {
+              "id": "bot-36f34c",
+              "name": "协调员"
+            }
+          ],
+          "deliveries": [
+            {
+              "id": "group-11feba52:4d306704:private:0",
+              "recipientId": "human",
+              "recipientName": "You",
+              "content": ""
+            }
+          ],
+          "id": "f4b905a8-14ec-457e-a84a-6f4c591548ca",
+          "createdAt": 1790137199270
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-a0c9b4",
+          "authorName": "审阅员",
+          "text": "内部报销 MVP 验收标准如下：\n\n1. **功能完整性**：员工能提交包含金额、事由、凭证的报销单；主管能在待办中查看并一键批准或驳回；系统自动发送通知给申请人。\n2. **流程控制**：审批流严格匹配组织架构的单级主管关系，超过20人范围外的员工无法进入该流程；审批动作需记录不可篡改的日志。\n3. **数据合规**：所有报销记录需完整存储，支持按时间段和金额导出；系统需提供基础的访问权限控制，确保仅相关人员可见。",
+          "kind": "message",
+          "replyGroupId": "3d9b39b6-7a14-4530-982b-a9bada1cb6d2",
+          "recipients": [],
+          "id": "cb0f23e1-edb7-427e-9a11-208e75170f4f",
+          "createdAt": 1790137205493
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-a0c9b4",
+          "authorName": "审阅员",
+          "text": "@协调员 以上为审阅部分的验收标准，请确认是否满足交付要求。",
+          "kind": "message",
+          "replyGroupId": "3d9b39b6-7a14-4530-982b-a9bada1cb6d2",
+          "recipients": [
+            {
+              "id": "bot-36f34c",
+              "name": "协调员"
+            }
+          ],
+          "id": "83ed3ccb-b304-4e30-914a-6c312fb8df0f",
+          "createdAt": 1790137205493
+        },
+        {
+          "conversationId": "group-11feba52",
+          "topicId": "aceead1c-5b77-49d7-b0df-8712746ab7da",
+          "authorId": "bot-36f34c",
+          "authorName": "协调员",
+          "text": "好的，根据工程师和审阅员的贡献，现将内部报销 MVP 最终方案汇总如下：\n\n**方案核心**\n采用低代码/Serverless 轻量化架构，对接现有组织架构实现单级主管审批。数据使用托管数据库存储，确保合规。\n\n**实施与验收要点**\n*   **功能**：支持员工提交（含凭证）与主管一键审批，自动通知。\n*   **范围**：严格限定最多20人，超范围人员无法进入流程。\n*   **审计**：所有审批与数据操作记录不可篡改日志，并支持按条件导出。\n*   **安全**：实施基础权限控制，确保数据仅相关人员可见。\n\n方案已就绪，等待进一步指示。",
+          "kind": "message",
+          "recipients": [],
+          "id": "9184d1ed-7442-40b4-9ed0-edd458ed257f",
+          "createdAt": 1790137210886
+        }
+      ],
+      "decisionSettings": {
+        "mode": "model",
+        "providerId": "openrouter",
+        "model": "xiaomi/mimo-v2.5"
+      },
+      "decisions": {
+        "decision::": {
+          "status": "done",
+          "kind": "decision",
+          "value": {
+            "leaderMemberId": "bot-36f34c",
+            "supervise": true,
+            "requireSummary": true,
+            "assignments": {
+              "bot-36f34c": "最终汇总内部报销 MVP 方案（单级主管审批，最多20人内部试用）。",
+              "bot-3efd85": "给出内部报销 MVP 的实现建议（单级主管审批，最多20人内部试用）。",
+              "bot-a0c9b4": "给出内部报销 MVP 的验收标准（单级主管审批，最多20人内部试用）。"
+            },
+            "mode": "sequential",
+            "memberIds": [
+              "bot-3efd85",
+              "bot-a0c9b4",
+              "bot-36f34c"
+            ],
+            "triggerMessageIds": [
+              "d3774fe8-7d04-467a-bdb6-2fdba0085ab4"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

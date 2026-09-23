@@ -43,5 +43,5 @@ describe('MessageQueue', () => {
 it('shows the actionable send error without Electron IPC details', () => {
   expect(messageSendError(new Error("Error invoking remote method 'douchat:send-message': Error: 调用权限尚未同步"))).toBe('调用权限尚未同步')
   expect(messageSendError('连接已断开')).toBe('连接已断开')
-  expect(messageSendError(undefined)).toBe('消息未发送，请重试。')
+  expect(messageSendError(undefined)).toBe('Message not sent. Try again.')
 })

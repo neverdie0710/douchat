@@ -217,7 +217,7 @@ export async function openMaintenanceTerminal(command: string, dependencies: Ter
       await execute('/usr/bin/open', ['-a', 'Terminal', script])
     } catch {
       await rm(directory, { recursive: true, force: true }).catch(() => {})
-      throw new Error('无法打开系统终端。请打开 Terminal 后重试，或复制确认窗口中的命令手动执行。')
+      throw new Error("Could not open the system terminal. Open Terminal and try again, or copy and run the command from the confirmation dialog.")
     }
     return
   }

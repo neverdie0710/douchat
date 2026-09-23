@@ -1,4 +1,8 @@
+import { GameRuleError } from '../shared/gameText'
 import { agentPermissions } from '../shared/agentPermissions'
+import { DEFAULT_DECISION_SETTINGS, validateDecisionSettings, type DecisionSettings } from '../shared/groupDecision'
+import type { GameState } from '../shared/groupGame'
+import type { GroupWorkflow } from '../shared/groupWorkflow'
 import type { SocialRoom, SocialMessage } from '../shared/social'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -149,6 +153,24 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_topic ON messages (conversationId, topicId);
 
+CREATE TABLE IF NOT EXISTS groupGames (
+  id TEXT PRIMARY KEY,
+  conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  topicId TEXT NOT NULL,
+  ownerId TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS groupGames_owner ON groupGames(ownerId, conversationId, topicId);
+
+CREATE TABLE IF NOT EXISTS groupWorkflows (
+  id TEXT PRIMARY KEY,
+  conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  topicId TEXT NOT NULL,
+  ownerId TEXT NOT NULL,
+  data TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS privateMessages (
   id             TEXT PRIMARY KEY,
   conversationId TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -258,6 +280,71 @@ export class DouchatStore {
 
   close(): void {
     this.db.close()
+  }
+
+  decisionSettings(): DecisionSettings {
+    const saved = this.accountMeta('groupDecision:v1')
+    return saved ? validateDecisionSettings(JSON.parse(saved)) : { ...DEFAULT_DECISION_SETTINGS }
+  }
+
+  groupHealth(conversationId: string): import('./groupHealth').GroupHealth {
+    try { return JSON.parse(this.accountMeta(`groupHealth:${conversationId}`) || '{}') } catch { return {} }
+  }
+
+  saveGroupHealth(conversationId: string, health: import('./groupHealth').GroupHealth): void {
+    if (this.conversation(conversationId)?.ownerId !== this.currentAccountId) return
+    this.setAccountMeta(`groupHealth:${conversationId}`, JSON.stringify(health))
+  }
+
+  saveDecisionSettings(settings: DecisionSettings): DecisionSettings {
+    if (!this.currentAccountId) throw new Error("Sign in first.")
+    const validated = validateDecisionSettings(settings)
+    this.setAccountMeta('groupDecision:v1', JSON.stringify(validated))
+    return validated
+  }
+
+  groupGames(): GameState[] {
+    return this.all<GameState>('SELECT data FROM groupGames WHERE ownerId = ? ORDER BY rowid', this.currentAccountId)
+      .filter(game => this.conversation(game.conversationId)?.topics.some(topic => topic.id === game.topicId))
+  }
+
+  groupWorkflows(): GroupWorkflow[] {
+    return this.all<GroupWorkflow>('SELECT data FROM groupWorkflows WHERE ownerId = ? ORDER BY rowid', this.currentAccountId)
+      .filter(workflow => this.conversation(workflow.conversationId)?.topics.some(topic => topic.id === workflow.topicId))
+  }
+
+  saveGroupWorkflow(workflow: GroupWorkflow): void {
+    if (!this.currentAccountId || this.currentAccountId !== workflow.ownerId || this.conversation(workflow.conversationId)?.ownerId !== workflow.ownerId) throw new Error("This group task does not belong to the current account.")
+    if (!this.topicMessages(workflow.conversationId, workflow.topicId).some(message => message.id === workflow.user.id)) throw new Error("The original group task message was deleted.")
+    workflow.updatedAt = Date.now()
+    this.write('INSERT INTO groupWorkflows (id, conversationId, topicId, ownerId, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data',
+      workflow.id, workflow.conversationId, workflow.topicId, workflow.ownerId, JSON.stringify(workflow))
+  }
+
+  groupGame(id: string): GameState | undefined {
+    return this.groupGames().find(game => game.id === id)
+  }
+
+  /** State and visible messages commit together. Stale slots cannot publish twice. */
+  commitGame(game: GameState, expectedRevision?: number): void {
+    if (!this.currentAccountId || game.ownerId !== this.currentAccountId
+      || this.conversation(game.conversationId)?.ownerId !== game.ownerId) throw new GameRuleError("The game does not belong to the current account.", game.language ?? 'zh-CN')
+    this.tx(() => {
+      const previous = this.one<GameState>('SELECT data FROM groupGames WHERE id = ?', game.id)
+      if (!['paused', 'cancelled'].includes(game.status) && game.players.some(player => !player.human && !this.conversation(game.conversationId)?.agentIds.includes(player.id))) throw new GameRuleError("A player left the group. End this game and select players again.", game.language ?? 'zh-CN')
+      if (previous ? previous.revision !== expectedRevision || game.revision !== previous.revision + 1 : expectedRevision !== undefined) throw new GameRuleError("Game state has changed.", game.language ?? 'zh-CN')
+      if (previous && (previous.ownerId !== game.ownerId || previous.conversationId !== game.conversationId || previous.topicId !== game.topicId)) throw new GameRuleError("Game identity cannot be changed.", game.language ?? 'zh-CN')
+      this.write('INSERT INTO groupGames (id, conversationId, topicId, ownerId, revision, data) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET revision = excluded.revision, data = excluded.data', game.id, game.conversationId, game.topicId, game.ownerId, game.revision, JSON.stringify(game))
+      const now = Date.now()
+      for (const event of game.events.slice(previous?.events.length ?? 0).filter(event => event.audience === 'group')) {
+        this.insertMessage({ id: event.id, conversationId: game.conversationId, topicId: game.topicId,
+          authorId: event.authorId === 'human' ? 'user' : event.authorId, authorName: event.authorName,
+          text: event.text, kind: event.authorId === 'system' ? 'system' : 'message', createdAt: now })
+      }
+      const conversation = this.conversation(game.conversationId)!
+      conversation.updatedAt = now
+      this.putConversation(conversation)
+    })
   }
 
   /** A process exit cannot leave work permanently looking active. Scheduled
@@ -1313,7 +1400,7 @@ export class DouchatStore {
   claimSocialAgent(agentId: string, ownerId: string): AgentConfig {
     const agent = this.agent(agentId)
     if (!agent || this.currentAccountId !== ownerId || (agent.ownerId && agent.ownerId !== ownerId)) {
-      throw new Error('只能添加和执行自己的 agent。')
+      throw new Error("You may only add and run your own agents.")
     }
     if (!agent.ownerId) {
       agent.ownerId = ownerId
@@ -1437,7 +1524,7 @@ export class DouchatStore {
   }
 
   private groupName(conversation: Conversation): string {
-    if (conversation.name && !/^[^,]+(?:, [^,]+)*$/.test(conversation.name)) return conversation.name
+    if (!conversation.autoNamed) return conversation.name
     const names = conversation.agentIds.map((agentId) => this.agent(agentId)?.name).filter(Boolean)
     return names.join(', ') || conversation.name
   }
@@ -1513,6 +1600,7 @@ export class DouchatStore {
       ownerId,
       id: `group-${randomUUID().slice(0, 8)}`,
       type: 'group',
+      autoNamed: !input.name.trim(),
       name:
         input.name.trim() ||
         agentIds.map((agentId) => this.agent(agentId)?.name).filter(Boolean).join(', ') ||
@@ -1554,7 +1642,10 @@ export class DouchatStore {
       conversation.manuallyUnread = input.manuallyUnread
       conversation.unread = input.manuallyUnread ? Math.max(1, conversation.unread) : 0
     }
-    if (input.name !== undefined) conversation.name = input.name.trim() || conversation.name
+    if (input.name?.trim()) {
+      conversation.name = input.name.trim()
+      if (conversation.type === 'group') conversation.autoNamed = false
+    }
     if (input.description !== undefined) conversation.description = input.description.trim() || undefined
     if (input.agentIds && conversation.type === 'group') {
       const known = new Set(this.accountAgents.map((agent) => agent.id))
@@ -1650,6 +1741,8 @@ export class DouchatStore {
       this.putConversation(conversation)
       this.write('DELETE FROM messages WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
       this.write('DELETE FROM privateMessages WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
+      this.write('DELETE FROM groupGames WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
+      this.write('DELETE FROM groupWorkflows WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
     })
   }
 
@@ -1805,12 +1898,16 @@ export class DouchatStore {
         this.putConversation(remote)
       }
       if (topicId === undefined) {
+        this.write('DELETE FROM groupGames WHERE conversationId = ?', conversationId)
+        this.write('DELETE FROM groupWorkflows WHERE conversationId = ?', conversationId)
         this.write('DELETE FROM messages WHERE conversationId = ?', conversationId)
         this.write('DELETE FROM privateMessages WHERE conversationId = ?', conversationId)
         return
       }
       this.write('DELETE FROM messages WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
       this.write('DELETE FROM privateMessages WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
+      this.write('DELETE FROM groupGames WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
+      this.write('DELETE FROM groupWorkflows WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
       const conversation = this.conversation(conversationId)
       const topic = conversation?.topics.find((item) => item.id === topicId)
       if (conversation && topic) {

@@ -38,7 +38,7 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
         <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Approval covers the whole run; individual actions cannot currently be approved separately.')}</p>
         {row('localExecution', value.sensitive.localExecution, (v) => setValue({ ...value, sensitive: { ...value.sensitive, localExecution: v } }))}
       </> : sensitiveCapabilities.filter((key) => key !== 'localExecution').map((key) => row(key, value.sensitive[key], (v) => setValue({ ...value, sensitive: { ...value.sensitive, [key]: v } })))}
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{t(error)}</p>}
       </div><footer className="edit-contact-footer"><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={saving}>{t('Done')}</button></footer>
     </form>
   </NativeDialog>
@@ -58,7 +58,7 @@ export function AgentPermissionPrompt({ request, onResolve }: { request: Permiss
       {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Approval covers the whole run; individual actions cannot currently be approved separately.')}</p>}
       <p className="muted">{t('Results may be visible to everyone in this group.')}</p>
       <p className="muted">{t('This approval is for this operation only. No response within 10 minutes means deny.')}</p>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{t(error)}</p>}
       </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button></footer>
     </section>
   </NativeDialog>

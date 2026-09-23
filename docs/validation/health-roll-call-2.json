@@ -1,0 +1,181 @@
+{
+  "report": {
+    "scenario": "mixed-roll-call",
+    "trial": 2,
+    "passed": true,
+    "status": "completed",
+    "firstReplyMs": 7204,
+    "elapsedMs": 11800,
+    "probeCount": 2,
+    "leader": "DeepSeek",
+    "speakers": [
+      "DeepSeek",
+      "mimo",
+      "Codex"
+    ],
+    "absent": [
+      "Grok",
+      "OpenClaw",
+      "Gemini",
+      "OpenCode",
+      "Cursor"
+    ],
+    "announced": true,
+    "health": {
+      "Grok": {
+        "status": "unavailable",
+        "checkedAt": 1790132020490,
+        "failures": 3,
+        "latencyMs": 6000
+      },
+      "OpenClaw": {
+        "status": "unavailable",
+        "checkedAt": 1790132020490,
+        "failures": 3,
+        "latencyMs": 6000
+      },
+      "Gemini": {
+        "status": "unavailable",
+        "checkedAt": 1790131988569,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Codex": {
+        "status": "healthy",
+        "checkedAt": 1790132026282,
+        "failures": 0,
+        "latencyMs": 5378
+      },
+      "OpenCode": {
+        "status": "unavailable",
+        "checkedAt": 1790131999479,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Cursor": {
+        "status": "unavailable",
+        "checkedAt": 1790132014484,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "DeepSeek": {
+        "status": "healthy",
+        "checkedAt": 1790132021691,
+        "failures": 0,
+        "latencyMs": 768
+      },
+      "mimo": {
+        "status": "healthy",
+        "checkedAt": 1790132022631,
+        "failures": 0,
+        "latencyMs": 950
+      }
+    },
+    "sourceBatch": "health-2026-09-23T02-52-15-951Z"
+  },
+  "messages": [
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "user",
+      "authorName": "You",
+      "text": "先来报个数",
+      "kind": "message",
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab",
+      "createdAt": 1790132014488
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:dispatch",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 分配任务：@DeepSeek → @mimo → @Codex → @Grok → @OpenClaw → @Gemini → @OpenCode → @Cursor（按顺序处理）。",
+      "createdAt": 1790132020494
+    },
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "deepseek-d18c2a",
+      "authorName": "DeepSeek",
+      "text": "我是 1 号，DeepSeek 报到。",
+      "kind": "message",
+      "recipients": [],
+      "id": "d04e019a-9725-4d7c-a169-3da5e1183d6b",
+      "createdAt": 1790132021692
+    },
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "mimo-536375",
+      "authorName": "mimo",
+      "text": "我是 2 号，mimo 报到。",
+      "kind": "message",
+      "recipients": [],
+      "id": "b26f8005-1e58-4738-b2fc-23db6430ae56",
+      "createdAt": 1790132022631
+    },
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "codex-d1cd37",
+      "authorName": "Codex",
+      "text": "我是 3 号，Codex 报到。",
+      "kind": "message",
+      "recipients": [],
+      "id": "faabcfc1-20f3-4b36-a46f-44da036c0842",
+      "createdAt": 1790132026283
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:unavailable:grok-88ab13",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：Grok 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132026283
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:unavailable:openclaw-b012a0",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：OpenClaw 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132026284
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:unavailable:gemini-402b7b",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：Gemini 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132026285
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:unavailable:opencode-040bf5",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：OpenCode 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132026285
+    },
+    {
+      "id": "6379cd07-5038-4883-8fca-1665f11392ab:unavailable:cursor-a90139",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 调度通知：Cursor 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132026286
+    }
+  ]
+}

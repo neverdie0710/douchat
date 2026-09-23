@@ -1,3 +1,4 @@
+import { t } from '../preferences'
 import { NativeDialog } from './NativeDialog'
 import { useEffect, useRef, useState } from 'react'
 import { Check, Search, UserPlus, X } from 'lucide-react'
@@ -62,7 +63,7 @@ export function AddFriendModal({ onClose }: { onClose: () => void }) {
       <div className="friend-search-input"><Search size={16} /><input ref={input} autoFocus type="email" autoComplete="off" required maxLength={254} aria-label={l('朋友的邮箱', 'Friend’s email')} placeholder={l('输入朋友的邮箱', 'Enter your friend’s email')} value={email} disabled={busy === 'request'} onChange={(e) => changeEmail(e.target.value)} />{email && <button type="button" disabled={busy === 'request'} aria-label={l('清空邮箱', 'Clear email')} onClick={() => { changeEmail(''); input.current?.focus() }}><X size={15} /></button>}</div>
       <button className="primary-button" disabled={Boolean(busy) || !email.trim()}>{busy === 'search' ? l('搜索中…', 'Searching…') : l('搜索', 'Search')}</button>
     </form>
-    {error && <p className="records-error" role="alert">{error}</p>}
+    {error && <p className="records-error" role="alert">{t(error)}</p>}
     <div className="records-list friend-search-content" aria-live="polite">
       {result?.person ? <section className="friend-search-result">
         <div className="friend-result-person"><UserAvatar name={result.person.name} src={result.person.image || ''} size={48} /><div><h3>{result.person.name}</h3><p>{result.person.email}</p></div></div>

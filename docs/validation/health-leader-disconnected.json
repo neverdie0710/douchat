@@ -1,0 +1,116 @@
+{
+  "report": {
+    "scenario": "mixed-leader-disconnected",
+    "injected": "DeepSeek",
+    "passed": true,
+    "status": "completed",
+    "leader": "mimo",
+    "firstReplyMs": 729,
+    "elapsedMs": 3252,
+    "sourceBatch": "health-2026-09-23T02-52-15-951Z"
+  },
+  "messages": [
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "user",
+      "authorName": "You",
+      "text": "报数",
+      "kind": "message",
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911",
+      "createdAt": 1790132026289
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:dispatch",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "DeepSeek 分配任务：@DeepSeek → @mimo → @Codex → @Grok → @OpenClaw → @Gemini → @OpenCode → @Cursor（按顺序处理）。",
+      "createdAt": 1790132026292
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:deepseek-d18c2a",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：DeepSeek 暂不可用，跳过该成员，其他成员继续报数；已重新选择协调人。",
+      "createdAt": 1790132026295
+    },
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "mimo-536375",
+      "authorName": "mimo",
+      "text": "2 号，mimo。",
+      "kind": "message",
+      "recipients": [],
+      "id": "e98c00de-e2ee-40b1-a02f-9c20e235d803",
+      "createdAt": 1790132027017
+    },
+    {
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "codex-d1cd37",
+      "authorName": "Codex",
+      "text": "3 号，Codex。",
+      "kind": "message",
+      "recipients": [],
+      "id": "8ff0df3d-54ae-40b8-99d2-524a56e6698f",
+      "createdAt": 1790132029534
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:grok-88ab13",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：Grok 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132029535
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:openclaw-b012a0",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：OpenClaw 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132029536
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:gemini-402b7b",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：Gemini 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132029537
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:opencode-040bf5",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：OpenCode 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132029537
+    },
+    {
+      "id": "e69f7ec9-8805-4df3-b327-9792a9374911:unavailable:cursor-a90139",
+      "conversationId": "group-c2d0314d",
+      "topicId": "815ff98a-89f3-4dd5-a8ab-a12fc36f6c41",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "mimo 调度通知：Cursor 暂不可用，跳过该成员，其他成员继续报数。",
+      "createdAt": 1790132029538
+    }
+  ]
+}

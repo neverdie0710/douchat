@@ -1,0 +1,172 @@
+[
+  {
+    "scenario": "mixed-roll-call",
+    "trial": 1,
+    "passed": true,
+    "status": "completed",
+    "firstReplyMs": 6857,
+    "elapsedMs": 78434,
+    "probeCount": 8,
+    "leader": "DeepSeek",
+    "speakers": [
+      "DeepSeek",
+      "mimo",
+      "Codex"
+    ],
+    "absent": [
+      "Grok",
+      "OpenClaw",
+      "Gemini",
+      "OpenCode",
+      "Cursor"
+    ],
+    "announced": true,
+    "health": {
+      "Grok": {
+        "status": "unavailable",
+        "checkedAt": 1790131958548,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "OpenClaw": {
+        "status": "unavailable",
+        "checkedAt": 1790131973557,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Gemini": {
+        "status": "unavailable",
+        "checkedAt": 1790131988569,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Codex": {
+        "status": "healthy",
+        "checkedAt": 1790131994968,
+        "failures": 0,
+        "latencyMs": 6119
+      },
+      "OpenCode": {
+        "status": "unavailable",
+        "checkedAt": 1790131999479,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Cursor": {
+        "status": "unavailable",
+        "checkedAt": 1790132014484,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "DeepSeek": {
+        "status": "healthy",
+        "checkedAt": 1790131942908,
+        "failures": 0,
+        "latencyMs": 586
+      },
+      "mimo": {
+        "status": "healthy",
+        "checkedAt": 1790131943542,
+        "failures": 0,
+        "latencyMs": 956
+      }
+    },
+    "sourceBatch": "health-2026-09-23T02-52-15-951Z"
+  },
+  {
+    "scenario": "mixed-roll-call",
+    "trial": 2,
+    "passed": true,
+    "status": "completed",
+    "firstReplyMs": 7204,
+    "elapsedMs": 11800,
+    "probeCount": 2,
+    "leader": "DeepSeek",
+    "speakers": [
+      "DeepSeek",
+      "mimo",
+      "Codex"
+    ],
+    "absent": [
+      "Grok",
+      "OpenClaw",
+      "Gemini",
+      "OpenCode",
+      "Cursor"
+    ],
+    "announced": true,
+    "health": {
+      "Grok": {
+        "status": "unavailable",
+        "checkedAt": 1790132020490,
+        "failures": 3,
+        "latencyMs": 6000
+      },
+      "OpenClaw": {
+        "status": "unavailable",
+        "checkedAt": 1790132020490,
+        "failures": 3,
+        "latencyMs": 6000
+      },
+      "Gemini": {
+        "status": "unavailable",
+        "checkedAt": 1790131988569,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Codex": {
+        "status": "healthy",
+        "checkedAt": 1790132026282,
+        "failures": 0,
+        "latencyMs": 5378
+      },
+      "OpenCode": {
+        "status": "unavailable",
+        "checkedAt": 1790131999479,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "Cursor": {
+        "status": "unavailable",
+        "checkedAt": 1790132014484,
+        "failures": 2,
+        "latencyMs": 6000
+      },
+      "DeepSeek": {
+        "status": "healthy",
+        "checkedAt": 1790132021691,
+        "failures": 0,
+        "latencyMs": 768
+      },
+      "mimo": {
+        "status": "healthy",
+        "checkedAt": 1790132022631,
+        "failures": 0,
+        "latencyMs": 950
+      }
+    },
+    "sourceBatch": "health-2026-09-23T02-52-15-951Z"
+  },
+  {
+    "scenario": "mixed-leader-disconnected",
+    "injected": "DeepSeek",
+    "passed": true,
+    "status": "completed",
+    "leader": "mimo",
+    "firstReplyMs": 729,
+    "elapsedMs": 3252,
+    "sourceBatch": "health-2026-09-23T02-52-15-951Z"
+  },
+  {
+    "scenario": "office-required-replacement",
+    "staleProbeInjected": "OpenClaw",
+    "passed": true,
+    "status": "completed",
+    "firstReplyMs": 15961,
+    "elapsedMs": 15963,
+    "speakers": [
+      "DeepSeek"
+    ],
+    "sourceBatch": "health-2026-09-23T02-55-11-080Z"
+  }
+]

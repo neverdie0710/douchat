@@ -18,7 +18,7 @@ let root = ''
 let pending: Promise<void> | undefined
 export function configureManagedNode(userData: string): void { root = join(userData, 'local-tools') }
 export function managedNodePaths() {
-  if (!root) throw new Error('本地运行环境尚未初始化。')
+  if (!root) throw new Error("The local runtime has not been initialized.")
   const runtime = join(root, `node-${version}-${process.platform}-${process.arch}`)
   const bin = process.platform === 'win32' ? runtime : join(runtime, 'bin')
   const prefix = join(root, 'agents')
@@ -32,7 +32,7 @@ export function compatibleNodeVersion(value: string): boolean {
   return Boolean(match && (Number(match[1]) >= 24 || (Number(match[1]) === 22 && Number(match[2]) >= 19)))
 }
 export function verifyNodeArchive(bytes: Uint8Array, expected: string): void {
-  if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error('运行环境下载校验失败，请重试。')
+  if (createHash('sha256').update(bytes).digest('hex') !== expected) throw new Error("Runtime download verification failed. Try again.")
 }
 async function usable(node: string, npm: string): Promise<boolean> {
   try {
@@ -61,14 +61,14 @@ async function install(): Promise<void> {
   const paths = managedNodePaths()
   if (await usable(paths.node, paths.npm)) return
   const hash = checksums[`${process.platform}-${process.arch}`]
-  if (!hash) throw new Error('当前系统架构暂不支持自动准备 Node.js，请手动安装 Node.js 24。')
+  if (!hash) throw new Error("Automatic Node.js setup does not support this architecture. Install Node.js 24 manually.")
   await mkdir(root, { recursive: true })
   const staging = await mkdtemp(join(root, '.node-download-'))
   const name = `node-v${version}-${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
   const archive = join(staging, process.platform === 'win32' ? 'node.zip' : 'node.tar.gz')
   try {
     const response = await fetch(`https://nodejs.org/dist/v${version}/${name}.${process.platform === 'win32' ? 'zip' : 'tar.gz'}`, { signal: AbortSignal.timeout(180000), redirect: 'error' })
-    if (!response.ok) throw new Error(`运行环境下载失败（${response.status}），请检查网络后重试。`)
+    if (!response.ok) throw new Error(`Runtime download failed (${response.status}). Check your connection and try again.`)
     const bytes = new Uint8Array(await response.arrayBuffer())
     verifyNodeArchive(bytes, hash)
     await writeFile(archive, bytes)
@@ -82,6 +82,6 @@ async function install(): Promise<void> {
     // Remove only a broken copy of this pinned runtime, never the agent prefix.
     await rm(paths.runtime, { recursive: true, force: true })
     await rename(join(staging, name), paths.runtime)
-    if (!(await usable(paths.node, paths.npm))) throw new Error('运行环境无法启动，请检查系统兼容性。')
+    if (!(await usable(paths.node, paths.npm))) throw new Error("The runtime could not start. Check system compatibility.")
   } finally { await rm(staging, { recursive: true, force: true }) }
 }

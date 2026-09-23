@@ -50,7 +50,7 @@ export function CustomModelSettings() {
     {loading ? <p role="status">{t("Loading model settings…")}</p> : <>
       {!config.providers.length ? <div className="custom-model-empty"><strong>{t("No providers yet")}</strong><p>{t("Add a provider to create agents with your own models.")}</p><span>{t("Supports OpenAI Chat Completions and Anthropic Messages")}</span></div> : <div className="custom-model-table"><table><thead><tr><th>{t("Provider")}</th><th>{t("API URL")}</th><th>{t("Models")}</th><th>{t("Actions")}</th></tr></thead><tbody>{config.providers.map(p => <tr key={p.id}><td><strong>{p.name}</strong><small>{p.kind === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'}</small></td><td><code>{p.apiBase}</code></td><td>{p.models.length}</td><td><div className="custom-model-actions"><button className="icon-button" aria-label={tr('Edit {name}', { name: p.name })} onClick={() => edit(p)}><Pencil size={16} /></button><button className="icon-button" aria-label={tr('Delete {name}', { name: p.name })} disabled={busy} onClick={() => { if (window.confirm(tr('Remove {name}? Agents using these models will be unable to chat until reconfigured. Chat history will be kept.', { name: p.name }))) void persist(config.providers.filter(provider => provider.id !== p.id), config.defaultModel) }}><Trash2 size={16} /></button></div></td></tr>)}</tbody></table></div>}
     </>}
-    {error && !draft && <p className="settings-error" role="alert">{error}</p>}
+    {error && !draft && <p className="settings-error" role="alert">{t(error)}</p>}
     {draft && <NativeDialog className="modal-backdrop" onClose={() => { if (!busy && !testing) setDraft(null) }} width={600} height={730}>
       <form className="agent-modal custom-model-form" role="dialog" aria-modal="true" aria-labelledby="custom-model-title" onSubmit={e => { e.preventDefault(); const p = input(); void persist(config.providers.some(x => x.id === p.id) ? config.providers.map(x => x.id === p.id ? p : x) : [...config.providers, p], config.defaultModel || `${p.id}/${p.models[0]}`) }}>
         <h2 id="custom-model-title">{draft.hasKey ? t("Edit provider") : t("Add provider")}</h2>
@@ -72,7 +72,7 @@ export function CustomModelSettings() {
         </div>
         <div className="custom-model-test-note"><p className="settings-note">{t("The connection test sends a short message to the first model and may incur a small charge.")}</p><p className="settings-note custom-model-endpoint">{t("Test endpoint: ")}{customEndpoint(draft.apiBase, draft.kind)}</p></div>
         {result && <p role="status" className={result.ok ? 'custom-model-success' : 'settings-error'}>{result.ok ? t("Connection successful") : result.error}</p>}
-        {error && <p className="settings-error" role="alert">{error}</p>}
+        {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer"><button className="secondary-button" type="button" disabled={busy || testing || !draft.models.some(model => model.trim())} onClick={() => void test()}>{testing ? t("Testing…") : t("Test connection")}</button><div className="custom-model-footer-actions"><button className="secondary-button" type="button" disabled={busy || testing} onClick={() => setDraft(null)}>{t("Cancel")}</button><button className="primary-button" disabled={busy || testing || !draft.models.some(model => model.trim())}>{busy ? t("Saving…") : t("Save")}</button></div></div>
       </form>
     </NativeDialog>}

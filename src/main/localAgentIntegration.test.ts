@@ -37,7 +37,7 @@ describe('local contact routing', () => {
     const { store, runtime, agent, conversationId } = setup()
     runtime.setInterfaceLanguage('zh-CN')
     runtime.setRoutineCreator((input) => store.createRoutine(input, Date.now() + 60_000))
-    vi.mocked(runLocalAgent).mockResolvedValue({
+    vi.mocked(runLocalAgent).mockResolvedValueOnce({
       text: [
         '我会持续跟进。',
         '[[douchat_create_routine]]',
@@ -51,6 +51,7 @@ describe('local contact routing', () => {
       images: []
     })
 
+    vi.mocked(runLocalAgent).mockResolvedValueOnce({ text: '{"authorized":true}', images: [] })
     await runtime.sendMessage(conversationId, '盯一下，有更新每天推送给我')
 
     expect(vi.mocked(runLocalAgent).mock.calls[0][1]).toContain('Douchat, not your CLI, owns the scheduler')
@@ -149,4 +150,23 @@ describe('local contact routing', () => {
     await turn
     expect(vi.mocked(runLocalAgent).mock.calls[0][2]?.aborted).toBe(true)
   })
+})
+
+it.each([
+  ['Recuérdame revisar el informe dentro de cinco minutos.', true],
+  ['5分後に報告書を確認するようにリマインドしてください。', true],
+  ['ذكرني بمراجعة التقرير بعد خمس دقائق.', true],
+  ['Do not create a reminder. Explain scheduling instead.', false],
+  ['Traduce: «recuérdame revisar el informe».', false]
+])('verifies proposed routine mutations against the original human request: %s', async (request, authorized) => {
+  const { runtime, store, conversationId } = setup()
+  runtime.setRoutineCreator(input => store.createRoutine(input, Date.now() + 300_000))
+  vi.mocked(runLocalAgent)
+    .mockResolvedValueOnce({ text: 'Response.\n[[douchat_create_routine]]\n' + JSON.stringify({ name: 'Review', prompt: 'Review report', schedule: { kind: 'once', delayMinutes: 5 } }) + '\n[[/douchat_create_routine]]', images: [] })
+    .mockResolvedValueOnce({ text: JSON.stringify({ authorized }), images: [] })
+  await runtime.sendMessage(conversationId, request)
+  expect(store.routines).toHaveLength(authorized ? 1 : 0)
+  const verification = vi.mocked(runLocalAgent).mock.calls[1]
+  expect(verification[1]).toContain(JSON.stringify({ task: 'routine_authorization', humanRequest: request }).slice(0, -1))
+  expect(verification[4]?.sessionKey).toBeUndefined()
 })

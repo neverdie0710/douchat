@@ -1,0 +1,288 @@
+{
+  "report": {
+    "scenario": "undercover-scripted-human",
+    "trial": 2,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 2,
+    "turns": 31,
+    "humanActions": 6,
+    "skippedTurns": 1,
+    "publicMessages": 27,
+    "elapsedMs": 41041
+  },
+  "messages": [
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:0",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "谁是卧底开始。判官由规则服务担任，不参赛。1 名卧底，无白板，无猜词翻盘；卧底出局则平民胜，否则剩两人时卧底胜。\n按座次发言，私下投票，首次合法投票生效；平票辩论重投一次，再平票随机抽签。Agent 连续两次行动格式无效则跳过发言或弃权；连续三个行动槽异常或模型服务持续不可用则暂停。真人无响应时等待，可暂停或结束。",
+      "kind": "system",
+      "createdAt": 1790102909527
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:7",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 轮描述。请依次发言：@验收项目经理 → @验收产品经理 → @验收工程师 → @验收测试工程师 → @验收设计师 → @测试真人。",
+      "kind": "system",
+      "createdAt": 1790102909527
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:8",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-c0edfb",
+      "authorName": "验收项目经理",
+      "text": "这是一种非常重要的交通工具，速度很快，连接着不同的城市，大家平时出行经常会选择它。",
+      "kind": "message",
+      "createdAt": 1790102910843
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:9",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-59f34c",
+      "authorName": "验收产品经理",
+      "text": "它通常行驶在地下，是城市通勤的重要方式，准点又高效，能承载大量乘客。",
+      "kind": "message",
+      "createdAt": 1790102912475
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:10",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-31a0ea",
+      "authorName": "验收工程师",
+      "text": "这个东西有轨道，通常是一节一节车厢连接起来，运行的时候比较平稳，适合长途旅行。",
+      "kind": "message",
+      "createdAt": 1790102914897
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:11",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-20c232",
+      "authorName": "验收测试工程师",
+      "text": "它承载着很多人的回忆，尤其是绿皮的那种，速度不快但沿途风景很好，现在高铁更快了，出行方便多了。",
+      "kind": "message",
+      "createdAt": 1790102916337
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:12",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-75f08e",
+      "authorName": "验收设计师",
+      "text": "我看到有提到地下行驶和高铁，这让我想到它可能有不同的类型，比如城市里的轨道交通和连接城市的高速线路。",
+      "kind": "message",
+      "createdAt": 1790102917678
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:13",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "user",
+      "authorName": "测试真人",
+      "text": "这是我的第 1 轮观察：我会结合其他人的描述判断。",
+      "kind": "message",
+      "createdAt": 1790102917685
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:14",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "请存活玩家私下投票。每人一票，禁止自投；全部收齐后公开。",
+      "kind": "system",
+      "createdAt": 1790102917685
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:15",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 轮投票结果：验收项目经理 → 验收产品经理；验收产品经理 → 验收项目经理；验收工程师 → 验收产品经理；验收测试工程师 → 测试真人；验收设计师 → 测试真人；测试真人 → 验收项目经理",
+      "kind": "system",
+      "createdAt": 1790102924438
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:16",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "出现平票：候选人依次辩论后重投一次；再平票则按开局规则抽签。",
+      "kind": "system",
+      "createdAt": 1790102924438
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:17",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-c0edfb",
+      "authorName": "验收项目经理",
+      "text": "我投给产品经理是因为他的描述偏向地铁，而我的词是更广义的。我坚持自己的描述，大家请明察。",
+      "kind": "message",
+      "createdAt": 1790102925757
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:18",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-59f34c",
+      "authorName": "验收产品经理",
+      "text": "（本轮未提交有效发言，按规则跳过。）",
+      "kind": "message",
+      "createdAt": 1790102929971
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:19",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "user",
+      "authorName": "测试真人",
+      "text": "这是我的第 1 轮观察：我会结合其他人的描述判断。",
+      "kind": "message",
+      "createdAt": 1790102929978
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:20",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "请存活玩家私下投票（仅限平票候选）。每人一票，禁止自投；全部收齐后公开。",
+      "kind": "system",
+      "createdAt": 1790102929978
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:21",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 1 轮重投结果：验收项目经理 → 验收产品经理；验收产品经理 → 验收项目经理；验收工程师 → 验收产品经理；验收测试工程师 → 验收项目经理；验收设计师 → 验收产品经理；测试真人 → 验收项目经理",
+      "kind": "system",
+      "createdAt": 1790102936182
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:22",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "平票抽签：验收项目经理出局。",
+      "kind": "system",
+      "createdAt": 1790102936182
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:23",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 2 轮描述。请依次发言：@验收产品经理 → @验收工程师 → @验收测试工程师 → @验收设计师 → @测试真人。",
+      "kind": "system",
+      "createdAt": 1790102936182
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:24",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-59f34c",
+      "authorName": "验收产品经理",
+      "text": "上一轮我提到它行驶在地下、准点高效。我的词确实偏向城市通勤，但可能也包含更广义的轨道交通。这一轮我会更具体一点：它通常有固定的站台和线路图，高峰时段拥挤，是上班族每天的必经之路。",
+      "kind": "message",
+      "createdAt": 1790102938451
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:25",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-31a0ea",
+      "authorName": "验收工程师",
+      "text": "上一轮我描述过轨道和车厢，这次想补充一个关键特征：它通常有特定的时刻表，并且连接着不同的城市或地区。这有助于大家进一步判断。",
+      "kind": "message",
+      "createdAt": 1790102940330
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:26",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-20c232",
+      "authorName": "验收测试工程师",
+      "text": "我的词更偏向于长途旅行那种，连接不同城市，有车厢和轨道。刚才有人说地下，我觉得不太一样，大家觉得呢？",
+      "kind": "message",
+      "createdAt": 1790102941862
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:27",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "bot-75f08e",
+      "authorName": "验收设计师",
+      "text": "我的词确实和长途旅行、轨道、车厢这些特征更吻合。结合大家的描述，感觉我们可能都在描述同一类交通工具，只是侧重点不同。",
+      "kind": "message",
+      "createdAt": 1790102943130
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:28",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "user",
+      "authorName": "测试真人",
+      "text": "这是我的第 2 轮观察：我会结合其他人的描述判断。",
+      "kind": "message",
+      "createdAt": 1790102943138
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:29",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "请存活玩家私下投票。每人一票，禁止自投；全部收齐后公开。",
+      "kind": "system",
+      "createdAt": 1790102943138
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:30",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "第 2 轮投票结果：验收产品经理 → 验收测试工程师；验收工程师 → 验收产品经理；验收测试工程师 → 验收产品经理；验收设计师 → 测试真人；测试真人 → 验收产品经理",
+      "kind": "system",
+      "createdAt": 1790102950561
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:31",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "验收产品经理出局。",
+      "kind": "system",
+      "createdAt": 1790102950561
+    },
+    {
+      "id": "c5dc904b-a080-4274-b59c-411da46ff7ec:event:32",
+      "conversationId": "group-9dfb48d0",
+      "topicId": "5242294a-d100-4b9b-8337-67514b826370",
+      "authorId": "system",
+      "authorName": "判官",
+      "text": "游戏结束：平民获胜。\n身份揭晓：验收项目经理：平民（火车）；验收产品经理：卧底（地铁）；验收工程师：平民（火车）；验收测试工程师：平民（火车）；验收设计师：平民（火车）；测试真人：平民（火车）",
+      "kind": "system",
+      "createdAt": 1790102950561
+    }
+  ]
+}

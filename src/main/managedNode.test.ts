@@ -17,7 +17,7 @@ it('rejects tampered downloads before extraction', () => {
   const bytes = Buffer.from('official archive fixture')
   const hash = createHash('sha256').update(bytes).digest('hex')
   expect(() => verifyNodeArchive(bytes, hash)).not.toThrow()
-  expect(() => verifyNodeArchive(Buffer.from('different'), hash)).toThrow('校验失败')
+  expect(() => verifyNodeArchive(Buffer.from('different'), hash)).toThrow('verification failed')
 })
 it('selects the private environment when the system has no Node/npm', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'douchat-node-test-'))

@@ -174,7 +174,7 @@ export class DesktopAuth {
     private readonly scheme: string,
     private readonly useLoopbackCallback: boolean,
     userDataPath: string,
-    private readonly onChange: (state: DesktopAuthState) => void
+    private readonly onChange: (state: DesktopAuthState, reason?: 'login-completed') => void
   ) {
     this.credentialPath = join(userDataPath, 'auth.json')
     this.pendingPath = join(userDataPath, 'auth-flow.json')
@@ -457,7 +457,7 @@ export class DesktopAuth {
         )
       }
       await this.removeFile(this.pendingPath)
-      return this.setState({ status: 'signed-in', user: exchanged.user })
+      return this.setState({ status: 'signed-in', user: exchanged.user }, 'login-completed')
     } catch (error) {
       this.accessToken = ''
       await this.removeFile(this.pendingPath)
@@ -518,9 +518,9 @@ export class DesktopAuth {
     this.callbackServer = null
   }
 
-  private setState(state: DesktopAuthState): DesktopAuthState {
+  private setState(state: DesktopAuthState, reason?: 'login-completed'): DesktopAuthState {
     this.state = state
-    this.onChange(state)
+    this.onChange(state, reason)
     return state
   }
 

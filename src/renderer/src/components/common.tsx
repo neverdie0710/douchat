@@ -4,7 +4,7 @@ import type { CSSProperties, ReactElement } from 'react'
 import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
 import { GeneratedAgentAvatar } from '../generatedAvatar'
-import { t } from '../preferences'
+import { t, tr } from '../preferences'
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarWidth } from '../sidebarWidth'
 
 export const colors = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
@@ -48,8 +48,32 @@ export function agentDisplayRole(agent: AgentConfig): string {
   return isDrDou(agent) && agent.role === '豆博士' ? t('Douchat assistant') : agent.role
 }
 
-export function conversationDisplayName(conversation: Conversation, agents: AgentConfig[]): string {
-  if (conversation.type !== 'direct') return conversation.name
+export function conversationDisplayName(conversation: Conversation, agents: AgentConfig[], compact = false): string {
+  if (conversation.type !== 'direct') {
+    if (!compact) return conversation.name
+    const shorten = (text: string, limit: number): string => {
+      const characters = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map(part => part.segment)
+      return characters.length > limit ? characters.slice(0, limit).join('') + '…' : text
+    }
+    const members = conversationMembers(conversation, agents)
+    const names = members.map(member => member.name)
+    const humanNames = conversation.socialRoom?.members.filter(member => member.id !== conversation.ownerId).map(member => member.name) ?? []
+    // Older member pickers saved the generated roster as an explicit name.
+    // Recognize that presentation without rewriting the stored group name.
+    const nameParts = conversation.name.split(/[,、]/u).map(name => name.trim()).filter(Boolean)
+    const sameNames = (expected: string[]) => nameParts.length === expected.length && [...nameParts].sort().every((name, index) => name === [...expected].sort()[index])
+    const rosterName = conversation.autoNamed || sameNames(names) || sameNames([...names, ...humanNames])
+    const count = members.length + (conversation.socialRoom?.members.length ?? 1)
+    if (rosterName && nameParts.length >= 2 && (nameParts.length > 3 || shorten(conversation.name, 32) !== conversation.name)) {
+      const [first, second] = nameParts.slice(0, 2).map(name => {
+        const member = members.find(member => member.name === name)
+        return shorten(member ? agentDisplayName(member) : name, 12)
+      })
+      return tr('{first}, {second} and others ({count} members)', { first, second, count })
+    }
+    const shortName = shorten(conversation.name, 32)
+    return shortName === conversation.name ? conversation.name : `${shortName} (${count})`
+  }
   const agent = agents.find((item) => item.id === conversation.agentIds[0])
   return agent ? agentDisplayName(agent) : conversation.name
 }

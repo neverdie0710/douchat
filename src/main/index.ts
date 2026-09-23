@@ -72,7 +72,7 @@ configureLocalAgentRegistry(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
 const customModels = new CustomModelStore(join(app.getPath('userData'), 'custom-models'), {
   encrypt: (value) => {
-    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error('系统密钥存储不可用，请启用系统钥匙串后重试。')
+    if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error("System credential storage is unavailable. Enable the system keychain and try again.")
     return safeStorage.encryptString(value).toString('base64')
   },
   decrypt: (value) => safeStorage.decryptString(Buffer.from(value, 'base64'))
@@ -216,7 +216,7 @@ async function openPendingGroup(): Promise<void> {
   try {
     await social.syncInbox(true)
     const conversation = store.accountConversations.find((item) => item.remoteRoomId === roomId)
-    if (!conversation) throw new Error('请使用加入群聊的同一账号登录。')
+    if (!conversation) throw new Error("Sign in with the same account used to join this group.")
     if (conversation.hidden) store.updateConversation(conversation.id, { hidden: false })
     openChatWindow(conversation.id)
   } catch (error) {
@@ -291,6 +291,7 @@ function broadcastAuth(state: DesktopAuthState): void {
   if (store && accountChanged) {
     const previousAgents = store.accountAgents
     const previousConversations = store.accountConversations
+    runtime?.games.stopAll()
     for (const conversation of previousConversations) runtime?.stopConversation(conversation.id)
     for (const agent of previousAgents) runtime?.disposeAgent(agent.id)
     for (const window of chatWindows.values()) window.close()
@@ -346,6 +347,7 @@ function broadcastAuth(state: DesktopAuthState): void {
   if (runtime && shouldConnect) {
     cloudSessionActive = signedIn
     void Promise.all([runtime.connect(), builtInRefresh]).then(async ([, refreshedConversationId]) => {
+      if (state.status === 'signed-in' && store.currentAccountId === state.user.id) void runtime.recoverGroupWorkflows()
       // Wait for the account's Cloud model before asking Dr. Dou to open the
       // welcome chat. greet() is otherwise idempotent once a message exists.
       const current = auth?.getState()
@@ -588,12 +590,13 @@ app.whenReady().then(() => {
     () => runtime.snapshot().activity.length,
     broadcastUpdate
   )
-  auth = new DesktopAuth(webAppUrl, authScheme, development, app.getPath('userData'), (state) => {
+  auth = new DesktopAuth(webAppUrl, authScheme, development, app.getPath('userData'), (state, reason) => {
     broadcastAuth(state)
     // The development flow returns through a loopback HTTP server instead of
     // the custom protocol, so it does not pass through receiveAppUrl(). Bring
-    // Douchat forward as soon as either callback path finishes signing in.
-    if (state.status === 'signed-in') { focusMainWindow(); void openPendingGroup() }
+    // Douchat forward only for an explicit login callback, never for session
+    // restoration, profile refreshes or profile edits in the background.
+    if (state.status === 'signed-in' && reason === 'login-completed') { focusMainWindow(); void openPendingGroup() }
   })
 
   social = new SocialClient(webAppUrl, auth, store, runtime, () => { if (!quitting) broadcast(runtime.snapshot()) })
@@ -721,6 +724,22 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return customModels.list(store.currentAccountId)
   })
+  ipcMain.handle('douchat:decision-settings', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return store.decisionSettings()
+  })
+  ipcMain.handle('douchat:cloud-decision-models', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return runtime.getCloudDecisionModels()
+  })
+  ipcMain.handle('douchat:save-decision-settings', (event, settings) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return runtime.saveDecisionSettings(settings)
+  })
+  ipcMain.handle('douchat:test-decision-settings', (event, settings) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return runtime.testDecisionSettings(settings)
+  })
   ipcMain.handle('douchat:save-custom-models', (event, providers: CustomProviderInput[], defaultModel: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     const result = customModels.save(store.currentAccountId, providers, defaultModel)
@@ -734,8 +753,8 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:create-agent', async (event, input: CreateAgentInput) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
-    if ((input.customModel || input.cloudModel) && input.localAgentId) throw new Error('请选择一种运行方式。')
-    if (input.customModel && input.cloudModel) throw new Error('请选择一种模型来源。')
+    if ((input.customModel || input.cloudModel) && input.localAgentId) throw new Error("Select one execution mode.")
+    if (input.customModel && input.cloudModel) throw new Error("Select one model source.")
     const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
@@ -763,8 +782,8 @@ app.whenReady().then(() => {
     if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')
     const existing = store.accountAgents.find(agent => agent.id === agentId)!
     const { customModel, cloudModel, ...update } = input
-    if (customModel && cloudModel) throw new Error('请选择一种模型来源。')
-    if ((customModel || cloudModel) && (existing.localAgentId || input.localAgentId)) throw new Error('请选择一种运行方式。')
+    if (customModel && cloudModel) throw new Error("Select one model source.")
+    if ((customModel || cloudModel) && (existing.localAgentId || input.localAgentId)) throw new Error("Select one execution mode.")
     const selectedBinding = customModel ? runtime.customAgentModel(customModel.providerId, customModel.model) : cloudModel ? runtime.cloudAgentModel(cloudModel.model) : undefined
     input = { ...update, ...selectedBinding }
     if (input.model !== undefined && (input.localAgentId || existing.localAgentId)) {
@@ -879,6 +898,10 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:mark-read', (_event, conversationId: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
+    const conversation = store.conversation(conversationId)
+    if (conversation?.type === 'direct' && conversation.agentIds.includes(store.systemAdminAgentId ?? '')) {
+      void runtime.greet(conversationId)
+    }
     store.markConversationRead(conversationId)
     return push()
   })

@@ -541,9 +541,21 @@ describe('private delivery disclosure', () => {
         agents={agents}
       />
     ))
-    expect(container.querySelector('.typing-label')?.textContent).toBe('Coordinating the group')
-    expect(container.querySelector('.avatar')).toBeNull()
+    expect(container.querySelector('.system-message[role="status"]')?.textContent).toContain('Coordinating the group')
+    expect(container.querySelector('.typing-row')).toBeNull()
+    expect(container.querySelector('[data-testid="empty-avatar"]')).toBeNull()
     expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Coordinating the group')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, phase: 'planning', agentIds: [], label: 'Group scheduler', planningStage: 'health', action: undefined }} agents={agents} />))
+    expect(container.querySelector('.system-message[role="status"]')).not.toBeNull()
+    expect(container.querySelector('.typing-row')).toBeNull()
+    expect(container.querySelector('[data-testid="empty-avatar"]')).toBeNull()
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Checking group member availability')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, phase: 'planning', agentIds: [], label: 'Decision service', serviceName: 'OpenRouter · Jev', planningStage: 'decision', action: undefined }} agents={agents} />))
+    expect(container.querySelector('.system-message')?.textContent).toContain('OpenRouter · Jev')
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Choosing a leader and reply order')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, phase: 'planning', agentIds: [agents[0].id], label: 'Coordinating the group', planningStage: 'plan', action: undefined }} agents={agents} />))
+    expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Preparing the task plan')
+    expect(container.querySelector('[data-testid="agent-avatar"]')).not.toBeNull()
     await act(async () => root.render(
       <ChatActivity activity={{ ...activity, phase: 'planning', agentIds: [agents[0].id], label: 'Coordinating the group', action: undefined }} agents={agents} />
     ))
@@ -562,6 +574,25 @@ describe('private delivery disclosure', () => {
       />
     ))
     expect(container.querySelector('.typing-activity-text')?.textContent).toBe('Preparing the result')
+  })
+
+  it.each(['planning', 'replying'] as const)('gives simultaneous members separate %s status rows', async phase => {
+    const activity: ConversationActivityState = {
+      conversationId: 'group', topicId: 'topic', phase, agentIds: agents.map(agent => agent.id),
+      label: 'Coordinating the group', startedAt: 1, planningStage: phase === 'planning' ? 'plan' : undefined
+    }
+    await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
+    const rows = container.querySelectorAll('.typing-row')
+    expect(rows).toHaveLength(2)
+    rows.forEach((row, index) => {
+      expect(row.querySelectorAll('[data-testid="agent-avatar"]')).toHaveLength(1)
+      expect(row.querySelector('[data-testid="agent-avatar"]')?.getAttribute('data-agent-name')).toBe(agents[index].name)
+      expect(row.querySelector('.typing-label')?.textContent).toBe(agents[index].name)
+      expect(row.querySelectorAll('.typing-bubble')).toHaveLength(1)
+    })
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, agentIds: [agents[1].id] }} agents={agents} />))
+    expect(container.querySelectorAll('.typing-row')).toHaveLength(1)
+    expect(container.querySelector('.typing-label')?.textContent).toBe(agents[1].name)
   })
 
   it('shows local connection and stalled-progress feedback without claiming completion', async () => {
@@ -611,6 +642,18 @@ describe('private delivery disclosure', () => {
 
     expect(toggle?.getAttribute('aria-expanded')).toBe('true')
     expect(container.textContent).toContain(detail)
+  })
+
+  it('renders scheduling notice metadata instead of its previously stored language', async () => {
+    const message: ChatMessage = {
+      id: 'schedule-translation', conversationId: directConversation.id, topicId: 'topic-2',
+      authorId: 'system', authorName: 'Douchat', kind: 'system', createdAt: 31,
+      text: '本轮已结束：3 人已回复。',
+      localization: { key: 'Round complete: {count} replied.', values: { count: 3 } }
+    }
+    await act(async () => root.render(<SystemMessage message={message} />))
+    expect(container.textContent).toBe('Round complete: 3 replied.')
+    expect(container.querySelector('.is-error')).toBeNull()
   })
 
   it('shows a next step for a local Claude startup failure', async () => {

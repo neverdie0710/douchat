@@ -1,0 +1,26 @@
+[
+  {
+    "scenario": "llm-decision",
+    "decision": {
+      "assignments": {
+        "eng": "工程师请回答：HTTP 缓存有哪两种常见优化方法？项目经理不用回复。"
+      },
+      "mode": "single",
+      "memberIds": [
+        "eng"
+      ],
+      "triggerMessageIds": [
+        "request"
+      ]
+    },
+    "elapsedMs": 8198,
+    "passed": true,
+    "sourceBatch": "2026-09-22T19-31-33-159Z"
+  },
+  {
+    "scenario": "jev-decision",
+    "passed": false,
+    "error": "决策需要 Leader 复核。",
+    "sourceBatch": "2026-09-22T19-31-33-159Z"
+  }
+]

@@ -1,3 +1,6 @@
+import { runtimeTranslations } from '../../shared/runtimeText'
+import { gameTranslations } from '../../shared/gameText'
+import { groupTranslations, interpolate } from '../../shared/groupText'
 import { useSyncExternalStore } from 'react'
 import { supportedInterfaceLanguage, type InterfaceLanguage } from '../../shared/language'
 
@@ -52,6 +55,9 @@ export function t(text: string): string {
   if (exact) return exact
 
   const patterns: Array<[RegExp, (...matches: string[]) => string]> = [
+    [/^The owner of "(.+)" has disabled requests from group members\.$/, (_all, name) => `「${name}」的主人未开放群成员调用，请联系主人调整 Agent 权限。`],
+    [/^Permissions for "(.+)" have not synchronized\. Ask the owner to reconnect\.$/, (_all, name) => `「${name}」的调用权限尚未同步，请主人重新连接后再试。`],
+    [/^Runtime download failed \((\d+)\)\. Check your connection and try again\.$/, (_all, status) => `运行环境下载失败（${status}），请检查网络后重试。`],
     [/^(.+) could not deliver a message to another bot\.?$/, (_all, name) => `${name} 无法向其他智能体传递消息。`],
     [/^(.+) has no model to answer with\.?(?: (.*))?$/, (_all, name, detail) => `${name} 没有可用于回复的模型。${detail ?? ''}`],
     [/^(.+) finished without a text response\.?$/, (_all, name) => `${name} 未返回文字内容。`],
@@ -79,12 +85,13 @@ export function t(text: string): string {
   return prefix ? `${prefix[1]}${text.slice(prefix[0].length)}` : text
 }
 export function tr(text: string, values: Record<string, string | number>): string {
-  return Object.entries(values).reduce(
-    (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
-    t(text)
-  )
+  return interpolate(t(text), values)
 }
 const translations: Record<string, string> = {
+  '{first}, {second} and others ({count} members)': '{first}、{second}等 {count} 人',
+  ...runtimeTranslations,
+  ...groupTranslations,
+  ...gameTranslations,
   'Local agent detection timed out. Check your shell startup configuration and try again.': '本地智能体检测超时，请检查终端启动配置后重试。',
   'Could not confirm the latest version. Detect again later.': '无法确认最新版本，请稍后重新检测',
   'Version unconfirmed': '版本未确认',
@@ -211,6 +218,10 @@ const translations: Record<string, string> = {
   'Task received; getting started': '任务已提交，准备开始',
   'Waiting for new progress from local agent': '暂未收到新进展，仍在等待本地智能体',
   'Local agent is running': '本地智能体正在运行',
+  'Temporarily unavailable': '暂不可用', 'Excluded from group tasks until a successful health check': '暂停分配群任务，健康检测成功后恢复',
+  'Group scheduler': '群调度', 'Decision service': '决策服务', 'Checking group member availability': '正在检查群成员状态',
+  'Choosing a leader and reply order': '正在选择负责人和回复顺序', 'Preparing the task plan': '正在制定任务计划',
+  'Arranging the next step after a member failure': '正在安排故障后的下一步',
   'Typing': '正在输入', 'Coordinating the group': '正在协调群聊', 'Preparing a greeting': '正在准备问候', 'Delivering a message': '正在传递消息', 'Preparing a reply': '正在回复', 'Thinking about the next step': '正在思考下一步', 'Preparing the result': '正在整理结果', 'Trying another approach': '正在尝试其他方法',
   'Actions performed': '执行的操作', 'the selected item': '所选项目', '{count} actions': '{count} 项操作', '{count} actions could not be completed': '{count} 项操作未完成',
   'Open local file': '打开本地文件', 'This file is no longer available at its saved location.': '文件已不在原来的位置。',
@@ -267,6 +278,7 @@ const translations: Record<string, string> = {
   'Language': '语言', 'Appearance': '外观', 'Light': '浅色', 'Dark': '深色', 'System': '跟随系统', 'Follow system': '跟随系统',
   'Choose your language and appearance.': '设置界面语言和外观。',
   'Local agents': '本地智能体', 'View the local agents available on this computer.': '查看这台电脑上可用的本地智能体。',
+  'Scheduling': '调度',
   'Installed': '已安装', 'Refresh': '刷新', 'Scanning…': '扫描中…', 'Detect': '检测', 'Detecting…': '检测中…',
   'Installed · uses your local login and default model': '已安装 · 使用本地登录和默认模型', 'Installed · chat adapter coming soon': '已安装 · 暂不支持聊天',
   'Checking your shell and installed commands…': '正在检测已安装的命令…', 'No supported local agents found. Install one in your terminal, then detect again.': '未检测到支持的本地智能体。请先在终端中安装，然后重新检测。',

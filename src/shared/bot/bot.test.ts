@@ -70,7 +70,7 @@ describe('reply bubbles', () => {
 })
 
 describe('group dispatch', () => {
-  it('routes explicit mentions without the controller', () => {
+  it('extracts structural mention hints without treating them as authorization', () => {
     expect(explicitGroupDecision('@Ann @Anna go', group, 'u1')).toEqual({
       mode: 'parallel',
       memberIds: ['a', 'b'],
@@ -86,7 +86,7 @@ describe('group dispatch', () => {
     expect(validateGroupDecision({ mode: 'none', memberIds: [], triggerMessageIds: [] }, group, context).mode).toBe('none')
   })
 
-  it('lets the lead respond before the dispatched worker', async () => {
+  it('lets only the dispatched worker answer a single-recipient decision', async () => {
     const user: GroupMessage = { id: 'u1', role: 'user', content: 'plan the launch' }
     const spoke: string[] = []
     const decide = vi
@@ -104,11 +104,12 @@ describe('group dispatch', () => {
       }
     })
 
-    expect(spoke).toEqual(['a', 'b'])
+    expect(spoke).toEqual(['b'])
+    expect(decide).toHaveBeenCalledTimes(1)
     expect(result).toEqual({ limited: false, failed: false, unavailableMemberIds: [] })
   })
 
-  it('returns unaddressed follow-ups to the leader for dispatch', async () => {
+  it('uses the controller to dispatch unaddressed follow-ups without an extra leader reply', async () => {
     const user: GroupMessage = { id: 'u2', role: 'user', content: 'and what happened next?' }
     const decide = vi.fn().mockResolvedValueOnce({ mode: 'single', memberIds: ['b'], triggerMessageIds: ['u2'] })
       .mockResolvedValue({ mode: 'none', memberIds: [], triggerMessageIds: [] })
@@ -128,8 +129,8 @@ describe('group dispatch', () => {
       }
     })
 
-    expect(spoke).toEqual(['a', 'b'])
-    expect(decide).toHaveBeenCalledTimes(2)
+    expect(spoke).toEqual(['b'])
+    expect(decide).toHaveBeenCalledTimes(1)
     expect(result.failed).toBe(false)
   })
 
@@ -150,11 +151,11 @@ describe('group dispatch', () => {
       }
     })
 
-    expect(spoke).toEqual(['a', 'b'])
+    expect(spoke).toEqual(['b'])
   })
 
-  it('falls back to the lead when an initial controller decision says none', async () => {
-    const user: GroupMessage = { id: 'u1', role: 'user', content: 'please answer this' }
+  it('respects an initial no-reply decision for messages addressed only to humans', async () => {
+    const user: GroupMessage = { id: 'u1', role: 'user', content: '小王，晚上几点到？AI 不需要回复。' }
     const decide = vi.fn().mockResolvedValue({ mode: 'none', memberIds: [], triggerMessageIds: [] })
     const spoke: string[] = []
     const result = await runGroupConversation({
@@ -168,7 +169,7 @@ describe('group dispatch', () => {
       }
     })
 
-    expect(spoke).toEqual(['a'])
+    expect(spoke).toEqual([])
     expect(result.failed).toBe(false)
   })
 
@@ -179,7 +180,7 @@ describe('group dispatch', () => {
       group,
       user,
       signal: new AbortController().signal,
-      decide: async () => ({ mode: 'none', memberIds: [], triggerMessageIds: [] }),
+      decide: async context => context.completedTurns.length ? { mode: 'none', memberIds: [], triggerMessageIds: [] } : { mode: 'single', memberIds: ['a'], triggerMessageIds: ['u1'] },
       reply: async (member, turn) => {
         spoke.push(member.id)
         if (member.id === 'a') return { messages: [], failed: true }

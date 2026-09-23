@@ -9,21 +9,21 @@ interface SecretCodec { encrypt(value: string): string; decrypt(value: string): 
 interface Stored { providers: Array<Omit<CustomProviderInput, 'apiKey'> & { secret: string }>; defaultModel: string }
 export interface CustomProviderRecord extends CustomProviderInput { apiKey: string }
 export function validateCustomProvider(input: CustomProviderInput): CustomProviderInput {
-  if (!input || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(input.id)) throw new Error('服务商标识无效。')
-  if (input.kind !== 'openai' && input.kind !== 'anthropic') throw new Error('请选择 API 类型。')
-  if (typeof input.name !== 'string' || !input.name.trim()) throw new Error('请输入服务商名称。')
-  if (typeof input.apiBase !== 'string' || (input.apiKey !== undefined && typeof input.apiKey !== 'string')) throw new Error('配置格式无效。')
+  if (!input || typeof input.id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(input.id)) throw new Error("Invalid provider ID.")
+  if (input.kind !== 'openai' && input.kind !== 'anthropic') throw new Error("Select an API type.")
+  if (typeof input.name !== 'string' || !input.name.trim()) throw new Error("Enter a provider name.")
+  if (typeof input.apiBase !== 'string' || (input.apiKey !== undefined && typeof input.apiKey !== 'string')) throw new Error("Invalid configuration format.")
   const endpoint = new URL(customEndpoint(input.apiBase, input.kind))
-  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error('API 地址必须是 HTTP 或 HTTPS 地址，不能包含密码、查询参数或片段。')
+  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) throw new Error("The API URL must use HTTP or HTTPS and contain no password, query parameters or fragment.")
   const models = Array.isArray(input.models) ? [...new Set(input.models.filter((m): m is string => typeof m === 'string').map(m => m.trim()).filter(Boolean))] : []
-  if (!models.length || models.length > 100 || models.some(m => m.length > 200)) throw new Error('请输入有效模型名称，每行一个。')
+  if (!models.length || models.length > 100 || models.some(m => m.length > 200)) throw new Error("Enter valid model names, one per line.")
   const modelLabels = Object.fromEntries(models.map(model => [model, typeof input.modelLabels?.[model] === 'string' ? input.modelLabels[model].trim().slice(0, 200) : '']).filter(([, label]) => label))
   return { id: input.id, name: input.name.trim(), kind: input.kind, apiBase: input.apiBase.trim(), apiKey: input.apiKey?.trim(), models, ...(Object.keys(modelLabels).length ? { modelLabels } : {}) }
 }
 export class CustomModelStore {
   constructor(private directory: string, private codec: SecretCodec) {}
   private file(account: string): string {
-    if (!account) throw new Error('请先登录。')
+    if (!account) throw new Error("Sign in first.")
     return join(this.directory, `${createHash('sha256').update(account).digest('hex')}.json`)
   }
   private read(account: string): Stored {
@@ -36,17 +36,17 @@ export class CustomModelStore {
   }
   records(account: string): CustomProviderRecord[] { return this.read(account).providers.map(({ secret, ...p }) => ({ ...p, apiKey: this.codec.decrypt(secret) })) }
   save(account: string, inputs: CustomProviderInput[], defaultModel: string): CustomModelConfig {
-    if (!Array.isArray(inputs) || inputs.length > 30 || typeof defaultModel !== 'string') throw new Error('模型配置无效。')
+    if (!Array.isArray(inputs) || inputs.length > 30 || typeof defaultModel !== 'string') throw new Error("Invalid model configuration.")
     const old = this.read(account)
     const providers = inputs.map(validateCustomProvider).map(({ apiKey, ...p }) => {
       const previous = old.providers.find(item => item.id === p.id)
       // Never forward a stored key to a changed endpoint without explicit re-entry.
-      if (!apiKey && previous && (customEndpoint(previous.apiBase, previous.kind) !== customEndpoint(p.apiBase, p.kind))) throw new Error('API 地址已修改，请重新输入密钥。')
+      if (!apiKey && previous && (customEndpoint(previous.apiBase, previous.kind) !== customEndpoint(p.apiBase, p.kind))) throw new Error("The API URL changed. Enter the API key again.")
       const secret = apiKey ? this.codec.encrypt(apiKey) : previous?.secret
-      if (!secret) throw new Error('请输入 API 密钥。')
+      if (!secret) throw new Error("Enter an API key.")
       return { ...p, secret }
     })
-    if (new Set(providers.map(p => p.id)).size !== providers.length) throw new Error('服务商标识重复。')
+    if (new Set(providers.map(p => p.id)).size !== providers.length) throw new Error("Duplicate provider IDs.")
     const choices = providers.flatMap(p => p.models.map(m => `${p.id}/${m}`))
     const next = { providers, defaultModel: choices.includes(defaultModel) ? defaultModel : choices[0] ?? '' }
     mkdirSync(this.directory, { recursive: true, mode: 0o700 })
@@ -57,7 +57,7 @@ export class CustomModelStore {
   }
   async test(account: string, input: CustomModelTest): Promise<{ ok: boolean; error?: string; model?: string }> {
     const p = validateCustomProvider(input.provider)
-    if (!p.models.includes(input.model)) throw new Error('请选择配置中的模型。')
+    if (!p.models.includes(input.model)) throw new Error("Select a model from the configuration.")
     const saved = this.read(account).providers.find(item => item.id === p.id)
     const canReuse = saved && customEndpoint(saved.apiBase, saved.kind) === customEndpoint(p.apiBase, p.kind)
     const key = p.apiKey || (canReuse ? this.codec.decrypt(saved.secret) : '')

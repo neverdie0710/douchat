@@ -1,7 +1,7 @@
 /** Strip Electron transport wrappers while retaining the actionable error. */
 export function messageSendError(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : ''
-  return message.replace(/^Error invoking remote method ['"][^'"\n]+['"]:\s*/i, '').replace(/^(?:Error:\s*)+/i, '').trim() || '消息未发送，请重试。'
+  return message.replace(/^Error invoking remote method ['"][^'"\n]+['"]:\s*/i, '').replace(/^(?:Error:\s*)+/i, '').trim() || 'Message not sent. Try again.'
 }
 
 export interface QueuedMessage {

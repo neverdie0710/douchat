@@ -83,7 +83,7 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
         <p className="settings-note">{loading ? t('Loading models…') : t("Use the local agent’s model configuration.")} <button type="button" className="local-settings-link" disabled={saving || loading} onClick={() => setRevision(n => n + 1)}>{t('Refresh')}</button></p>
       </>}
       {!custom && !supported && <p className="local-model-note">{t('This tool does not support a per-conversation model override.')}</p>}
-      {error && <p className="settings-error" role="alert">{error}</p>}
+      {error && <p className="settings-error" role="alert">{t(error)}</p>}
       </div>
       <footer className="edit-contact-footer"><button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button><button className="primary-button" disabled={saving || (!custom && !supported && Boolean(model)) || (custom && (loading || !validSelection))}>{t(saving ? 'Saving…' : 'Done')}</button></footer>
     </form>

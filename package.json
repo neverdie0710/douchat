@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -65,6 +65,8 @@
     },
     "files": [
       "out/**/*",
+      "!out/group-scenarios/**/*",
+      "!out/group-*.mjs",
       "package.json",
       "resources/icons/*.png",
       "!node_modules/**/*.map",

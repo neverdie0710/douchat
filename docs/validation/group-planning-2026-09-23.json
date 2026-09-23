@@ -1,0 +1,225 @@
+{
+  "nativeUITest": {
+    "conversationId": "group-3972e1b5",
+    "name": "调度验收 0923",
+    "request": "报个数",
+    "status": "completed",
+    "settings": {
+      "mode": "model",
+      "providerId": "openrouter",
+      "model": "~typesafe/jev-latest"
+    },
+    "events": [
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Started",
+        "status": "running",
+        "id": "b5e4ca2e-5963-4b5b-a9ca-d8f9a2452d4f",
+        "createdAt": 1790142056447
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Decision requested",
+        "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"initial\"}",
+        "id": "6c0c63a4-c06f-4bfa-a253-7e1465c8e048",
+        "createdAt": 1790142062463
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Decision applied",
+        "detail": "{\"leaderMemberId\":\"deepseek-74838c\",\"rollCall\":true,\"participationOnly\":true,\"assignments\":{\"deepseek-74838c\":\"本轮从 1 重新报数；你是第 1 位，只回复数字 1。忽略历史轮次的号码，不替其他成员报数。\",\"gemini-948bcb\":\"本轮从 1 重新报数；你是第 2 位，只回复数字 2。忽略历史轮次的号码，不替其他成员报数。\",\"mimo-178e27\":\"本轮从 1 重新报数；你是第 3 位，只回复数字 3。忽略历史轮次的号码，不替其他成员报数。\",\"openclaw-efb6ff\":\"本轮从 1 重新报数；你是第 4 位，只回复数字 4。忽略历史轮次的号码，不替其他成员报数。\"},\"mode\":\"sequential\",\"memberIds\":[\"deepseek-74838c\",\"gemini-948bcb\",\"mimo-178e27\",\"openclaw-efb6ff\"],\"triggerMessageIds\":[\"a2109e1c-851c-4b83-9dcf-ba1a1797b46e\"]}",
+        "id": "95e719b9-b4f4-4a81-aabb-788759e91bac",
+        "createdAt": 1790142062769
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Member reply failed",
+        "detail": "OpenClaw: model response unavailable",
+        "id": "62591675-59ba-4af3-9d6f-23ee35da01f0",
+        "createdAt": 1790142077210
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Decision requested",
+        "detail": "{\"mode\":\"model\",\"model\":\"~typesafe/jev-latest\",\"providerId\":\"openrouter\",\"phase\":\"recovery\"}",
+        "id": "7bae5d8f-e586-4e0f-a685-27e7b0ff4bee",
+        "createdAt": 1790142077222
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Decision applied",
+        "detail": "{\"mode\":\"none\",\"memberIds\":[],\"triggerMessageIds\":[],\"leaderMemberId\":\"deepseek-74838c\",\"recoveryAction\":\"skip\"}",
+        "id": "d56ed0c4-6204-43af-8b97-5e47bf2a39f7",
+        "createdAt": 1790142077576
+      },
+      {
+        "runId": "8c74d293-6d84-479b-946b-478661b34664",
+        "type": "status",
+        "label": "Finished",
+        "status": "succeeded",
+        "id": "418fd999-91dd-46a7-95a1-6f24ca7dbd20",
+        "createdAt": 1790142077594
+      }
+    ],
+    "calls": {
+      "decision::": {
+        "status": "done",
+        "kind": "decision",
+        "value": {
+          "leaderMemberId": "deepseek-74838c",
+          "rollCall": true,
+          "participationOnly": true,
+          "assignments": {
+            "deepseek-74838c": "本轮从 1 重新报数；你是第 1 位，只回复数字 1。忽略历史轮次的号码，不替其他成员报数。",
+            "gemini-948bcb": "本轮从 1 重新报数；你是第 2 位，只回复数字 2。忽略历史轮次的号码，不替其他成员报数。",
+            "mimo-178e27": "本轮从 1 重新报数；你是第 3 位，只回复数字 3。忽略历史轮次的号码，不替其他成员报数。",
+            "openclaw-efb6ff": "本轮从 1 重新报数；你是第 4 位，只回复数字 4。忽略历史轮次的号码，不替其他成员报数。"
+          },
+          "mode": "sequential",
+          "memberIds": [
+            "deepseek-74838c",
+            "gemini-948bcb",
+            "mimo-178e27",
+            "openclaw-efb6ff"
+          ],
+          "triggerMessageIds": [
+            "a2109e1c-851c-4b83-9dcf-ba1a1797b46e"
+          ]
+        }
+      },
+      "reply:1:deepseek-74838c:a2109e1c-851c-4b83-9dcf-ba1a1797b46e": {
+        "status": "done",
+        "kind": "reply",
+        "value": {
+          "messages": [
+            {
+              "id": "ef6b9876-557e-484f-bd08-f1009caf5c82",
+              "role": "assistant",
+              "sender": {
+                "id": "deepseek-74838c",
+                "name": "DeepSeek"
+              },
+              "recipients": [],
+              "content": "1"
+            }
+          ],
+          "privateMessages": []
+        }
+      },
+      "reply:2:gemini-948bcb:a2109e1c-851c-4b83-9dcf-ba1a1797b46e": {
+        "status": "done",
+        "kind": "reply",
+        "value": {
+          "messages": [
+            {
+              "id": "0681e30f-cfb4-46c6-be1b-2afe4f339987",
+              "role": "assistant",
+              "sender": {
+                "id": "gemini-948bcb",
+                "name": "Gemini"
+              },
+              "recipients": [],
+              "content": "2"
+            }
+          ],
+          "privateMessages": []
+        }
+      },
+      "reply:3:mimo-178e27:a2109e1c-851c-4b83-9dcf-ba1a1797b46e": {
+        "status": "done",
+        "kind": "reply",
+        "value": {
+          "messages": [
+            {
+              "id": "6527077d-1245-45bd-8041-78126034e4ff",
+              "role": "assistant",
+              "sender": {
+                "id": "mimo-178e27",
+                "name": "mimo"
+              },
+              "recipients": [],
+              "content": "3"
+            }
+          ],
+          "privateMessages": []
+        }
+      },
+      "reply:4:openclaw-efb6ff:a2109e1c-851c-4b83-9dcf-ba1a1797b46e": {
+        "status": "done",
+        "kind": "reply",
+        "value": {
+          "messages": [],
+          "failed": true
+        }
+      },
+      "decision:1/deepseek-74838c,2/gemini-948bcb,3/mimo-178e27:openclaw-efb6ff:recovery:openclaw-efb6ff:a2109e1c-851c-4b83-9dcf-ba1a1797b46e": {
+        "status": "done",
+        "kind": "decision",
+        "value": {
+          "mode": "none",
+          "memberIds": [],
+          "triggerMessageIds": [],
+          "leaderMemberId": "deepseek-74838c",
+          "recoveryAction": "skip"
+        }
+      }
+    }
+  },
+  "policyBatch": "policy-2026-09-23T05-41-55-461Z",
+  "policyReports": [
+    {
+      "model": "leader",
+      "scenario": "attendance-fault",
+      "passed": true,
+      "status": "completed",
+      "checkpoint": false,
+      "configuredCalls": 0,
+      "recovery": true,
+      "elapsedMs": 33054,
+      "leader": "工程师",
+      "speakers": [
+        "工程师",
+        "审阅员"
+      ],
+      "fallbackCount": 0
+    },
+    {
+      "model": "xiaomi/mimo-v2.5",
+      "scenario": "attendance-fault",
+      "passed": true,
+      "status": "completed",
+      "checkpoint": false,
+      "configuredCalls": 2,
+      "recovery": true,
+      "elapsedMs": 32461,
+      "leader": "工程师",
+      "speakers": [
+        "工程师",
+        "审阅员"
+      ],
+      "fallbackCount": 0
+    },
+    {
+      "model": "~typesafe/jev-latest",
+      "scenario": "attendance-fault",
+      "passed": true,
+      "status": "completed",
+      "checkpoint": false,
+      "configuredCalls": 2,
+      "recovery": true,
+      "elapsedMs": 9834,
+      "leader": "工程师",
+      "speakers": [
+        "工程师",
+        "审阅员"
+      ],
+      "fallbackCount": 1
+    }
+  ]
+}

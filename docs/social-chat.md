@@ -114,9 +114,10 @@ send messages to real users. Renderer checks use fixture accounts.
 
 ## Shared member presentation and follow-ups
 
-The mention picker includes human peers and agents owned by the signed-in account;
-other owners' agents remain visible in the member grid but cannot be selected for
-invocation. The main process and service still enforce agent ownership on send.
+The standard inbox supports explicit agent mentions, subject to the owner's
+`interactionHumans` permission. Human and agent names are resolved together;
+ambiguous duplicate names are rejected rather than selecting another owner's agent.
+The legacy workspace also offers an explicit owned-agent recipient picker.
 
 Agent memberships include public appearance metadata (image, emoji, generated
 avatar seed, color, built-in identity and local agent type). The owning desktop
@@ -127,11 +128,35 @@ local contact. Avatar data is excluded from model task context. Both the desktop
 and service must run this version, and the owner's desktop must sync once to fill
 appearance data for older memberships. No database migration is required.
 
-A plain shared-group follow-up continues the account's preceding addressed agent
-exchange. Explicit mentions override it; `@all` invokes all locally owned room
-agents. An unaddressed message without an established exchange defaults to one
-owned member rather than broadcasting to every agent. This deterministic shared
-room routing is separate from the model-driven local-group controller.
+Shared rooms use explicit invocation by default, including rooms that later have
+only one human left. Ordinary messages, questions, replies to human peers and
+`@all` carry `agentIds: []`. They do not choose a leader, call a decision model,
+continue the previous speaker automatically, or wake an owner's first agent.
+Only named agent mentions or an explicit recipient-picker selection create tasks.
+Quoted text, code and links are excluded from mention matching. Multiple explicit
+mentions preserve their order in the outgoing target list; this list does **not**
+guarantee global sequential execution across owners' devices.
+
+Both send entry points enforce this policy. Explicit cross-owner calls still
+require `allow` or `ask`; `ask` is checked at the owner's execution boundary and
+is not treated as prior approval. Missing permission metadata fails closed.
+The legacy picker resets after a successful send so the next human reply cannot
+inherit its recipient. Shared rooms never receive local automatic greetings.
+Previously assigned tasks may finish and delegate through their existing claimed
+task; observing an unrelated human message does not create a new task.
+
+This is a desktop policy, not a new distributed scheduler or global room setting.
+The service remains responsible for membership, owner permissions, idempotent
+sends and exclusive task claims. Older clients may retain their previous routing
+behavior until updated. Opt-in semantic participation and one cross-owner leader
+per task require a separate room-level protocol; they are not silently enabled.
+Local groups containing only the user and their agents retain the configured
+model-driven scheduling policy.
+
+The regression suite exercises two fixture accounts with multiple agents each,
+both desktop send entry points, permission states, ambiguous names, human replies,
+quoted mentions and recipient reset. This is a local integration test with a
+mock social service, not a live two-account network acceptance run.
 
 ### Low-latency inbox synchronization
 

@@ -1,0 +1,319 @@
+[
+  {
+    "scenario": "llm-decision",
+    "decision": {
+      "mode": "single",
+      "memberIds": [
+        "eng"
+      ],
+      "triggerMessageIds": [
+        "request"
+      ],
+      "addressedMemberId": "eng"
+    },
+    "elapsedMs": 2175,
+    "passed": true
+  },
+  {
+    "scenario": "jev-decision",
+    "decision": {
+      "mode": "single",
+      "memberIds": [
+        "eng"
+      ],
+      "triggerMessageIds": [
+        "request"
+      ]
+    },
+    "elapsedMs": 284,
+    "passed": true
+  },
+  {
+    "scenario": "undercover-all-agents",
+    "trial": 1,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 4,
+    "turns": 36,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 36,
+    "elapsedMs": 92481
+  },
+  {
+    "scenario": "undercover-all-agents",
+    "trial": 2,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 12,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 12,
+    "elapsedMs": 17161
+  },
+  {
+    "scenario": "undercover-all-agents",
+    "trial": 3,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 3,
+    "turns": 51,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 44,
+    "elapsedMs": 234218
+  },
+  {
+    "scenario": "undercover-all-agents",
+    "trial": 4,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 2,
+    "turns": 22,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 21,
+    "elapsedMs": 36210
+  },
+  {
+    "scenario": "undercover-all-agents",
+    "trial": 5,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 12,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 12,
+    "elapsedMs": 17532
+  },
+  {
+    "scenario": "undercover-scripted-human",
+    "trial": 1,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 20,
+    "humanActions": 4,
+    "skippedTurns": 0,
+    "publicMessages": 17,
+    "elapsedMs": 96938
+  },
+  {
+    "scenario": "undercover-scripted-human",
+    "trial": 2,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 2,
+    "turns": 31,
+    "humanActions": 6,
+    "skippedTurns": 1,
+    "publicMessages": 27,
+    "elapsedMs": 41041
+  },
+  {
+    "scenario": "undercover-scripted-human",
+    "trial": 3,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 12,
+    "humanActions": 2,
+    "skippedTurns": 0,
+    "publicMessages": 12,
+    "elapsedMs": 21480
+  },
+  {
+    "scenario": "undercover-scripted-human",
+    "trial": 4,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 12,
+    "humanActions": 2,
+    "skippedTurns": 0,
+    "publicMessages": 12,
+    "elapsedMs": 66185
+  },
+  {
+    "scenario": "undercover-scripted-human",
+    "trial": 5,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "平民",
+    "rounds": 1,
+    "turns": 12,
+    "humanActions": 2,
+    "skippedTurns": 0,
+    "publicMessages": 12,
+    "elapsedMs": 15445
+  },
+  {
+    "scenario": "werewolf-all-agents",
+    "trial": 1,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 1,
+    "turns": 15,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 13,
+    "elapsedMs": 17642
+  },
+  {
+    "scenario": "werewolf-all-agents",
+    "trial": 2,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 1,
+    "turns": 15,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 13,
+    "elapsedMs": 22717
+  },
+  {
+    "scenario": "werewolf-all-agents",
+    "trial": 3,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 1,
+    "turns": 15,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 13,
+    "elapsedMs": 23596
+  },
+  {
+    "scenario": "werewolf-all-agents",
+    "trial": 4,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "好人",
+    "rounds": 2,
+    "turns": 23,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 39209
+  },
+  {
+    "scenario": "werewolf-all-agents",
+    "trial": 5,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "好人",
+    "rounds": 2,
+    "turns": 24,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 33809
+  },
+  {
+    "scenario": "werewolf-scripted-human",
+    "trial": 1,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 2,
+    "turns": 24,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 57210
+  },
+  {
+    "scenario": "werewolf-scripted-human",
+    "trial": 2,
+    "passed": true,
+    "humanPathExercised": false,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 2,
+    "turns": 24,
+    "humanActions": 0,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 41409
+  },
+  {
+    "scenario": "werewolf-scripted-human",
+    "trial": 3,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "好人",
+    "rounds": 2,
+    "turns": 24,
+    "humanActions": 4,
+    "skippedTurns": 0,
+    "publicMessages": 22,
+    "elapsedMs": 41578
+  },
+  {
+    "scenario": "werewolf-scripted-human",
+    "trial": 4,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 2,
+    "turns": 30,
+    "humanActions": 10,
+    "skippedTurns": 0,
+    "publicMessages": 28,
+    "elapsedMs": 76306
+  },
+  {
+    "scenario": "werewolf-scripted-human",
+    "trial": 5,
+    "passed": true,
+    "humanPathExercised": true,
+    "status": "finished",
+    "winner": "狼人",
+    "rounds": 1,
+    "turns": 15,
+    "humanActions": 2,
+    "skippedTurns": 0,
+    "publicMessages": 13,
+    "elapsedMs": 22276
+  },
+  {
+    "scenario": "undercover-human-path-coverage",
+    "passed": true
+  },
+  {
+    "scenario": "werewolf-human-path-coverage",
+    "passed": true
+  }
+]

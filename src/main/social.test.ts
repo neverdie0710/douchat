@@ -58,7 +58,7 @@ describe('social IPC and task execution', () => {
     const { client, store } = setup()
     const fetcher = vi.fn(async (_url: unknown, _options?: RequestInit) => new Response(JSON.stringify({ data: {} })))
     vi.stubGlobal('fetch', fetcher)
-    await expect(client.action({ action: 'claim', id: 'task' } as never)).rejects.toThrow('不支持')
+    await expect(client.action({ action: 'claim', id: 'task' } as never)).rejects.toThrow('Unsupported')
     expect(fetcher).not.toHaveBeenCalled()
     await client.action({ action: 'add-agent', roomId: 'room', localId: 'local', name: 'Spoofed' } as never)
     expect(store.claimSocialAgent).toHaveBeenCalledWith('local', 'alice')
@@ -67,7 +67,7 @@ describe('social IPC and task execution', () => {
   it('discards requests that complete after account switching', async () => {
     const { client, switchAccount } = setup()
     vi.stubGlobal('fetch', vi.fn(async () => { switchAccount(); return new Response(JSON.stringify({ data: { userId: 'alice' } })) }))
-    await expect(client.snapshot()).rejects.toThrow('账号已切换')
+    await expect(client.snapshot()).rejects.toThrow('account changed')
   })
   it('passes an authenticated external requester to the runtime permission boundary', async () => {
     const { client, runtime } = setup()
@@ -96,14 +96,22 @@ describe('social IPC and task execution', () => {
   })
 })
 
-describe('shared-group continuity', () => {
-  const agents = [{ id: 'dong', localId: 'd', ownerId: 'alice', name: '东子' }, { id: 'ge', localId: 'g', ownerId: 'alice', name: '哥飞' }]
-  const message = (authorId: string, text: string) => ({ id: text, authorId, authorName: authorId, text, kind: 'message' as const, conversationId: 'g', topicId: 't', createdAt: 1 })
-  it('continues the addressed exchange instead of broadcasting to owned agents', async () => {
+describe('shared-group explicit response policy', () => {
+  const agents = [{ id: 'dong', localId: 'd', ownerId: 'alice', name: '东子' }, { id: 'ge', localId: 'g', ownerId: 'bob', name: '哥飞' }]
+  const humans = [{ id: 'alice', name: 'Alice' }, { id: 'bob', name: 'Bob' }]
+  it.each(['你好', '回答你刚才的问题', 'Yes, I will do that.', '¿Puedes ayudarme?', '手伝ってください', '@Bob hello', '@all hello', '> @哥飞 please help\nI agree', '`@东子`', '```\n@哥飞\n```'])('does not infer agent authorization from human conversation: %s', async content => {
     const { sharedGroupReplyTargets } = await import('./social')
-    expect(sharedGroupReplyTargets('想画个小猫咪', agents, [message('user', '@哥飞 飞哥'), message('ge', '在呢，啥事？')])).toEqual(['ge'])
-    expect(sharedGroupReplyTargets('@all 各讲个笑话', agents, [message('ge', '在呢')])).toEqual(['dong', 'ge'])
-    expect(sharedGroupReplyTargets('你好', agents, [])).toEqual(['dong'])
-    expect(sharedGroupReplyTargets('你好', agents, [message('bob', '@哥飞'), message('ge', '你好')])).toEqual(['dong'])
+    expect(sharedGroupReplyTargets(content, agents, humans)).toEqual([])
+  })
+  it('selects only named agents across owners, including mixed human and agent recipients', async () => {
+    const { sharedGroupReplyTargets } = await import('./social')
+    expect(sharedGroupReplyTargets('@Bob @哥飞 help @东子', agents, humans)).toEqual(['ge', 'dong'])
+    expect(sharedGroupReplyTargets('@all @东子 help', agents, humans)).toEqual(['dong'])
+    expect(sharedGroupReplyTargets('@东子 @东子', agents, humans)).toEqual(['dong'])
+  })
+  it('rejects ambiguous names rather than invoking the wrong owner’s agent', async () => {
+    const { sharedGroupReplyTargets } = await import('./social')
+    expect(() => sharedGroupReplyTargets('@东子 help', [...agents, { ...agents[1], name: '东子' }], humans)).toThrow('multiple members')
+    expect(() => sharedGroupReplyTargets('@Alice help', [{ ...agents[0], name: 'Ａｌｉｃｅ' }], humans)).toThrow('multiple members')
   })
 })

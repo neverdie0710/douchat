@@ -1,0 +1,240 @@
+{
+  "report": {
+    "scenario": "project-scripted-human",
+    "mode": "llm",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "orderedContributions": true,
+    "finalByLeader": true,
+    "checkpoint": "waiting",
+    "askedQuestion": true,
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "turnsBeforeHuman": 1,
+    "bubblesBeforeHuman": 3,
+    "elapsedMs": 69140,
+    "sourceBatch": "2026-09-22T19-22-50-250Z"
+  },
+  "messages": [
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "user",
+      "authorName": "You",
+      "text": "我们要设计一个企业报销审批 MVP，请项目组协作。关键范围待我确定：必须先由项目经理问我一个关键范围问题，等待我的回答后再安排产品经理、工程师和测试工程师依次讨论，最后项目经理汇总。不要替我决定。仅讨论，不操作外部系统。",
+      "kind": "message",
+      "id": "f872dd24-9ac5-4506-9c8e-6f856c1e6e75",
+      "createdAt": 1790105042634
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-0d70d1",
+      "authorName": "验收项目经理",
+      "text": "我是验收项目经理。为了确定企业报销审批 MVP 的范围，我需要问您一个关键问题：",
+      "kind": "message",
+      "replyGroupId": "3f684ea5-875e-4a96-ae16-94d3fe2342bc",
+      "recipients": [],
+      "id": "cf145e28-6163-4d02-93f9-f122166fd669",
+      "createdAt": 1790105056052
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-0d70d1",
+      "authorName": "验收项目经理",
+      "text": "**MVP 是否需要支持多级审批流程（例如，金额超过一定阈值需要上级二次审批），还是仅需一级直接主管审批即可？**",
+      "kind": "message",
+      "replyGroupId": "3f684ea5-875e-4a96-ae16-94d3fe2342bc",
+      "recipients": [],
+      "id": "acfd0744-bc5f-44df-98df-cf0860c14ceb",
+      "createdAt": 1790105056053
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-0d70d1",
+      "authorName": "验收项目经理",
+      "text": "请确认，我将根据您的决定安排团队协作。",
+      "kind": "message",
+      "replyGroupId": "3f684ea5-875e-4a96-ae16-94d3fe2342bc",
+      "recipients": [],
+      "id": "fb07ffbc-b3bd-43db-8e1a-d614015bb1c7",
+      "createdAt": 1790105056053
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "user",
+      "authorName": "You",
+      "text": "先做内部 20 人试用，只支持单级主管审批和附件上传，不接支付、不接财务系统。现在按刚才约定的顺序继续，并汇总最终方案。",
+      "kind": "message",
+      "id": "65b8a9a9-57d5-4cf1-951c-ae3ed6b260ed",
+      "createdAt": 1790105056056
+    },
+    {
+      "id": "65b8a9a9-57d5-4cf1-951c-ae3ed6b260ed:dispatch",
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "system",
+      "authorName": "Douchat",
+      "kind": "system",
+      "text": "验收项目经理 分配任务：@验收产品经理 → @验收工程师 → @验收测试工程师 → @验收项目经理（按顺序处理）。",
+      "createdAt": 1790105078472
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-0d70d1",
+      "authorName": "验收项目经理",
+      "text": "收到，测试真人。范围已确认：**内部20人试用，单级主管审批，附件上传，不接支付和财务系统**。\n\n现在安排团队按顺序讨论：\n1. **产品经理**：需求与产品方案\n2. **工程师**：技术方案\n3. **测试工程师**：验收标准\n4. **项目经理**：最终汇总\n\n@验收产品经理 请开始讨论产品方案。",
+      "kind": "message",
+      "recipients": [
+        {
+          "id": "bot-147b57",
+          "name": "验收产品经理"
+        }
+      ],
+      "id": "57cf7b4e-c93d-44a7-80f8-09c2ad4a63d2",
+      "createdAt": 1790105080148
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-147b57",
+      "authorName": "验收产品经理",
+      "text": "收到，测试真人。基于你确认的范围，我梳理了 MVP 的功能点和核心流程。",
+      "kind": "message",
+      "replyGroupId": "82096aef-5305-4faf-add0-fbab5b0eb657",
+      "recipients": [],
+      "id": "26854265-a4bc-4b02-bd17-0dce63d34903",
+      "createdAt": 1790105092351
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-147b57",
+      "authorName": "验收产品经理",
+      "text": "**核心功能：**  \n1.  **费用申请提交**：员工填写金额、事由，上传发票/凭证（支持图片、PDF）。  \n2.  **单级审批**：申请提交给直接主管，主管通过/驳回，状态实时更新。  \n3.  **申请记录查看**：申请人和主管可查看历史记录与状态。  \n4.  **基础管理**：内部20人用户配置（无需复杂权限）。",
+      "kind": "message",
+      "replyGroupId": "82096aef-5305-4faf-add0-fbab5b0eb657",
+      "recipients": [],
+      "id": "51a83bf9-4f9a-48a2-b591-197c9bbc3922",
+      "createdAt": 1790105092351
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-147b57",
+      "authorName": "验收产品经理",
+      "text": "**用户流程：**  \n员工提交申请 → 主管收到待办提醒 → 主管审批（通过/驳回） → 员工收到结果通知 → 流程结束。  \n\n**核心价值：**  \n用最小成本跑通“申请-审批”闭环，验证团队内部报销数字化的基本需求和操作习惯，为后续扩展支付、财务系统集成积累经验。  \n\n@验收工程师 @验收测试工程师 请基于此输入，分别从技术实现和测试验收角度讨论。",
+      "kind": "message",
+      "replyGroupId": "82096aef-5305-4faf-add0-fbab5b0eb657",
+      "recipients": [
+        {
+          "id": "bot-79b407",
+          "name": "验收工程师"
+        },
+        {
+          "id": "bot-99a584",
+          "name": "验收测试工程师"
+        }
+      ],
+      "id": "a31da910-79ed-44a6-9620-218940bfe999",
+      "createdAt": 1790105092352
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-79b407",
+      "authorName": "验收工程师",
+      "text": "我是验收工程师。基于产品经理的 MVP 方案，以下是技术实现方案。",
+      "kind": "message",
+      "replyGroupId": "9c93fbc7-f42e-4ecd-a693-80a4a31d4d9f",
+      "recipients": [],
+      "id": "e1041f82-34cf-4b35-8465-aec7b990ffb6",
+      "createdAt": 1790105097040
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-79b407",
+      "authorName": "验收工程师",
+      "text": "**系统架构：** 前后端分离，单体应用。前端 Web，后端 API 服务，使用关系数据库。文件存储使用云存储服务（如 S3）或本地文件系统，初期选择成本最低的方案。",
+      "kind": "message",
+      "replyGroupId": "9c93fbc7-f42e-4ecd-a693-80a4a31d4d9f",
+      "recipients": [],
+      "id": "bb349063-0ea7-4590-8530-34176507ef69",
+      "createdAt": 1790105097041
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-79b407",
+      "authorName": "验收工程师",
+      "text": "**关键技术点：**\n1.  **单级审批流程**：设计状态机（草稿、待审批、已通过、已驳回），通过 API 接口更新状态。\n2.  **附件上传**：前端使用文件上传组件，后端接收并存储文件元数据（路径、类型、大小），生成预签名 URL 或直接访问链接供审批时查看。\n3.  **用户与权限**：20人内部使用，简化为硬编码用户列表或简单配置文件，无需复杂 RBAC。通过会话或简单 Token 认证。\n4.  **通知**：申请提交和审批结果通过应用内消息或邮件（简单集成）通知相关方。",
+      "kind": "message",
+      "replyGroupId": "9c93fbc7-f42e-4ecd-a693-80a4a31d4d9f",
+      "recipients": [],
+      "id": "7e1500c0-3ed0-4fd2-b6c8-67d719245e73",
+      "createdAt": 1790105097041
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-79b407",
+      "authorName": "验收工程师",
+      "text": "**可行性评估：** 方案可行，开发量小，可快速实现 MVP 核心闭环。 @验收测试工程师",
+      "kind": "message",
+      "replyGroupId": "9c93fbc7-f42e-4ecd-a693-80a4a31d4d9f",
+      "recipients": [
+        {
+          "id": "bot-99a584",
+          "name": "验收测试工程师"
+        }
+      ],
+      "id": "e5b3fa2a-f7fd-4c50-bcd5-cc47a243ad30",
+      "createdAt": 1790105097041
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-99a584",
+      "authorName": "验收测试工程师",
+      "text": "我是验收测试工程师。基于产品经理和工程师的讨论，针对MVP范围（内部20人、单级审批、附件上传、不接支付财务），我的测试策略和验收标准如下：\n\n**测试策略：**\n1.  **功能测试**：覆盖核心流程（提交、审批、查看），重点测试附件上传（格式、大小、查看）和状态流转。\n2.  **权限与用户测试**：验证20个内部用户角色（申请人、主管）的权限隔离和流程触发。\n3.  **接口与集成测试**：确保前后端API、文件存储、通知（应用内/邮件）集成正确。\n4.  **非功能测试**：基础性能（响应时间）、易用性（核心操作步骤）、浏览器兼容性（主流浏览器）。\n\n**核心验收标准：**\n1.  **流程完整性**：申请能成功提交并触发主管待办；主管可查看申请详情和附件，并完成通过/驳回；申请人能实时看到状态更新和结果通知。\n2.  **附件功能**：支持常见图片和PDF格式上传（如10MB以内），上传后能在审批页面清晰预览或下载。\n3.  **数据隔离与状态**：不同用户的申请记录独立；申请状态（草稿、待审批、已通过、已驳回）流转正确且不可逆。\n4.  **无外部依赖**：系统在不连接支付和财务系统的环境下，独立完成申请-审批闭环。\n\n**测试用例框架：**\n-   **正向流程**：员工提交申请（含附件）→主管收到提醒并查看→主管审批通过/驳回→员工收到通知并查看最终状态。\n-   **逆向与边界**：提交空申请、上传非法格式文件、同一申请重复提交、主管越权操作、网络中断后恢复等。\n-   **数据校验**：金额、事由必填校验，附件类型和大小限制提示。\n\n此策略确保MVP在有限范围内交付可用、可靠的核心功能。",
+      "kind": "message",
+      "recipients": [],
+      "id": "6e8811b5-f8e4-45f4-aab5-b00ace93e043",
+      "createdAt": 1790105105755
+    },
+    {
+      "conversationId": "group-8900d15f",
+      "topicId": "1c5d503a-26e3-40b7-97fd-46ede2dc6deb",
+      "authorId": "bot-0d70d1",
+      "authorName": "验收项目经理",
+      "text": "验收汇总如下。范围：内部20人试用，单级主管审批，附件上传，不接支付/财务系统。\n\n**产品方案**\n- 核心功能：费用申请提交（金额、事由、发票/PDF）、单级直接主管审批、申请记录查看、基础用户配置。\n- 用户流程：员工提交 → 主管待办提醒 → 审批（通过/驳回） → 员工收到结果通知 → 结束。\n- 核心价值：用最小成本跑通“申请-审批”闭环，验证内部报销数字化的基本需求和操作习惯。\n\n**技术方案**\n- 架构：前后端分离，单体应用，前端 Web，后端 API，关系数据库，文件存储使用低成本方案（云存储或本地）。\n- 关键实现：状态机（草稿、待审批、已通过、已驳回）控制流程；附件上传存元数据并提供预览/下载链接；简化用户认证（硬编码列表或简单 Token）；应用内消息或邮件通知。\n- 可行性：开发量小，可快速实现核心闭环。\n\n**测试策略**\n- 测试范围：核心流程功能、附件上传（格式/大小/预览）、权限隔离、接口集成、基础性能与浏览器兼容性。\n- 核心验收标准：流程完整性（提交、审批、通知闭环）；附件功能可用；状态流转正确且不可逆；系统独立运行不依赖外部支付/财务。\n- 测试用例：正向流程、逆向与边界（空申请、非法附件、重复提交、越权操作）、数据校验（必填字段、格式限制提示）。\n\n**最终结论**\n本方案符合约定范围，产品、技术、测试闭环完整，可作为内部20人试用的 MVP 实施依据。\n\n如有补充或调整，随时告知。",
+      "kind": "message",
+      "recipients": [],
+      "id": "29dcb256-2885-44cc-8b46-0eb799eed607",
+      "createdAt": 1790105111769
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+[
+  {
+    "scenario": "project-all-agents",
+    "mode": "leader",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "finalByLeader": true,
+    "checkpoint": "completed",
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "elapsedMs": 40715,
+    "orderedContributions": true,
+    "sourceBatch": "2026-09-22T19-12-01-081Z"
+  },
+  {
+    "scenario": "project-all-agents",
+    "mode": "llm",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "finalByLeader": true,
+    "checkpoint": "completed",
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "elapsedMs": 42975,
+    "orderedContributions": true,
+    "sourceBatch": "2026-09-22T19-12-01-081Z"
+  },
+  {
+    "scenario": "project-all-agents",
+    "mode": "jev",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "finalByLeader": true,
+    "checkpoint": "completed",
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "elapsedMs": 44001,
+    "orderedContributions": true,
+    "sourceBatch": "2026-09-22T19-12-01-081Z"
+  },
+  {
+    "scenario": "project-scripted-human",
+    "mode": "leader",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "orderedContributions": true,
+    "finalByLeader": true,
+    "checkpoint": "waiting",
+    "askedQuestion": true,
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "turnsBeforeHuman": 1,
+    "bubblesBeforeHuman": 1,
+    "elapsedMs": 64613,
+    "sourceBatch": "2026-09-22T19-22-50-250Z"
+  },
+  {
+    "scenario": "project-scripted-human",
+    "mode": "llm",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "orderedContributions": true,
+    "finalByLeader": true,
+    "checkpoint": "waiting",
+    "askedQuestion": true,
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "turnsBeforeHuman": 1,
+    "bubblesBeforeHuman": 3,
+    "elapsedMs": 69140,
+    "sourceBatch": "2026-09-22T19-22-50-250Z"
+  },
+  {
+    "scenario": "project-scripted-human",
+    "mode": "jev",
+    "passed": true,
+    "contributions": [
+      {
+        "member": "验收产品经理",
+        "delivered": true
+      },
+      {
+        "member": "验收工程师",
+        "delivered": true
+      },
+      {
+        "member": "验收测试工程师",
+        "delivered": true
+      }
+    ],
+    "orderedContributions": true,
+    "finalByLeader": true,
+    "checkpoint": "waiting",
+    "askedQuestion": true,
+    "status": "completed",
+    "speakers": [
+      "验收项目经理",
+      "验收产品经理",
+      "验收工程师",
+      "验收测试工程师"
+    ],
+    "turnsBeforeHuman": 1,
+    "bubblesBeforeHuman": 2,
+    "elapsedMs": 93186,
+    "sourceBatch": "2026-09-22T19-22-50-250Z"
+  }
+]

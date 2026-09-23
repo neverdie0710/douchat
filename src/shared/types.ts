@@ -108,6 +108,8 @@ export interface Topic {
 }
 
 export interface Conversation {
+  /** Only unnamed groups follow member names; legacy and explicitly named groups keep their names. */
+  autoNamed?: boolean
   avatar?: string
   avatarEmoji?: string
   /** Human direct conversations use the same local inbox, with a remote delivery address. */
@@ -230,6 +232,8 @@ export interface EmailConnectionTestResult {
 }
 
 export interface ChatMessage {
+  /** Localizable application notice; user and agent text never carry this. */
+  localization?: import('./groupText').GroupNotice
   socialTasks?: { id: string; agentId: string; agentName: string; status: string }[]
   deliveryState?: 'sending' | 'confirming' | 'failed'
   id: string
@@ -268,6 +272,7 @@ export interface MessageAction {
 }
 
 export interface PrivateMessage {
+  intent?: 'inform' | 'request'
   id: string
   conversationId: string
   topicId: string
@@ -313,6 +318,8 @@ export interface ModelOption {
 export type ConversationPhase = 'planning' | 'replying' | 'greeting' | 'delivering'
 
 export interface ConversationActivityState {
+  planningStage?: 'health' | 'decision' | 'plan' | 'recovery'
+  serviceName?: string
   localProgress?: {
     phase: 'connecting' | 'ready' | 'working' | 'waiting'
     elapsedSeconds: number
@@ -417,6 +424,9 @@ export interface RunEvent {
 }
 
 export interface AppSnapshot {
+  groupMemberHealth?: Record<string, Record<string, { status: 'healthy' | 'unknown' | 'unavailable'; checkedAt: number }>>
+  groupGames?: import('./groupGame').GameView[]
+  groupWorkflows?: import('./groupWorkflow').GroupWorkflowView[]
   permissionRequests?: PermissionRequest[]
   agents: AgentConfig[]
   agentStatuses: Record<string, AgentStatus>
@@ -586,6 +596,10 @@ export interface DouchatApi {
   openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
   getCustomModels: () => Promise<CustomModelConfig>
+  getDecisionSettings: () => Promise<import('./groupDecision').DecisionSettings>
+  getCloudDecisionModels: () => Promise<import('./groupDecision').CloudDecisionModel[]>
+  saveDecisionSettings: (settings: import('./groupDecision').DecisionSettings) => Promise<import('./groupDecision').DecisionSettings>
+  testDecisionSettings: (settings: import('./groupDecision').DecisionSettings) => Promise<{ ok: boolean; error?: string }>
   saveCustomModels: (providers: CustomProviderInput[], defaultModel: string) => Promise<CustomModelConfig>
   testCustomModel: (input: CustomModelTest) => Promise<{ ok: boolean; error?: string; model?: string }>
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>

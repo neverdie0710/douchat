@@ -24,11 +24,11 @@ function account(id: string) {
   runtime.setHumanSender((conversationId, text, images) => client.sendMessage(conversationId, text, images))
   return { store, runtime, client, path }
 }
-function server(messages: SocialMessage[] = []) {
+function server(messages: SocialMessage[] = [], sharedRoom = room) {
   let failAfterDelivery = false
   const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
     const authorId = String((options?.headers as Record<string, string>).Authorization).slice(7)
-    if (!options?.body) return Response.json({ data: { userId: authorId, friendships: [], rooms: [room] } })
+    if (!options?.body) return Response.json({ data: { userId: authorId, friendships: [], rooms: [sharedRoom] } })
     const body = JSON.parse(String(options.body))
     if (body.action === 'send') {
       if (!messages.some((message) => message.id === body.id)) messages.push({ ...body, authorId, authorName: authorId, status: 'sent', createdAt: new Date().toISOString() })
@@ -158,7 +158,7 @@ it('waits for a fresh room list when a friend chat is created during an older in
   expect(alice.store.conversation(result.conversationId!)).toMatchObject({ person: { id: 'bob' }, remoteRoomId: 'dm' })
 })
 
- it('routes ordinary shared group messages to an owned agent, never a peer agent', async () => {
+ it('keeps ordinary human exchanges silent even when the sender owns an agent', async () => {
   const remote = server()
   const alice = account('alice')
   const shared: SocialRoom = { ...room, id: 'shared-room', kind: 'group', agents: [
@@ -167,14 +167,14 @@ it('waits for a fresh room list when a friend chat is created during an older in
   ] }
   const chat = alice.store.syncFriendConversation('alice', shared, [])!
   await alice.client.sendMessage(chat.id, '大家好')
-  expect(remote.messages.at(-1)?.agentId).toBe('own-agent')
+  expect(remote.messages.at(-1)?.agentId).toBeUndefined()
   await alice.client.sendMessage(chat.id, '@Bob hello')
   expect(remote.messages.at(-1)?.agentId).toBeUndefined()
-  await expect(alice.client.sendMessage(chat.id, '@Peer work')).rejects.toThrow('调用权限尚未同步')
+  await expect(alice.client.sendMessage(chat.id, '@Peer work')).rejects.toThrow('have not synchronized')
   expect(remote.messages).toHaveLength(2)
 })
 
-it('broadcasts a roll call to every owned agent and renders only one human message', async () => {
+it('addresses multiple agents explicitly and renders only one human message', async () => {
   const remote = server()
   const alice = account('alice')
   const shared: SocialRoom = { ...room, id: 'roll-call', kind: 'group', agents: [
@@ -183,14 +183,14 @@ it('broadcasts a roll call to every owned agent and renders only one human messa
     { id: 'peer', localId: 'peer', ownerId: 'bob', name: 'Peer' }
   ] }
   const chat = alice.store.syncFriendConversation('alice', shared, [])!
-  await alice.client.sendMessage(chat.id, '@all 报个数')
+  await alice.client.sendMessage(chat.id, '@One @Two 报个数')
   const send = remote.fetcher.mock.calls.map(([, options]) => options?.body ? JSON.parse(String(options.body)) : {}).find((body) => body.action === 'send')
   expect(send.agentIds).toEqual(['one', 'two'])
-  const base: SocialMessage = { id: send.id, roomId: shared.id, authorId: 'alice', authorName: 'Alice', content: '@all 报个数', status: 'succeeded', agentId: 'one', reply: 'One here', createdAt: new Date().toISOString() }
+  const base: SocialMessage = { id: send.id, roomId: shared.id, authorId: 'alice', authorName: 'Alice', content: '@One @Two 报个数', status: 'succeeded', agentId: 'one', reply: 'One here', createdAt: new Date().toISOString() }
   const batch = [base, { ...base, id: 'child', parentMessageId: send.id, agentId: 'two', reply: 'Two here' }]
   alice.store.syncFriendConversation('alice', shared, batch)
   alice.store.syncFriendConversation('alice', shared, batch)
-  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['@all 报个数', 'One here', 'Two here'])
+  expect(alice.store.topicMessages(chat.id, 'main').map((message) => message.text)).toEqual(['@One @Two 报个数', 'One here', 'Two here'])
 })
 
 it('syncs a shared group after its last other human is removed', async () => {
@@ -379,7 +379,63 @@ it('rejects a removal receipt when the refreshed group still contains the select
     if (!options?.body) return Response.json({ data: { userId: 'alice', friendships: [], rooms: [group] } })
     return Response.json({ data: { messages: [] } })
   }))
-  await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).rejects.toThrow('尚未移除')
+  await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).rejects.toThrow('has not been removed')
   group.agents = []
   await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).resolves.toBeDefined()
+})
+
+it('isolates routing between two humans with multiple agents each and retains owner permissions', async () => {
+  const shared: SocialRoom = { ...room, id: 'multi-owner', kind: 'group', agents: [
+    { id: 'a1', localId: 'a1', ownerId: 'alice', name: 'Architect', interactionHumans: 'allow' },
+    { id: 'a2', localId: 'a2', ownerId: 'alice', name: 'Reviewer', interactionHumans: 'ask' },
+    { id: 'b1', localId: 'b1', ownerId: 'bob', name: 'Writer', interactionHumans: 'deny' },
+    { id: 'b2', localId: 'b2', ownerId: 'bob', name: 'Analyst' }
+  ] }
+  const remote = server([], shared)
+  const alice = account('alice'), bob = account('bob')
+  const aliceConnect = vi.spyOn(alice.runtime, 'connect'), bobConnect = vi.spyOn(bob.runtime, 'connect')
+  await alice.client.syncInbox(); await bob.client.syncInbox()
+  const aliceChat = alice.store.accountConversations[0], bobChat = bob.store.accountConversations[0]
+  await alice.runtime.greet(aliceChat.id)
+  expect(alice.store.topicMessages(aliceChat.id, aliceChat.activeTopicId)).toEqual([])
+  const sends = () => remote.fetcher.mock.calls.flatMap(([, options]) => {
+    const body = options?.body ? JSON.parse(String(options.body)) : {}
+    return body.action === 'send' ? [body] : []
+  })
+  await alice.runtime.sendMessage(aliceChat.id, '@Bob What do you think?')
+  await bob.client.syncInbox()
+  await bob.runtime.sendMessage(bobChat.id, 'I agree. Let us proceed tomorrow.')
+  await alice.runtime.sendMessage(aliceChat.id, '@all please read the update')
+  expect(sends().map(body => body.agentIds)).toEqual([[], [], []])
+  await alice.runtime.sendMessage(aliceChat.id, '@Architect draft the proposal')
+  await bob.client.syncInbox()
+  // A human replying after an agent request must not inherit that request's recipient.
+  await bob.runtime.sendMessage(bobChat.id, 'Thanks, I will handle the review myself.')
+  expect(sends().at(-1).agentIds).toEqual([])
+  await bob.runtime.sendMessage(bobChat.id, '@Architect @Reviewer help me review')
+  expect(sends().at(-1).agentIds).toEqual(['a1', 'a2'])
+  await expect(alice.runtime.sendMessage(aliceChat.id, '@Writer please help')).rejects.toThrow('disabled requests')
+  await expect(alice.runtime.sendMessage(aliceChat.id, '@Analyst please help')).rejects.toThrow('not synchronized')
+  await bob.runtime.sendMessage(bobChat.id, '@Writer my own request')
+  expect(sends().at(-1).agentIds).toEqual(['b1'])
+  expect(aliceConnect).not.toHaveBeenCalled(); expect(bobConnect).not.toHaveBeenCalled()
+})
+
+it('applies the same explicit-recipient policy to the legacy workspace and rejects removed recipients', async () => {
+  const shared: SocialRoom = { ...room, kind: 'group', agents: [
+    { id: 'a1', localId: 'a1', ownerId: 'alice', name: 'Helper' },
+    { id: 'b1', localId: 'b1', ownerId: 'bob', name: 'Peer', interactionHumans: 'deny' }
+  ] }
+  const remote = server([], shared)
+  const alice = account('alice')
+  await alice.client.action({ action: 'send', id: 'one', roomId: shared.id, content: '@all hello' })
+  await alice.client.action({ action: 'send', id: 'two', roomId: shared.id, content: 'Help please', agentId: 'a1' })
+  await alice.client.action({ action: 'send', id: 'three', roomId: shared.id, content: '@Helper help please' })
+  const payloads = remote.fetcher.mock.calls.flatMap(([, options]) => {
+    const body = options?.body ? JSON.parse(String(options.body)) : {}
+    return body.action === 'send' ? [body] : []
+  })
+  expect(payloads.map(body => body.agentIds)).toEqual([[], ['a1'], ['a1']])
+  await expect(alice.client.action({ action: 'send', id: 'four', roomId: shared.id, content: 'help', agentId: 'removed' })).rejects.toThrow('no longer a member')
+  await expect(alice.client.action({ action: 'send', id: 'five', roomId: shared.id, content: 'help', agentId: 'b1' })).rejects.toThrow('disabled requests')
 })

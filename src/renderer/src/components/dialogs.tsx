@@ -488,7 +488,7 @@ export function AddMembersModal({ onRemoveContacts, onAddContacts, initialFriend
             {!selectionCount && <p className="member-picker-empty">{t(remove ? 'Select members to remove' : startMode ? 'Select a contact to start chatting, or open an existing group.' : 'Select contacts to add')}</p>}
           </div>
           {remove && selected.length >= (conversation?.agentIds.length ?? 0) && <p className="member-picker-error">{t('Keep at least one member')}</p>}
-          {error && <p role="alert" className="member-picker-error">{error}</p>}
+          {error && <p role="alert" className="member-picker-error">{t(error)}</p>}
           <footer><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={invalid || saving}>{saving ? t('Saving…') : t(action)}</button></footer>
         </section>
       </form>

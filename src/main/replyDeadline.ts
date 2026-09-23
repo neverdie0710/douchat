@@ -8,7 +8,8 @@ export async function withReplyDeadline<T>(operation: () => Promise<T>, abort: A
       abort.signal.addEventListener('abort', cancel, { once: true })
       if (abort.signal.aborted) cancel()
     })
-    timer = setTimeout(() => abort.abort(new Error(`Reply timed out after ${Math.round(timeoutMs / 60000)} minutes`)), timeoutMs)
+    const duration = timeoutMs < 60_000 ? `${Math.round(timeoutMs / 1000)} seconds` : `${Math.round(timeoutMs / 60000)} minutes`
+    timer = setTimeout(() => abort.abort(new Error(`Reply timed out after ${duration}`)), timeoutMs)
     return await Promise.race([cancelled, abort.signal.aborted ? cancelled : operation()])
   } finally {
     if (timer) clearTimeout(timer)

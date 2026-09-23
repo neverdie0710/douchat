@@ -56,11 +56,23 @@ describe('desktop authentication', () => {
       }
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const auth = new DesktopAuth('https://douchat.ai', 'douchat', false, directory, () => {})
+    const onChange = vi.fn()
+    const auth = new DesktopAuth('https://douchat.ai', 'douchat', false, directory, onChange)
 
     const result = await auth.handleCallback(`douchat://auth/callback?state=${state}&code=${code}`)
 
     expect(result).toMatchObject({ status: 'signed-in', user: { id: 'user-1' } })
+    expect(onChange).toHaveBeenLastCalledWith(result, 'login-completed')
+    // Focus-triggered profile refresh must not request another activation,
+    // even when its response arrives after the user switches applications.
+    onChange.mockClear()
+    await auth.refreshProfile()
+    await auth.refreshProfile()
+    expect(onChange).toHaveBeenCalledTimes(2)
+    for (const [state, reason] of onChange.mock.calls) {
+      expect(state.status).toBe('signed-in')
+      expect(reason).toBeUndefined()
+    }
     expect(auth.getAccessToken()).toBe('dch_session-only')
     expect(electron.encryptString).toHaveBeenCalledWith('dch_session-only')
     expect(existsSync(join(directory, 'auth.json'))).toBe(false)

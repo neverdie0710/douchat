@@ -1,0 +1,323 @@
+{
+  "batch": "health-2026-09-23T06-07-51-036Z",
+  "numbering": "Successful replies only; failed and cached unavailable members consume no number.",
+  "trials": [
+    {
+      "report": {
+        "scenario": "mixed-roll-call",
+        "trial": 1,
+        "passed": true,
+        "status": "completed",
+        "ordered": true,
+        "numbered": true,
+        "ended": true,
+        "fullRoster": true,
+        "cachedExcluded": true,
+        "settings": {
+          "mode": "model",
+          "providerId": "openrouter",
+          "model": "~typesafe/jev-latest",
+          "healthCheckIntervalSeconds": 300
+        },
+        "firstReplyMs": 14809,
+        "elapsedMs": 51834,
+        "probeCount": 8,
+        "leader": "DeepSeek",
+        "speakers": [
+          "Grok",
+          "Gemini",
+          "Codex",
+          "DeepSeek",
+          "mimo"
+        ],
+        "absent": [
+          "OpenClaw",
+          "OpenCode",
+          "Cursor"
+        ],
+        "announced": true,
+        "health": {
+          "Grok": {
+            "fingerprint": "59969a47f05a270d9db7434cd8ceb8727eae9dc3db5012d616f12c2ddb319af5",
+            "status": "healthy",
+            "checkedAt": 1790143685904,
+            "failures": 0,
+            "latencyMs": 6737
+          },
+          "OpenClaw": {
+            "fingerprint": "d34330ca9403524a89910391e05114e099ef5f53bf4b2084a24804f17af91317",
+            "status": "unavailable",
+            "checkedAt": 1790143689866,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "Gemini": {
+            "fingerprint": "f909fb2f80e5cf83f42616110b9d61ea88c146aa7aadff557f3fa21408c5dcc8",
+            "status": "healthy",
+            "checkedAt": 1790143696462,
+            "failures": 0,
+            "latencyMs": 6044
+          },
+          "Codex": {
+            "fingerprint": "5424449efcf269eda0b4f8b15251d7228fffe10aca4a9b6771348dd54234dafb",
+            "status": "healthy",
+            "checkedAt": 1790143702139,
+            "failures": 0,
+            "latencyMs": 5903
+          },
+          "OpenCode": {
+            "fingerprint": "a0d38734044e99abc80bc2dc6a0ce2c5239b7a775fded30e722e2d9c5dff8204",
+            "status": "unavailable",
+            "checkedAt": 1790143705174,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "Cursor": {
+            "fingerprint": "e767b3e1e341237e3d13e809daffe9e55fb77ce7639cb88a7c85d39f5d970730",
+            "status": "unavailable",
+            "checkedAt": 1790143720585,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "DeepSeek": {
+            "fingerprint": "68d1c0d70a6a668a5f7ca21babff5995dca52f93cd3cbc4575a53a7f585dc829",
+            "status": "healthy",
+            "checkedAt": 1790143721647,
+            "failures": 0,
+            "latencyMs": 739
+          },
+          "mimo": {
+            "fingerprint": "95fbca51b7b571f9727c3a53d0746138a10a933f6e072e1d249bee32129138f7",
+            "status": "healthy",
+            "checkedAt": 1790143722928,
+            "failures": 0,
+            "latencyMs": 1911
+          }
+        }
+      },
+      "messages": [
+        {
+          "kind": "message",
+          "authorName": "You",
+          "text": "先来报个数"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "DeepSeek 分配任务：@Grok → @OpenClaw → @Gemini → @Codex → @OpenCode → @Cursor → @DeepSeek → @mimo（按顺序处理）。"
+        },
+        {
+          "kind": "message",
+          "authorName": "Grok",
+          "text": "1"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：OpenClaw 暂不可用，正在决定后续安排。"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "DeepSeek 调度通知：已跳过该成员。"
+        },
+        {
+          "kind": "message",
+          "authorName": "Gemini",
+          "text": "2"
+        },
+        {
+          "kind": "message",
+          "authorName": "Codex",
+          "text": "3"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：OpenCode 暂不可用，正在决定后续安排。"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "DeepSeek 调度通知：已跳过该成员。"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：Cursor 暂不可用，正在决定后续安排。"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "DeepSeek 调度通知：已跳过该成员。"
+        },
+        {
+          "kind": "message",
+          "authorName": "DeepSeek",
+          "text": "4"
+        },
+        {
+          "kind": "message",
+          "authorName": "mimo",
+          "text": "5"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "本轮已结束：5 人已回复，3 人不可用，已跳过（OpenClaw、OpenCode、Cursor）。"
+        }
+      ]
+    },
+    {
+      "report": {
+        "scenario": "mixed-roll-call",
+        "trial": 2,
+        "passed": true,
+        "status": "completed",
+        "ordered": true,
+        "numbered": true,
+        "ended": true,
+        "fullRoster": true,
+        "cachedExcluded": true,
+        "settings": {
+          "mode": "model",
+          "providerId": "openrouter",
+          "model": "~typesafe/jev-latest",
+          "healthCheckIntervalSeconds": 300
+        },
+        "firstReplyMs": 9538,
+        "elapsedMs": 19680,
+        "probeCount": 0,
+        "leader": "DeepSeek",
+        "speakers": [
+          "Grok",
+          "Gemini",
+          "Codex",
+          "DeepSeek",
+          "mimo"
+        ],
+        "absent": [
+          "OpenClaw",
+          "OpenCode",
+          "Cursor"
+        ],
+        "announced": true,
+        "health": {
+          "Grok": {
+            "fingerprint": "59969a47f05a270d9db7434cd8ceb8727eae9dc3db5012d616f12c2ddb319af5",
+            "status": "healthy",
+            "checkedAt": 1790143732468,
+            "failures": 0,
+            "latencyMs": 7423
+          },
+          "OpenClaw": {
+            "fingerprint": "d34330ca9403524a89910391e05114e099ef5f53bf4b2084a24804f17af91317",
+            "status": "unavailable",
+            "checkedAt": 1790143689866,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "Gemini": {
+            "fingerprint": "f909fb2f80e5cf83f42616110b9d61ea88c146aa7aadff557f3fa21408c5dcc8",
+            "status": "healthy",
+            "checkedAt": 1790143738098,
+            "failures": 0,
+            "latencyMs": 5919
+          },
+          "Codex": {
+            "fingerprint": "5424449efcf269eda0b4f8b15251d7228fffe10aca4a9b6771348dd54234dafb",
+            "status": "healthy",
+            "checkedAt": 1790143740762,
+            "failures": 0,
+            "latencyMs": 4931
+          },
+          "OpenCode": {
+            "fingerprint": "a0d38734044e99abc80bc2dc6a0ce2c5239b7a775fded30e722e2d9c5dff8204",
+            "status": "unavailable",
+            "checkedAt": 1790143705174,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "Cursor": {
+            "fingerprint": "e767b3e1e341237e3d13e809daffe9e55fb77ce7639cb88a7c85d39f5d970730",
+            "status": "unavailable",
+            "checkedAt": 1790143720585,
+            "failures": 2,
+            "latencyMs": 6000
+          },
+          "DeepSeek": {
+            "fingerprint": "68d1c0d70a6a668a5f7ca21babff5995dca52f93cd3cbc4575a53a7f585dc829",
+            "status": "healthy",
+            "checkedAt": 1790143741387,
+            "failures": 0,
+            "latencyMs": 704
+          },
+          "mimo": {
+            "fingerprint": "95fbca51b7b571f9727c3a53d0746138a10a933f6e072e1d249bee32129138f7",
+            "status": "healthy",
+            "checkedAt": 1790143742608,
+            "failures": 0,
+            "latencyMs": 1704
+          }
+        }
+      },
+      "messages": [
+        {
+          "kind": "message",
+          "authorName": "You",
+          "text": "先来报个数"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "DeepSeek 分配任务：@Grok → @Gemini → @Codex → @DeepSeek → @mimo（按顺序处理）。"
+        },
+        {
+          "kind": "message",
+          "authorName": "Grok",
+          "text": "1"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：OpenClaw 暂不可用，本轮不再调用，等待下次健康检测。"
+        },
+        {
+          "kind": "message",
+          "authorName": "Gemini",
+          "text": "2"
+        },
+        {
+          "kind": "message",
+          "authorName": "Codex",
+          "text": "3"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：OpenCode 暂不可用，本轮不再调用，等待下次健康检测。"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "调度通知：Cursor 暂不可用，本轮不再调用，等待下次健康检测。"
+        },
+        {
+          "kind": "message",
+          "authorName": "DeepSeek",
+          "text": "4"
+        },
+        {
+          "kind": "message",
+          "authorName": "mimo",
+          "text": "5"
+        },
+        {
+          "kind": "system",
+          "authorName": "Douchat",
+          "text": "本轮已结束：5 人已回复，3 人不可用，已跳过（OpenClaw、OpenCode、Cursor）。"
+        }
+      ]
+    }
+  ]
+}
