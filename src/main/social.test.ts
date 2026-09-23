@@ -99,19 +99,32 @@ describe('social IPC and task execution', () => {
 describe('shared-group explicit response policy', () => {
   const agents = [{ id: 'dong', localId: 'd', ownerId: 'alice', name: '东子' }, { id: 'ge', localId: 'g', ownerId: 'bob', name: '哥飞' }]
   const humans = [{ id: 'alice', name: 'Alice' }, { id: 'bob', name: 'Bob' }]
-  it.each(['你好', '回答你刚才的问题', 'Yes, I will do that.', '¿Puedes ayudarme?', '手伝ってください', '@Bob hello', '@all hello', '> @哥飞 please help\nI agree', '`@东子`', '```\n@哥飞\n```'])('does not infer agent authorization from human conversation: %s', async content => {
+  it.each(['你好', '回答你刚才的问题', 'Yes, I will do that.', '¿Puedes ayudarme?', '手伝ってください', '@Bob hello', '> @哥飞 please help\nI agree', '`@东子`', '```\n@哥飞\n```'])('does not infer agent authorization from human conversation: %s', async content => {
     const { sharedGroupReplyTargets } = await import('./social')
     expect(sharedGroupReplyTargets(content, agents, humans)).toEqual([])
   })
   it('selects only named agents across owners, including mixed human and agent recipients', async () => {
     const { sharedGroupReplyTargets } = await import('./social')
     expect(sharedGroupReplyTargets('@Bob @哥飞 help @东子', agents, humans)).toEqual(['ge', 'dong'])
-    expect(sharedGroupReplyTargets('@all @东子 help', agents, humans)).toEqual(['dong'])
+    expect(sharedGroupReplyTargets('@all @东子 help', agents, humans, 'alice')).toEqual(['dong'])
     expect(sharedGroupReplyTargets('@东子 @东子', agents, humans)).toEqual(['dong'])
   })
   it('rejects ambiguous names rather than invoking the wrong owner’s agent', async () => {
     const { sharedGroupReplyTargets } = await import('./social')
     expect(() => sharedGroupReplyTargets('@东子 help', [...agents, { ...agents[1], name: '东子' }], humans)).toThrow('multiple members')
     expect(() => sharedGroupReplyTargets('@Alice help', [{ ...agents[0], name: 'Ａｌｉｃｅ' }], humans)).toThrow('multiple members')
+  })
+  it('limits all aliases to the group owner and respects other owners’ permissions', async () => {
+    const { sharedGroupReplyTargets } = await import('./social')
+    const participants = [...agents, { ...agents[1], id: 'ask', interactionHumans: 'ask' as const },
+      { ...agents[1], id: 'allow', interactionHumans: 'allow' as const },
+      { ...agents[1], id: 'deny', interactionHumans: 'deny' as const }]
+    for (const content of ['@all 报数', '@everyone hello', '@全体成员 报数', '＠ａｌｌ 报数']) {
+      expect(sharedGroupReplyTargets(content, participants, humans, 'alice')).toEqual(['dong', 'ask', 'allow'])
+      expect(() => sharedGroupReplyTargets(content, participants, humans, 'bob')).toThrow('Only the group owner')
+    }
+    for (const content of ['> @all 报数\n引用', '`@all`', '```\n@all\n```', 'email@all.com']) {
+      expect(sharedGroupReplyTargets(content, participants, humans, 'bob')).toEqual([])
+    }
   })
 })

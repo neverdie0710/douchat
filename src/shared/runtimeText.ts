@@ -1,7 +1,6 @@
 /** Local application errors; remote provider diagnostics are preserved verbatim. */
 export const runtimeTranslations: Record<string, string> = {
   "The selected agent is no longer a member of this group.": "所选 Agent 已不在这个群里。",
-  "Shared group agents respond only when explicitly mentioned or selected as a task recipient. Ordinary messages and @all do not start agent tasks.": "共享群里的 Agent 仅在明确 @ 或选为任务接收者时响应。普通消息和 @所有人 不触发 Agent 任务。",
   "This mention matches multiple members. Use a unique member name or select a task recipient.": "这个 @ 对应多个同名成员，请使用不重名的成员名称，或选择任务接收者。",
   "Message not sent. Try again.": "消息未发送，请重试。",
   "Sign in first.": "请先登录。",

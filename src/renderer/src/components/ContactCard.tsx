@@ -149,9 +149,10 @@ export function ContactCard({
     const configuredProvider = agent.provider.startsWith('custom:') ? customModels?.providers.find(provider => `custom:${provider.id}` === agent.provider) : undefined
     const builtInModel = (snapshot.models ?? []).find(option => option.model === modelId)
     const localName = localModelLabel?.agentId === agent.id && localModelLabel.model === agent.model ? localModelLabel.name : undefined
-    const modelLabel = agent.localAgentId
+    const resolvedModelLabel = agent.localAgentId
       ? localName || modelId || t('Use agent default')
       : configuredProvider?.modelLabels?.[agent.model] || builtInModel?.label || modelId || t('Cloud default')
+    const modelLabel = agent.followDefaultModel ? `${t('Follow default model')} · ${resolvedModelLabel}` : resolvedModelLabel
     const direct = snapshot.conversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
     )

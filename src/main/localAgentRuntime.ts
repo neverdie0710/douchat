@@ -329,10 +329,11 @@ function evictConnection(key: string, entry: ConnectedSession): void {
 export function disposeLocalAgentSessions(agentId: string): void {
   for (const [key, entry] of connections) if (entry.config.id === agentId) evictConnection(key, entry)
 }
-export function resetLocalAgentConversation(conversationId: string, topicId?: string): void {
+export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = []): void {
   const prefixes = [`direct:${conversationId}:`, `group:${encodeURIComponent(conversationId)}:`, `handoff:${conversationId}:`]
   for (const [key, entry] of connections) {
-    if (prefixes.some((prefix) => entry.sessionKey.startsWith(prefix))
+    const incoming = entry.sessionKey.startsWith('a2a:') && directAgentIds.some(id => entry.sessionKey.includes(`:bot:${encodeURIComponent(id)}:topic:`))
+    if ((incoming || prefixes.some((prefix) => entry.sessionKey.startsWith(prefix)))
       && (!topicId || entry.sessionKey.includes(encodeURIComponent(topicId)))) evictConnection(key, entry)
   }
 }

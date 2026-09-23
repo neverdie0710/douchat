@@ -20,7 +20,7 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
   const [revision, setRevision] = useState(0)
   const custom = !agent.localAgentId
   const [customModels, setCustomModels] = useState<CustomModelConfig>()
-  const [customProviderId, setCustomProviderId] = useState(agent.provider?.startsWith('custom:') ? agent.provider.slice('custom:'.length) : 'cloud')
+  const [customProviderId, setCustomProviderId] = useState(agent.followDefaultModel ? '@default' : agent.provider?.startsWith('custom:') ? agent.provider.slice('custom:'.length) : 'cloud')
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   useEffect(() => {
@@ -43,7 +43,7 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
   }, [agent.id, revision, custom])
   const supported = configurableLocalAgents.includes(agent.localAgentId || '')
   const selectedProvider = customModels?.providers.find(provider => provider.id === customProviderId)
-  const validSelection = customProviderId === 'cloud' ? model === 'douchat-default' || cloudModels.some(item => item.model === model) : selectedProvider?.models.includes(model)
+  const validSelection = customProviderId === '@default' ? Boolean(customModels?.defaultModel) : customProviderId === 'cloud' ? model === 'douchat-default' || cloudModels.some(item => item.model === model) : selectedProvider?.models.includes(model)
   const localModels = list?.models ?? []
   return <NativeDialog width={560} className="modal-backdrop" onClose={() => !saving && onClose()}>
     <form className="agent-modal agent-permissions-modal local-model-modal" role="dialog" aria-modal="true" aria-labelledby="local-model-title" onSubmit={async event => {

@@ -304,6 +304,7 @@ function asMember(agent: AgentConfig): GroupMember {
 }
 
 interface Session {
+  modelBinding?: string
   agentId: string
   agent: Agent
 }
@@ -369,9 +370,11 @@ export class DouchatRuntime {
   }
 
   private customProviders = new Set<string>()
-  configureCustomModels(records: CustomProviderRecord[]): void {
+  private defaultCustomModel = ''
+  configureCustomModels(records: CustomProviderRecord[], defaultModel = ''): void {
+    this.defaultCustomModel = defaultModel
     this.decisionProviders = records
-    for (const agent of this.store.accountAgents) if (agent.provider.startsWith(CUSTOM_PROVIDER_PREFIX)) this.disposeAgent(agent.id)
+    for (const agent of this.store.accountAgents) if (agent.provider.startsWith(CUSTOM_PROVIDER_PREFIX) && !this.busyAgents.has(agent.id)) this.disposeAgent(agent.id)
     for (const id of this.customProviders) this.models.deleteProvider(id)
     this.customProviders.clear()
     this.liveAuth.clear()
@@ -380,11 +383,25 @@ export class DouchatRuntime {
       this.models.setProvider(provider)
       this.customProviders.add(provider.id)
     }
+    for (const agent of this.store.accountAgents) {
+      if (!agent.followDefaultModel || agent.localAgentId) continue
+      const binding = this.defaultCustomBinding()
+      this.store.updateAgent(agent.id, binding, { binding, followDefault: false })
+    }
   }
-  customAgentModel(providerId: string, model: string): Pick<AgentConfig, 'provider' | 'model'> {
+  private defaultCustomBinding(): Pick<AgentConfig, 'provider' | 'model'> {
+    const [providerId, ...parts] = this.defaultCustomModel.split('/')
+    return { provider: CUSTOM_PROVIDER_PREFIX + (providerId || '@unavailable'), model: parts.join('/') || 'default' }
+  }
+  customAgentModel(providerId: string, model: string): Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel'> {
+    if (providerId === '@default') {
+      const binding = this.defaultCustomBinding()
+      if (!this.models.getModel(binding.provider, binding.model)) throw new Error('Set a default model in Settings first.')
+      return { ...binding, followDefaultModel: true }
+    }
     const provider = CUSTOM_PROVIDER_PREFIX + providerId
     if (!this.customProviders.has(provider) || !this.models.getModel(provider, model)) throw new Error("The custom model was removed or is unavailable. Reconfigure it in settings.")
-    return { provider, model }
+    return { provider, model, followDefaultModel: false }
   }
   private readonly models = builtinModels()
   private readonly localRuns = new Map<string, Set<AbortController>>()
@@ -779,6 +796,12 @@ export class DouchatRuntime {
     routineCreationAllowed: boolean
   ): string {
     const identity = botIdentityPrompt({ name: config.name, description: botDescription(config) })
+    const model = this.resolveModel(config)
+    const modelIdentity = model ? [
+      'Current model selected by Douchat for this request:',
+      JSON.stringify({ provider: model.provider, modelId: model.id, modelName: model.name }),
+      'When asked which model you use, report this configured model ID and distinguish it from your bot display name. The bot name is a user-configured nickname, not a model identity. Do not infer the model from your nickname, older replies, or training-time self-descriptions. A provider may route a model alias internally; do not invent a more specific underlying version.',
+    ].join('\n') : ''
     const workspace =
       context === 'controller'
         ? 'You are acting as the hidden dispatch controller for a group chat. Answer with JSON only and never call a tool.'
@@ -806,12 +829,14 @@ export class DouchatRuntime {
           'A one-time routine ends after it runs. A recurring routine continues until the human disables or deletes it in Automation. Never claim that one exists unless create_routine succeeded.'
         ].join('\n')
       : ''
-    return [config.instructions, identity, workspace, agentManagement, automation].filter(Boolean).join('\n\n')
+    return [config.instructions, identity, modelIdentity, workspace, agentManagement, automation].filter(Boolean).join('\n\n')
   }
 
   private session(config: AgentConfig, sessionKey: string, context: 'direct' | 'group' | 'controller', toolsDisabled = false): Agent {
     const existing = this.sessions.get(sessionKey)
-    if (existing) return existing.agent
+    const modelBinding = `${config.provider}/${config.model}`
+    if (existing && (!existing.modelBinding || existing.modelBinding === modelBinding)) return existing.agent
+    if (existing) this.disposeSession(sessionKey)
 
     const model = this.resolveModel(config)
     if (!model) throw new Error(`Model ${config.provider}/${config.model} is not available`)
@@ -943,7 +968,7 @@ export class DouchatRuntime {
         this.emit()
       }
     })
-    this.sessions.set(sessionKey, { agentId: config.id, agent })
+    this.sessions.set(sessionKey, { agentId: config.id, agent, modelBinding })
     return agent
   }
 
@@ -1760,7 +1785,7 @@ export class DouchatRuntime {
         // The topic transcript keeps local CLI turns isolated without sharing
         // a global CLI session across contacts, groups, or topics.
         const history = context === 'direct' && sessionKey.startsWith(`direct:${conversationId}:`)
-          ? this.store.topicMessages(conversationId, topicId).slice(-20)
+          ? this.store.contextMessages(conversationId, topicId).slice(-20)
               .map((message) => `${message.authorName}: ${message.text}`).join('\n').slice(-24000)
           : ''
         const abort = new AbortController()
@@ -2038,7 +2063,7 @@ export class DouchatRuntime {
     const gameEvents = new Set(this.store.groupGames().filter(game => game.conversationId === conversationId && game.topicId === topicId)
       .flatMap(game => game.events.filter(event => event.audience === 'group').map(event => event.id)))
     return this.store
-      .topicMessages(conversationId, topicId)
+      .contextMessages(conversationId, topicId)
       .filter((message) => message.kind !== 'system' || gameEvents.has(message.id))
       .map((message) => ({
         id: message.id,
@@ -2284,7 +2309,7 @@ export class DouchatRuntime {
     if (!(await this.canRunLive(bot))) throw noModelError(bot)
     this.setActivity(conversation.id, topicId, 'replying', [bot.id], bot.name)
 
-    const history = this.store.topicMessages(conversation.id, topicId)
+    const history = this.store.contextMessages(conversation.id, topicId)
     const sessionKey = `direct:${conversation.id}:${topicId}`
     const peers = this.store.accountAgents.filter((agent) => agent.id !== bot.id).map(asMember)
     const promptText = imagePrompt(user.text, images.length)
@@ -2484,7 +2509,7 @@ export class DouchatRuntime {
       }
     }
     const privateMessages: PrivateDelivery[] = resume?.privateMessages ?? this.store
-      .topicPrivateMessages(conversation.id, topicId)
+      .contextPrivateMessages(conversation.id, topicId)
       .map((message) => ({
         id: message.id,
         sender: message.sender,
@@ -2813,7 +2838,7 @@ export class DouchatRuntime {
   }
 
   private currentPrivateMessages(conversationId: string, topicId: string): PrivateDelivery[] {
-    return this.store.topicPrivateMessages(conversationId, topicId).map((message) => ({
+    return this.store.contextPrivateMessages(conversationId, topicId).map((message) => ({
       id: message.id,
       sender: message.sender,
       recipient: message.recipient,
@@ -3083,14 +3108,17 @@ Not sure where to start? Tell me what you'd like to accomplish, and we'll try it
 
   resetConversation(conversationId: string, topicId?: string): void {
     this.stopConversation(conversationId)
-    resetLocalAgentConversation(conversationId, topicId)
+    const conversation = this.store.conversation(conversationId)
+    const directAgentIds = conversation?.type === 'direct' ? conversation.agentIds : []
+    resetLocalAgentConversation(conversationId, topicId, directAgentIds)
     const prefixes = [
       `direct:${conversationId}:`,
       `group:${encodeURIComponent(conversationId)}:`,
       `handoff:${conversationId}:`
     ]
     for (const key of [...this.sessions.keys()]) {
-      if (!prefixes.some((prefix) => key.startsWith(prefix))) continue
+      const incoming = key.startsWith('a2a:') && directAgentIds.some(id => key.includes(`:bot:${encodeURIComponent(id)}:topic:`))
+      if (!incoming && !prefixes.some((prefix) => key.startsWith(prefix))) continue
       if (topicId && !key.includes(encodeURIComponent(topicId)) && !key.includes(topicId)) continue
       this.disposeSession(key)
     }

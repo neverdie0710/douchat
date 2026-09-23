@@ -14,17 +14,17 @@ export function toolCapability(name: string): SensitiveCapability {
 
 /** Decisions live in the owner main process, never in model arguments or requester IPC. */
 export class AgentPermissionBroker {
-  private pending = new Map<string, { request: PermissionRequest; finish: (allow: boolean) => void }>()
+  private pending = new Map<string, { request: PermissionRequest; finish: (result: 'allowed' | 'declined' | 'expired' | 'cancelled') => void }>()
   constructor(private readonly currentOwner: () => string | undefined, private readonly changed: () => void) {}
   snapshot(): PermissionRequest[] { return [...this.pending.values()].map((p) => p.request).filter((p) => p.ownerId === this.currentOwner()) }
   hasPending(agentId: string): boolean { return [...this.pending.values()].some((entry) => entry.request.agentId === agentId) }
   resolve(id: string, allow: boolean): void {
     const entry = this.pending.get(id)
     if (!entry || entry.request.ownerId !== this.currentOwner()) throw new Error('Permission request is no longer available')
-    entry.finish(allow === true)
+    entry.finish(allow === true ? 'allowed' : 'declined')
   }
   cancelAgent(id: string): void {
-    for (const entry of this.pending.values()) if (entry.request.agentId === id) entry.finish(false)
+    for (const entry of this.pending.values()) if (entry.request.agentId === id) entry.finish('cancelled')
   }
   async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details'>, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
@@ -35,24 +35,27 @@ export class AgentPermissionBroker {
     if (rule === 'deny') throw new Error('The owner has disabled this permission')
     if (rule === 'allow') return
     if (this.pending.size >= 20) throw new Error('Too many permission requests')
-    const accepted = await new Promise<boolean>((resolve) => {
+    const result = await new Promise<'allowed' | 'declined' | 'expired' | 'cancelled'>((resolve) => {
       const id = randomUUID()
       let timer: ReturnType<typeof setTimeout>
-      const abort = (): void => finish(false)
-      const finish = (allow: boolean): void => {
+      const abort = (): void => finish('cancelled')
+      const finish = (result: 'allowed' | 'declined' | 'expired' | 'cancelled'): void => {
         if (!this.pending.delete(id)) return
         clearTimeout(timer)
         signal?.removeEventListener('abort', abort)
-        resolve(allow)
+        resolve(result)
         this.changed()
       }
-      timer = setTimeout(() => finish(false), 10 * 60_000)
+      timer = setTimeout(() => finish('expired'), 10 * 60_000)
       this.pending.set(id, { request: { ...input, id, ownerId: config.ownerId!, agentId: config.id, agentName: config.name, createdAt: Date.now(), details: input.details }, finish })
       signal?.addEventListener('abort', abort, { once: true })
       if (signal?.aborted) abort()
       this.changed()
     })
-    if (!accepted || config.ownerId !== this.currentOwner()) throw new Error('The owner declined the operation, or permission expired')
     signal?.throwIfAborted()
+    if (config.ownerId !== this.currentOwner()) throw new Error('Agent account changed')
+    if (result === 'declined') throw new Error('The owner declined this request')
+    if (result === 'expired') throw new Error('Permission request expired')
+    if (result === 'cancelled') throw new Error('Permission request cancelled')
   }
 }

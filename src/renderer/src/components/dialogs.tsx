@@ -69,16 +69,14 @@ export function BotModal({
     window.douchat.getCustomModels().then(config => {
       if (active) {
         setCustomModels(config)
-        const [providerId, ...modelParts] = config.defaultModel.split('/')
-        const hasDefault = providerId && modelParts.length && config.providers.some(provider => provider.id === providerId && provider.models.includes(modelParts.join('/')))
-        setCustomProviderId(hasDefault ? providerId : 'cloud')
-        setCustomModel(hasDefault ? modelParts.join('/') : 'douchat-default')
       }
     }).catch(() => { if (active) setModelLoadError(t("Could not load custom models. Try again in Settings.")) })
     return () => { active = false }
   }, [agent])
   const selectedProvider = customModels.providers.find(provider => provider.id === customProviderId)
-  const selectedCustomModel = customProviderId === 'cloud'
+  const selectedCustomModel = customProviderId === '@default' && customModels.defaultModel
+    ? { providerId: '@default', model: 'default' }
+    : customProviderId === 'cloud'
     ? { providerId: 'cloud', model: 'douchat-default' }
     : selectedProvider?.models.includes(customModel) ? { providerId: customProviderId, model: customModel } : undefined
   const localAgent = localAgents.find((item) => item.id === localAgentId)

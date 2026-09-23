@@ -76,11 +76,25 @@ describe('chat details rail', () => {
     ))
   }
 
-  it('explains explicit shared-group replies without changing local group defaults', async () => {
-    await renderRail({ ...group, socialRoom: { id: 'shared', name: 'Team', kind: 'group', members: [], agents: [], createdAt: '' } })
-    expect(container.querySelector('.shared-agent-response-hint')?.textContent).toContain('Ordinary messages and @all do not start agent tasks')
-    await renderRail(group)
-    expect(container.querySelector('.shared-agent-response-hint')).toBeNull()
+  it.each([direct, group])('requires confirmation to reset $type context without clearing history', async (conversation) => {
+    const resetConversationContext = vi.fn(async () => snapshot)
+    const clearConversation = vi.fn(async () => snapshot)
+    Object.assign(window.douchat, { resetConversationContext, clearConversation })
+    await renderRail(conversation)
+    const click = async (label: string) => act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === label)!.click()
+    })
+    expect([...container.querySelectorAll('.detail-clear')].map(button => button.textContent)).toEqual(['Clear chat history', 'Reset context'])
+    await click('Reset context')
+    expect(resetConversationContext).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Chat history will be kept')
+    await click('Cancel')
+    expect(resetConversationContext).not.toHaveBeenCalled()
+    await click('Reset context')
+    await click('Reset context')
+    expect(resetConversationContext).toHaveBeenCalledWith(conversation.id)
+    expect(clearConversation).not.toHaveBeenCalled()
+    expect(container.querySelector('.detail-clear-confirm')).toBeNull()
   })
 
   it('marks group-specific unavailable members and removes the marker after recovery', async () => {

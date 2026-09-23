@@ -30,7 +30,7 @@ describe('agent permission boundary', () => {
     let owner = 'owner'
     const broker = new AgentPermissionBroker(() => owner, vi.fn())
     const work = broker.authorize(config, input)
-    const rejected = expect(work).rejects.toThrow('declined')
+    const rejected = expect(work).rejects.toThrow('account changed')
     const id = broker.snapshot()[0].id
     owner = 'outsider'
     expect(broker.snapshot()).toEqual([])
@@ -54,7 +54,7 @@ describe('agent permission boundary', () => {
   it('aborts pending approvals without leaking listeners or requests', async () => {
     const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
     const signal = new AbortController()
-    const work = expect(broker.authorize(config, input, signal.signal)).rejects.toThrow('declined')
+    const work = expect(broker.authorize(config, input, signal.signal)).rejects.toThrow(/abort/i)
     signal.abort()
     await work
     expect(broker.snapshot()).toHaveLength(0)
@@ -66,5 +66,13 @@ describe('agent permission boundary', () => {
     expect(toolCapability('email_read')).toBe('accountRead')
     expect(toolCapability('email_send')).toBe('accountWrite')
     expect(toolCapability('unknown_tool')).toBe('otherTools')
+  })
+
+  it('distinguishes a cancelled request from an owner declining it', async () => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const work = expect(broker.authorize(config, input)).rejects.toThrow('Permission request cancelled')
+    broker.cancelAgent(config.id)
+    await work
+    expect(broker.snapshot()).toHaveLength(0)
   })
 })

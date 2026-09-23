@@ -51,8 +51,17 @@ export function mentionedMembers<T extends BotMember>(content: string, members: 
 
 export function addressesEveryone(content: string): boolean {
   return /(?:^|[\s,，、])@(?:all|everyone|所有成员|所有人|全体成员|大家)(?=$|[\s,，.。!！?？:：;；、])/iu.test(
-    routingText(content)
+    routingText(content).normalize('NFKC')
   )
+}
+
+/** An explicit address (including an unknown member) must not inherit a recipient. */
+export function hasExplicitMention(content: string): boolean {
+  const text = routingText(content).normalize('NFKC')
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '@' && mentionBoundary(text[index - 1] ?? '')) return true
+  }
+  return false
 }
 
 export interface MentionQuery {

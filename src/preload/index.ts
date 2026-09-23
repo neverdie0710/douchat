@@ -94,6 +94,7 @@ const api: DouchatApi = {
     ipcRenderer.invoke('douchat:send-message', conversationId, text, images),
   stopConversation: (conversationId: string) => ipcRenderer.invoke('douchat:stop-conversation', conversationId),
   clearConversation: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation', conversationId),
+  resetConversationContext: (conversationId: string) => ipcRenderer.invoke('douchat:reset-conversation-context', conversationId),
   setEndpoint: (input: EndpointInput) => ipcRenderer.invoke('douchat:set-endpoint', input),
   testEndpoint: (input: EndpointInput) => ipcRenderer.invoke('douchat:test-endpoint', input),
   createRoutine: (input: CreateRoutineInput) => ipcRenderer.invoke('douchat:create-routine', input),

@@ -258,15 +258,19 @@ describe('create agent terminology', () => {
     await act(async () => root.render(<BotModal localAgents={[]} onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
     const custom = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(b => b.textContent?.includes('Custom model'))!
     await act(async () => custom.click())
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model provider"]')?.value).toBe('mine')
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model"]')?.value).toBe('org/model')
+    const source = container.querySelector<HTMLSelectElement>('select[aria-label="Model source"]')!
+    expect(source.value).toBe('cloud')
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model"]')?.value).toBe('default')
+    await act(async () => { source.value = 'custom'; source.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model source"]')?.value).toBe('custom')
+    expect(container.querySelector('[aria-label="Custom model"]')?.textContent).toContain('Default model')
     const name = container.querySelector<HTMLInputElement>('input')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'My agent')
       name.dispatchEvent(new Event('input', { bubbles: true }))
     })
     await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ customModel: { providerId: 'mine', model: 'org/model' }, localAgentId: '' }))
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ customModel: { providerId: '@default', model: 'default' }, localAgentId: '' }))
     expect(JSON.stringify(onCreate.mock.calls)).not.toContain('apiKey')
   })
 

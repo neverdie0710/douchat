@@ -23,6 +23,7 @@ import { MessageMarkdown, QuoteMarkdown } from './MessageMarkdown'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
+import { socialFollowUpTarget } from '../../../shared/socialFollowUp'
 import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
 import {
   speechRecognitionConstructor,
@@ -400,12 +401,14 @@ export function MessageDeliveries({
   const [open, setOpen] = useState(false)
   const detailsId = useId()
   const recipientNames = deliveries.map(deliveryRecipientName).join(', ')
-  const summary = tr('Sent private message to {names}', { names: recipientNames })
+  const isGroupInvitation = deliveries.every((delivery) => delivery.kind === 'group-invitation')
+  const summary = tr(isGroupInvitation ? 'Invited {names} to participate' : 'Sent private message to {names}', { names: recipientNames })
+  const DeliveryIcon = isGroupInvitation ? CornerDownRight : Lock
 
   // Group receipts expose delivery status only. Secret bodies live in the
   // recipient's private context (or the human's direct inbox).
   if (deliveries.every((delivery) => !delivery.content && !delivery.replies?.length)) {
-    return <div className="bubble-deliveries"><Lock size={10} /><span>{summary}</span></div>
+    return <div className="bubble-deliveries"><DeliveryIcon size={10} /><span>{summary}</span></div>
   }
 
   return (
@@ -416,9 +419,9 @@ export function MessageDeliveries({
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-controls={detailsId}
-        title={t(open ? 'Hide private messages' : 'Show private messages')}
+        title={t(isGroupInvitation ? open ? 'Hide invitation details' : 'Show invitation details' : open ? 'Hide private messages' : 'Show private messages')}
       >
-        <Lock size={10} />
+        <DeliveryIcon size={10} />
         <span>{summary}</span>
         <ChevronDown className="bubble-delivery-chevron" size={12} aria-hidden="true" />
       </button>
@@ -449,6 +452,13 @@ export function MessageDeliveries({
                   <div className="bubble-delivery-content">
                     <MessageMarkdown text={delivery.content} />
                   </div>
+                  {delivery.kind === 'group-invitation' && delivery.status && (
+                    <small className="social-task-status" role="status">{t(
+                      delivery.status === 'pending' ? 'Waiting for acceptance' :
+                      delivery.status === 'running' ? 'Processing invitation' :
+                      delivery.status === 'failed' ? 'Invitation failed' : 'Invitation completed'
+                    )}</small>
+                  )}
                   {replies.length ? (
                     <div className="bubble-delivery-replies">
                       {replyGroups.map((replyGroup) => {
@@ -463,11 +473,11 @@ export function MessageDeliveries({
                               <div className="bubble-delivery-reply-segment" key={reply.id}>
                                 {reply.content ? (
                                   <div className="bubble-delivery-reply-content">
-                                    <MessageMarkdown text={reply.content} />
+                                    <MessageMarkdown text={reply.error && reply.content.trim() === reply.error.trim() ? t(reply.error) : reply.content} />
                                   </div>
                                 ) : null}
                                 <MessageAttachments attachments={reply.attachments} />
-                                {reply.error ? <span className="bubble-error">{t(reply.error)}</span> : null}
+                                {reply.error && reply.content.trim() !== reply.error.trim() ? <span className="bubble-error">{t(reply.error)}</span> : null}
                               </div>
                             ))}
                           </div>
@@ -647,11 +657,11 @@ export function MessageGroupRow({
                 <div className="bubble-reply-segment" key={message.id} data-message-id={message.id}>
                   {message.text ? (
                     <div className="bubble-primary-content">
-                      <MessageMarkdown text={message.text} />
+                      <MessageMarkdown text={message.error && message.text.trim() === message.error.trim() ? t(message.error) : message.text} />
                     </div>
                   ) : null}
                   <MessageAttachments attachments={message.attachments} />
-                  {message.error ? <span className="bubble-error">{t(message.error)}</span> : null}
+                  {message.error && message.text.trim() !== message.error.trim() ? <span className="bubble-error">{t(message.error)}</span> : null}
                   {message.deliveries?.length ? (
                     <MessageDeliveries
                       deliveries={message.deliveries}
@@ -930,12 +940,48 @@ export function visibleConversationMessages(
   conversation: Conversation | undefined,
   messages: ChatMessage[]
 ): ChatMessage[] {
+  if (conversation?.socialRoom?.kind === 'group') return groupInvitationMessages(messages)
   if (!conversation || conversation.type !== 'direct') return messages
   const participantIds = new Set(conversation.agentIds)
   return messages.filter((message) =>
     message.kind !== 'handoff' &&
     (message.authorId === 'user' || message.authorId === 'system' || message.authorId === conversation.person?.id || participantIds.has(message.authorId))
   )
+}
+
+/** Keep public replies in the transcript, and fold internal invitation bodies
+ * into the initiating reply. A page without that reply gets a standalone card. */
+function groupInvitationMessages(messages: ChatMessage[]): ChatMessage[] {
+  const byId = new Map(messages.map((message) => [message.id, message]))
+  const invitations = new Map<string, MessageDelivery[]>()
+  const folded = new Set<string>()
+  for (const message of messages) {
+    if (!message.id.endsWith(':delegate')) continue
+    const taskId = message.id.slice(`${message.conversationId}:`.length)
+    const task = message.socialTasks?.find((entry) => entry.id === taskId)
+    if (!task) continue
+    const parentReply = byId.get(`${message.id.slice(0, -':delegate'.length)}:reply`)
+    const recipientReply = byId.get(`${message.id}:reply`)
+    const host = parentReply?.authorId === message.authorId ? parentReply : message
+    const delivery: MessageDelivery = {
+      kind: 'group-invitation', status: task.status,
+      id: message.id, recipientId: task.agentId, recipientName: task.agentName,
+      content: message.text,
+      replies: recipientReply ? [{
+        id: recipientReply.id, senderId: recipientReply.authorId, senderName: recipientReply.authorName,
+        content: recipientReply.text, createdAt: recipientReply.createdAt,
+        attachments: recipientReply.attachments, error: recipientReply.error
+      }] : undefined
+    }
+    invitations.set(host.id, [...(invitations.get(host.id) ?? []), delivery])
+    if (host !== message) folded.add(message.id)
+  }
+  return messages.filter((message) => !folded.has(message.id)).map((message) => {
+    const deliveries = invitations.get(message.id)
+    if (!deliveries) return message
+    return { ...message, text: message.id.endsWith(':delegate') ? '' : message.text,
+      deliveries: [...(message.deliveries ?? []), ...deliveries] }
+  })
 }
 
 export function groupConversationMessages(messages: ChatMessage[]): ChatMessage[][] {
@@ -1063,6 +1109,8 @@ export function ChatPane({
     }
   }, [messageMenu])
   const [draft, setDraft] = useState('')
+  const followUpTime = usePresenceTime()
+  const followUpTarget = socialFollowUpTarget(conversation, messages, draft, Math.max(followUpTime, Date.now()))
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [attachmentError, setAttachmentError] = useState('')
   const [emojiOpen, setEmojiOpen] = useState(false)
@@ -1164,7 +1212,8 @@ export function ChatPane({
     if (!mention || conversation?.type !== 'group') return []
     const needle = mention.query.normalize('NFKC').toLocaleLowerCase()
     return [
-      { id: 'all', name: 'all', label: t('Everyone'), agent: undefined as AgentConfig | undefined, person: undefined as SocialPerson | undefined },
+      ...(!conversation.socialRoom || conversation.socialRoom.members[0]?.id === conversation.ownerId
+        ? [{ id: 'all', name: 'all', label: t('Everyone'), agent: undefined as AgentConfig | undefined, person: undefined as SocialPerson | undefined }] : []),
       ...addressableMembers.map((member) => ({ id: member.id, name: member.name, label: agentDisplayName(member), agent: member, person: undefined as SocialPerson | undefined })),
       ...(conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId).map((person) => ({ id: person.id, name: person.name, label: person.name, agent: undefined as AgentConfig | undefined, person })) ?? [])
     ].filter((option) => `${option.label} ${option.name}`.normalize('NFKC').toLocaleLowerCase().includes(needle))
@@ -1574,7 +1623,7 @@ export function ChatPane({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={
-              conversation
+              followUpTarget ? tr('Continue chatting with {name}', { name: followUpTarget.name }) : conversation
                 ? tr(conversation.type === 'group' ? 'Message {name} · @ to mention' : 'Message {name}', { name: conversationName })
                 : t('Create an agent to start chatting')
             }

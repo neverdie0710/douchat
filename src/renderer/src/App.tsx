@@ -500,6 +500,10 @@ function WorkspaceApp(): ReactElement {
         onUpdate={(target, input) => {
           void window.douchat.updateConversation(target.id, input).then(setSnapshot).catch((error) => fail(error, 'Chat could not be updated'))
         }}
+        onMarkAllRead={async () => {
+          try { setSnapshot(await window.douchat.markAllConversationsRead()) }
+          catch (error) { fail(error, 'Could not mark chats as read') }
+        }}
         onOpenWindow={(target) => { void window.douchat.openConversationWindow(target.id).catch((error) => fail(error, 'Window could not be opened')) }}
         onEdit={editConversation}
         onTogglePin={togglePin}

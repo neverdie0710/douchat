@@ -30,7 +30,7 @@ export function localAgentDisplayName(localAgentId: string): string {
 export function agentSourceLabel(agent: AgentConfig): string {
   return agent.localAgentId
     ? `${t('Local agent')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
-    : t('Custom model')
+    : agent.provider.startsWith('custom:') ? t('Custom model') : t('Douchat Cloud')
 }
 
 export function isDrDou(agent: AgentConfig): boolean {

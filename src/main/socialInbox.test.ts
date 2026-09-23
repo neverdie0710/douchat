@@ -432,7 +432,11 @@ it('isolates routing between two humans with multiple agents each and retains ow
   await bob.client.syncInbox()
   await bob.runtime.sendMessage(bobChat.id, 'I agree. Let us proceed tomorrow.')
   await alice.runtime.sendMessage(aliceChat.id, '@all please read the update')
-  expect(sends().map(body => body.agentIds)).toEqual([[], [], []])
+  expect(sends().map(body => body.agentIds)).toEqual([[], [], ['a1', 'a2']])
+  const beforeRejected = sends().length
+  await expect(bob.runtime.sendMessage(bobChat.id, '@all 报数')).rejects.toThrow('Only the group owner')
+  expect(sends()).toHaveLength(beforeRejected)
+  expect(bob.store.topicMessages(bobChat.id, bobChat.activeTopicId).some(message => message.text === '@all 报数')).toBe(false)
   await alice.runtime.sendMessage(aliceChat.id, '@Architect draft the proposal')
   await bob.client.syncInbox()
   // A human replying after an agent request must not inherit that request's recipient.
@@ -461,7 +465,51 @@ it('applies the same explicit-recipient policy to the legacy workspace and rejec
     const body = options?.body ? JSON.parse(String(options.body)) : {}
     return body.action === 'send' ? [body] : []
   })
-  expect(payloads.map(body => body.agentIds)).toEqual([[], ['a1'], ['a1']])
+  expect(payloads.map(body => body.agentIds)).toEqual([['a1'], ['a1'], ['a1']])
+  const bob = account('bob')
+  await expect(bob.client.action({ action: 'send', id: 'denied', roomId: shared.id, content: '@all hello', agentId: 'b1' })).rejects.toThrow('Only the group owner')
   await expect(alice.client.action({ action: 'send', id: 'four', roomId: shared.id, content: 'help', agentId: 'removed' })).rejects.toThrow('no longer a member')
   await expect(alice.client.action({ action: 'send', id: 'five', roomId: shared.id, content: 'help', agentId: 'b1' })).rejects.toThrow('disabled requests')
+})
+
+it('continues an answered shared-group turn and preserves its target across a lost receipt', async () => {
+  const shared: SocialRoom = { ...room, id: 'follow-up', kind: 'group', agents: [
+    { id: 'dr', localId: 'dr', ownerId: 'bob', name: 'Dr. Dou', interactionHumans: 'allow' }
+  ] }
+  const remote = server([], shared)
+  const alice = account('alice')
+  await alice.client.syncInbox()
+  const chat = alice.store.accountConversations[0]
+  await alice.runtime.sendMessage(chat.id, '@Dr. Dou 报数')
+  Object.assign(remote.messages[0], { status: 'succeeded', agentName: 'Dr. Dou', reply: '要邀请其他人吗？' })
+  await alice.client.syncInbox()
+  remote.loseReceipt()
+  await expect(alice.runtime.sendMessage(chat.id, '要啊')).rejects.toThrow('Connection lost')
+  expect(remote.messages.at(-1)).toMatchObject({ content: '要啊', agentId: 'dr' })
+  await alice.runtime.sendMessage(chat.id, '要啊')
+  expect(remote.messages).toHaveLength(2)
+  Object.assign(remote.messages[1], { status: 'succeeded', agentName: 'Dr. Dou', reply: '已邀请。' })
+  await alice.client.syncInbox()
+  await alice.runtime.sendMessage(chat.id, '再详细一点')
+  expect(remote.messages.at(-1)).toMatchObject({ content: '再详细一点', agentId: 'dr' })
+  Object.assign(remote.messages[2], { status: 'succeeded', agentName: 'Dr. Dou', reply: '详情。' })
+  await alice.client.syncInbox()
+  await alice.runtime.sendMessage(chat.id, '@Bob 你看看')
+  expect(remote.messages.at(-1)?.agentId).toBeUndefined()
+  await alice.client.syncInbox()
+  await alice.runtime.sendMessage(chat.id, '好的')
+  expect(remote.messages.at(-1)?.agentId).toBeUndefined()
+})
+
+it('sends a requester-scoped context reset without deleting shared messages', async () => {
+  const remote = server([{ id: 'old', roomId: room.id, authorId: 'bob', authorName: 'Bob', content: 'Keep this history', status: 'sent', createdAt: room.createdAt }])
+  const alice = account('alice')
+  await alice.client.syncInbox()
+  const chat = alice.store.accountConversations[0]
+  await alice.client.resetConversationContext(chat.id)
+  const request = remote.fetcher.mock.calls.map(([, options]) => options?.body ? JSON.parse(String(options.body)) : null).find(body => body?.action === 'reset-context')
+  expect(request).toEqual({ action: 'reset-context', roomId: room.id })
+  expect(alice.store.topicMessages(chat.id, chat.activeTopicId).some(message => message.text === 'Keep this history')).toBe(true)
+  alice.store.setCurrentAccountId('bob')
+  await expect(alice.client.resetConversationContext(chat.id)).rejects.toThrow('Chat not found')
 })

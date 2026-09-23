@@ -112,6 +112,20 @@ afterEach(() => {
 })
 
 describe('DouchatRuntime', () => {
+  it.each(['direct-dobi', 'crew'])('starts new model context while keeping the visible transcript in %s', async (conversationId) => {
+    const { store, runtime } = createRuntime()
+    const topicId = store.activeTopicId(conversationId)
+    store.addMessage({ conversationId, topicId, authorId: 'user', authorName: 'You', text: 'OLD_RESET_SENTINEL', kind: 'message' })
+    const model = vi.spyOn(runtime as any, 'runReply')
+    runtime.resetConversation(conversationId, topicId)
+    store.resetConversationContext(conversationId, topicId)
+    expect(store.topicMessages(conversationId, topicId).at(-1)).toMatchObject({ kind: 'system', text: 'Context reset' })
+    await runtime.sendMessage(conversationId, 'Hello again')
+    expect(model).toHaveBeenCalled()
+    expect(model.mock.calls.every(([options]) => !(options as ReplyOptions).prompt.includes('OLD_RESET_SENTINEL'))).toBe(true)
+    expect(store.topicMessages(conversationId, topicId).some(message => message.text === 'OLD_RESET_SENTINEL')).toBe(true)
+    expect(store.contextMessages(conversationId, topicId).some(message => message.text === 'Hello again')).toBe(true)
+  })
   it('keeps private specialist progress out of the caller’s direct chat while allowing group and recipient progress', () => {
     const { store, runtime } = createRuntime()
     const internal = runtime as unknown as {
@@ -218,7 +232,7 @@ describe('DouchatRuntime', () => {
     expect(runtime.snapshot().permissionRequests).toHaveLength(0)
     const abort = new AbortController()
     const pending = guarded.execute('cancelled-tool', {}, abort.signal)
-    const stopped = expect(pending).rejects.toThrow('declined')
+    const stopped = expect(pending).rejects.toThrow(/abort/i)
     abort.abort()
     await stopped
     expect(operation).toHaveBeenCalledTimes(2)
@@ -845,6 +859,9 @@ describe('DouchatRuntime', () => {
       if (context === 'controller') {
         expect(prompt).not.toContain('agent-secret'); expect(prompt).not.toContain('human-secret')
         const p = JSON.parse(prompt.slice(prompt.indexOf('{')))
+        if (p.completedTurns.some((turn: { memberId: string }) => turn.memberId === 'lin')) {
+          return { text: JSON.stringify({ mode: 'none', memberIds: [], triggerMessageIds: [] }) }
+        }
         const target = p.completedTurns.length ? 'lin' : 'dobi'
         return { text: JSON.stringify({ mode: 'single', memberIds: [target], triggerMessageIds: [p.messages[0].id] }) }
       }
@@ -877,6 +894,7 @@ describe('DouchatRuntime', () => {
     internals.runReply = async ({ config, context, prompt }) => {
       if (context === 'controller') {
         const payload = JSON.parse(prompt.slice(prompt.indexOf('{'))) as DecisionPayload
+        if (payload.completedTurns.length >= 2) return { text: JSON.stringify({ mode: 'none', memberIds: [], triggerMessageIds: [] }) }
         return { text: JSON.stringify({ mode: 'parallel', memberIds: ['dobi', 'lin'], triggerMessageIds: [payload.messages.at(-1)!.id] }) }
       }
       if (config.id === 'dobi') await slow
@@ -1232,6 +1250,53 @@ describe('DouchatRuntime', () => {
     )
     expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(before)
   })
+})
+
+it('uses the new default model after resetting context while preserving the agent display name', () => {
+  const { store, runtime } = createRuntime()
+  const records = [{ id: 'mine', name: 'Mine', kind: 'openai' as const, apiBase: 'https://custom.example/v1', apiKey: 'test-key', models: ['mimo-model', 'deepseek-flash'] }]
+  runtime.configureCustomModels(records, 'mine/mimo-model')
+  const bot = store.createAgent({ name: 'Mimo2', role: 'Assistant', instructions: '', color: '#fff', ...runtime.customAgentModel('@default', 'default') })
+  const conversation = store.accountConversations.find(conversation => conversation.type === 'direct' && conversation.agentIds.includes(bot.id))!
+  const topicId = store.activeTopicId(conversation.id)
+  const key = `direct:${conversation.id}:${topicId}`
+  const internals = runtime as unknown as { session: (config: typeof bot, key: string, context: 'direct') => { state: { model: { id: string }; systemPrompt: string } } }
+  const previous = internals.session(bot, key, 'direct')
+  expect(previous.state.model.id).toBe('mimo-model')
+  runtime.configureCustomModels(records, 'mine/deepseek-flash')
+  runtime.resetConversation(conversation.id, topicId)
+  store.resetConversationContext(conversation.id, topicId)
+  const current = internals.session(store.agent(bot.id)!, key, 'direct')
+  expect(current).not.toBe(previous)
+  expect(current.state.model.id).toBe('deepseek-flash')
+  expect(current.state.systemPrompt).toContain('"name":"Mimo2"')
+  expect(current.state.systemPrompt).toContain('"modelId":"deepseek-flash"')
+  expect(current.state.systemPrompt).not.toContain('mimo-model')
+  expect(store.contextMessages(conversation.id, topicId)).toEqual([])
+})
+
+it('updates only default followers, including the built-in agent, and keeps model IDs with slashes', () => {
+  const { store, runtime } = createRuntime()
+  store.setCurrentAccountId('default-owner')
+  const records = [{ id: 'mine', name: 'Mine', kind: 'openai' as const, apiBase: 'https://custom.example/v1', apiKey: 'test-key', models: ['org/one', 'org/two'] }]
+  runtime.configureCustomModels(records, 'mine/org/one')
+  const binding = runtime.customAgentModel('@default', 'default')
+  const follower = store.createAgent({ name: 'Follower', role: 'Assistant', instructions: '', color: '#fff', ...binding })
+  const fixed = store.createAgent({ name: 'Fixed', role: 'Assistant', instructions: '', color: '#fff', ...runtime.customAgentModel('mine', 'org/one') })
+  const admin = store.ensureDefaultCloudContact('default-owner', { provider: 'gateway', model: 'default' }).agent!
+  store.updateAgent(admin.id, binding, { binding, followDefault: false })
+  runtime.configureCustomModels(records, 'mine/org/two')
+  for (const id of [follower.id, admin.id]) expect(store.agent(id)).toMatchObject({ followDefaultModel: true, provider: 'custom:mine', model: 'org/two' })
+  expect(store.agent(fixed.id)?.model).toBe('org/one')
+  store.ensureDefaultCloudContact('default-owner', { provider: 'gateway', model: 'default' })
+  expect(store.agent(admin.id)).toMatchObject({ followDefaultModel: true, model: 'org/two' })
+  const explicit = runtime.customAgentModel('mine', 'org/two')
+  store.updateAgent(follower.id, explicit)
+  runtime.configureCustomModels(records, 'mine/org/one')
+  expect(store.agent(follower.id)).toMatchObject({ followDefaultModel: false, model: 'org/two' })
+  runtime.configureCustomModels([])
+  expect(() => runtime.customAgentModel('@default', 'default')).toThrow('Set a default model')
+  expect(store.agent(admin.id)?.provider).toBe('custom:@unavailable')
 })
 
 it.each([false, true])('keeps custom model routing when cloud reconnects and never falls back after removal (built-in: %s)', async (builtIn) => {

@@ -133,7 +133,9 @@ describe('user avatar', () => {
     const base = {
       name: 'Agent', role: 'Assistant', instructions: '', color: '#7C6CF2', provider: 'gateway', model: 'default', createdAt: 1
     }
-    expect(agentSourceLabel({ ...base, id: 'cloud' })).toBe('Custom model')
+    expect(agentSourceLabel({ ...base, id: 'cloud' })).toBe('Douchat Cloud')
+    expect(agentSourceLabel({ ...base, id: 'custom-model', provider: 'custom:deepseek' })).toBe('Custom model')
+    expect(agentSourceLabel({ ...base, id: 'following', provider: 'custom:deepseek', followDefaultModel: true })).toBe('Custom model')
     expect(agentSourceLabel({ ...base, id: 'local', localAgentId: 'opencode', provider: 'local' })).toBe('Local agent · OpenCode')
     expect(agentSourceLabel({ ...base, id: 'custom', localAgentId: 'custom:id', localAgentName: 'Research wrapper', provider: 'local' })).toBe('Local agent · Research wrapper')
   })

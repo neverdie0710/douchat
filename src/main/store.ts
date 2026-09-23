@@ -310,12 +310,16 @@ export class DouchatStore {
 
   groupWorkflows(): GroupWorkflow[] {
     return this.all<GroupWorkflow>('SELECT data FROM groupWorkflows WHERE ownerId = ? ORDER BY rowid', this.currentAccountId)
-      .filter(workflow => this.conversation(workflow.conversationId)?.topics.some(topic => topic.id === workflow.topicId))
+      .filter(workflow => {
+        const topic = this.conversation(workflow.conversationId)?.topics.find(topic => topic.id === workflow.topicId)
+        return topic && (!topic.contextReset || this.contextMessages(workflow.conversationId, workflow.topicId).some(message => message.id === workflow.user.id))
+      })
   }
 
   saveGroupWorkflow(workflow: GroupWorkflow): void {
     if (!this.currentAccountId || this.currentAccountId !== workflow.ownerId || this.conversation(workflow.conversationId)?.ownerId !== workflow.ownerId) throw new Error("This group task does not belong to the current account.")
     if (!this.topicMessages(workflow.conversationId, workflow.topicId).some(message => message.id === workflow.user.id)) throw new Error("The original group task message was deleted.")
+    if (!this.contextMessages(workflow.conversationId, workflow.topicId).some(message => message.id === workflow.user.id)) return
     workflow.updatedAt = Date.now()
     this.write('INSERT INTO groupWorkflows (id, conversationId, topicId, ownerId, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data',
       workflow.id, workflow.conversationId, workflow.topicId, workflow.ownerId, JSON.stringify(workflow))
@@ -1031,6 +1035,8 @@ export class DouchatStore {
   }
 
   private insertMessage(message: ChatMessage): void {
+    const reset = this.conversation(message.conversationId)?.topics.find(topic => topic.id === message.topicId)?.contextReset
+    if (reset && message.createdAt >= reset.at) message.contextVersion = reset.id
     this.write(
       'INSERT INTO messages (id, conversationId, topicId, createdAt, data) VALUES (?, ?, ?, ?, ?)',
       message.id,
@@ -1812,6 +1818,32 @@ export class DouchatStore {
     )
   }
 
+  contextMessages(conversationId: string, topicId: string): ChatMessage[] {
+    const reset = this.conversation(conversationId)?.topics.find(topic => topic.id === topicId)?.contextReset
+    return this.topicMessages(conversationId, topicId).filter(message => !reset || message.contextVersion === reset.id)
+  }
+
+  contextPrivateMessages(conversationId: string, topicId: string): PrivateMessage[] {
+    const reset = this.conversation(conversationId)?.topics.find(topic => topic.id === topicId)?.contextReset
+    return this.topicPrivateMessages(conversationId, topicId).filter(message => !reset || message.contextVersion === reset.id)
+  }
+
+  resetConversationContext(conversationId: string, topicId: string): void {
+    const conversation = this.accountConversations.find(item => item.id === conversationId)
+    const topic = conversation?.topics.find(item => item.id === topicId)
+    if (!conversation || !topic) throw new Error('Chat not found')
+    this.tx(() => {
+      const reset = { id: randomUUID(), at: Date.now() }
+      // Keep the visible boundary outside the new model context, including on
+      // repeated resets. This local notice is never sent to shared rooms.
+      this.insertMessage({ id: `context-reset:${reset.id}`, conversationId, topicId,
+        authorId: 'system', authorName: 'Douchat', kind: 'system', text: 'Context reset', createdAt: reset.at })
+      topic.contextReset = reset
+      this.write('DELETE FROM groupGames WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
+      this.putConversation(conversation)
+    })
+  }
+
   topicPrivateMessages(conversationId: string, topicId: string): PrivateMessage[] {
     return this.all<PrivateMessage>(
       'SELECT data FROM privateMessages WHERE conversationId = ? AND topicId = ? ORDER BY rowid',
@@ -1874,6 +1906,8 @@ export class DouchatStore {
     if (!messages.length) return
     this.tx(() => {
       for (const message of messages) {
+        const reset = this.conversation(message.conversationId)?.topics.find(topic => topic.id === message.topicId)?.contextReset
+        if (reset && message.createdAt >= reset.at) message.contextVersion = reset.id
         this.write(
           `INSERT INTO privateMessages (id, conversationId, topicId, senderId, recipientId, createdAt, data)
            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
@@ -1931,6 +1965,7 @@ export class DouchatStore {
       const topic = conversation?.topics.find((item) => item.id === topicId)
       if (conversation && topic) {
         topic.title = ''
+        delete topic.contextReset
         this.putConversation(conversation)
       }
     })

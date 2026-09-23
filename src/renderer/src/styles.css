@@ -4181,7 +4181,8 @@ html[data-platform='win32'] .messenger .app-rail {
 .message-markdown code { font: inherit; background: none; padding: 0; }
 .message-markdown pre { max-width: 100%; overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; padding: 0; margin: .65em 0; background: none; border: 0; line-height: 1.5; }
 .message-markdown pre code { font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; background: none; padding: 0; border: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
-.message-markdown blockquote { margin: .65em 0; padding: .15em 0 .15em 12px; border-left: 3px solid var(--accent-300); color: var(--muted); }
+.message-markdown blockquote, .message-quote { border-left: 2px solid color-mix(in srgb, currentColor 35%, transparent); color: var(--muted); }
+.message-markdown blockquote { margin: .65em 0; padding: .15em 0 .15em 11px; }
 .message-markdown a { color: var(--accent-600); text-decoration: underline; text-underline-offset: 2px; }
 .message-markdown .message-local-file {
   display: inline-flex;
@@ -4765,8 +4766,8 @@ html[data-platform='win32'] .messenger .app-rail {
 .messenger .chat-details-layer .member-tile > span { color: #999; font-size: calc(12px * var(--font-scale, 0.92)); font-weight: 400; }
 .messenger .chat-details-layer .member-state { display: none; }
 .messenger .chat-details-layer .member-add { width: 40px; height: 40px; border: 1px dashed #aaa; border-radius: 5px; }
-.group-conversation-details { border-top: 1px solid #ededed; font-size: calc(13px * var(--font-scale)); }
-.group-name-setting { padding: 20px 0; border-bottom: 1px solid #ededed; }
+.group-conversation-details { border-top: 1px solid var(--line); font-size: calc(13px * var(--font-scale)); }
+.group-name-setting { padding: 20px 0; border-bottom: 1px solid var(--line); }
 .group-name-setting h2 { margin: 0 0 13px; font-size: inherit; font-weight: 600; }
 .group-name-value { display: flex; width: 100%; min-width: 0; align-items: center; gap: 7px; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: left; font: inherit; cursor: text; }
 .group-name-value span { min-width: 0; overflow: hidden; font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
@@ -5197,6 +5198,9 @@ html[data-platform='win32'] .messenger .app-rail {
 .detail-switch[aria-checked='true'] { background: var(--accent-500); }
 .detail-switch[aria-checked='true']::after { transform: translateX(12px); }
 .detail-clear { width: 100%; padding: 22px 0; border: 0; color: #ff4d4f; background: none; font: inherit; cursor: pointer; }
+.detail-history-action + .detail-history-action { border-top: 1px solid var(--line); }
+.detail-history-action .detail-clear:disabled { opacity: .45; cursor: default; }
+.detail-history-action .detail-clear-confirm { padding: 14px 0 20px; }
 .detail-clear-confirm { padding: 16px 0; font-size: 12px; }
 .detail-clear-confirm button { padding: 6px 10px; margin-right: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: pointer; }
 .detail-clear-confirm .danger { color: #ff4d4f; }
@@ -5428,7 +5432,13 @@ html[data-platform='win32'] .messenger .app-rail {
 .member-picker-selection footer { display: flex; justify-content: flex-end; gap: 16px; border-top: 1px solid var(--line); padding-top: 20px; }
 .member-picker-selection footer button { min-width: 108px; padding: 10px 20px; border: 0; border-radius: 7px; cursor: pointer; font: inherit; }
 .member-picker-selection .secondary-button { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.member-picker-selection .secondary-button:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.member-picker-selection footer button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
 .member-picker-selection button:disabled { opacity: .45; cursor: default; }
+[data-theme='dark'] .messenger .member-picker-selection footer .primary-button:not(:disabled) { background: #537fd1; color: #fff; box-shadow: none; }
+[data-theme='dark'] .messenger .member-picker-selection footer .primary-button:hover:not(:disabled) { background: #4d7bd2; }
+[data-theme='dark'] .messenger .member-picker-selection footer .primary-button:active:not(:disabled) { background: #3963b6; }
+[data-theme='dark'] .messenger .member-picker-selection footer button:disabled { background: var(--surface); color: var(--faint); box-shadow: none; opacity: 1; cursor: default; }
 .member-picker-error { color: #c45d4c; font-size: 13px; }
 .member-picker-row:focus-visible, .member-picker-chosen button:focus-visible { outline: 2px solid var(--accent-600); outline-offset: -2px; }
 @media (max-width: 620px) { .member-picker-selection { padding: 22px 16px; } .member-picker-selection header { align-items: flex-start; flex-direction: column; gap: 6px; } .member-picker-row { padding: 12px; gap: 8px; } .member-picker-selection footer { gap: 8px; } .member-picker-selection footer button { min-width: 0; flex: 1; padding: 10px; } }
@@ -6290,7 +6300,8 @@ html[data-platform='win32'] .messenger .app-rail {
 
 .permission-requester-id { overflow-wrap: anywhere; font-size: 12px; }
 
-.message-quote { display: flex; align-items: center; gap: 14px; min-width: 0; margin: 0 0 10px; padding: 1px 0 1px 11px; border-left: 2px solid color-mix(in srgb, currentColor 35%, transparent); color: color-mix(in srgb, var(--ink) 25%, var(--muted)); font: inherit; letter-spacing: inherit; }
+.message-quote { display: flex; align-items: center; gap: 14px; min-width: 0; margin: 0 0 10px; padding: 1px 0 1px 11px; font: inherit; letter-spacing: inherit; }
+.user-bubble :is(.message-quote, .message-markdown blockquote) { color: color-mix(in srgb, var(--ink) 50%, var(--muted)); border-left-color: color-mix(in srgb, var(--muted) 35%, transparent); }
 .message-quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: normal; flex: 1; min-width: 0; font-weight: inherit; }
 .message-quote-text strong { font-weight: inherit; }
 .composer-quote { margin: 12px 2px 4px; font-size: calc(14px * var(--font-scale, 0.92)); line-height: 1.6; }
@@ -6531,6 +6542,25 @@ html.native-dialog-window,
 
 .messenger .inbox-create-menu { min-width: 160px; }
 .messenger .inbox-create-menu button { padding: 10px 9px; }
+.messenger .inbox-filter-anchor { position: relative; }
+.messenger .inbox-filter-trigger.active { color: var(--brand-ink); }
+.messenger .inbox-filter-trigger .submenu-arrow { margin-left: auto; }
+.messenger .inbox-filter-menu {
+  top: -5px;
+  left: calc(100% + 5px);
+  right: auto;
+  min-width: 200px;
+}
+.messenger .inbox-filter-menu::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 6px;
+}
+.messenger .inbox-filter-menu button > svg { flex-shrink: 0; }
+.messenger .inbox-create-menu button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 
 .native-dialog-window :is(.chat-history-modal, .scheduled-tasks-modal, .add-friend-modal) > .records-header > button[aria-label] {
   display: grid;
@@ -6542,6 +6572,9 @@ html.native-dialog-window,
 .custom-model-table th, .custom-model-table td { text-align: left; padding: 14px 8px; border-bottom: 1px solid var(--line); }
 .custom-model-table th, .custom-model-table small { color: var(--muted); font-weight: normal; }
 .custom-model-table small { display: block; margin-top: 5px; }
+.custom-default-model > label, .custom-model-table th { font-size: calc(12px * var(--font-scale, 0.92)); font-weight: 550; line-height: 1.5; color: var(--muted); }
+.custom-model-table td > strong { font-size: calc(13px * var(--font-scale, 0.92)); font-weight: 600; line-height: 1.5; }
+.custom-model-table td > small { font-size: calc(11.5px * var(--font-scale, 0.92)); line-height: 1.5; margin-top: 3px; }
 .custom-model-table code { font-size: 12px; overflow-wrap: anywhere; }
 .custom-model-actions { display: flex; gap: 4px; }
 .custom-model-form { width: min(560px, calc(100vw - 40px)); max-height: calc(100vh - 40px); overflow-y: auto; }
@@ -6598,7 +6631,10 @@ html.native-dialog-window,
 .agent-source-cards .agent-source-radio { display: grid; top: 10px; right: 10px; }
 .agent-source-copy strong { font-size: calc(12px * var(--font-scale, .92)); }
 .agent-source-copy small { color: var(--muted); font-size: calc(10px * var(--font-scale, .92)); line-height: 1.35; }
-.custom-model-selection { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.custom-model-selection { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
+.custom-model-selection > .field-row { align-content: start; min-width: 0; margin: 0; gap: 8px; }
+.custom-model-selection + .settings-note { margin-top: 16px; }
+.custom-model-selection > .field-row > select { height: 42px; min-height: 42px; font-size: calc(13px * var(--font-scale, 0.92)); }
 .local-model-modal .custom-model-selection .field-row { min-width: 0; margin: 0; gap: 8px; }
 .messenger .local-model-modal .custom-model-selection select { min-width: 0; width: 100%; border-radius: 8px; padding: 10px 12px; box-shadow: none; }
 @media (max-width: 440px) { .custom-model-selection { grid-template-columns: 1fr; gap: 0; } }

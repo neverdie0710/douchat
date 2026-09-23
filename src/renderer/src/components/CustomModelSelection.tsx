@@ -10,17 +10,35 @@ export function CustomModelSelection({ config, cloudModels, providerId, model, d
   disabled?: boolean
   onChange: (providerId: string, model: string) => void
 }) {
-  const provider = config.providers.find(item => item.id === providerId)
   const cloud = providerId === 'cloud'
-  const available = cloud ? model === 'douchat-default' || cloudModels.some(item => item.model === model) : provider?.models.includes(model)
+  const cloudDefault = cloudModels.find(item => item.model === 'douchat-default') ?? cloudModels[0]
+  const [defaultProviderId, ...parts] = config.defaultModel.split('/')
+  const defaultAvailable = Boolean(config.providers.find(item => item.id === defaultProviderId)?.models.includes(parts.join('/')))
+  const options = cloud
+    ? cloudModels.filter(item => item.model !== 'douchat-default').map(item => ({ providerId: 'cloud', model: item.model, label: item.label || item.model }))
+    : config.providers.flatMap(provider => provider.models.map(id => ({ providerId: provider.id, model: id, label: provider.id + '/' + id })))
+  options.sort((a, b) => a.label.localeCompare(b.label, 'en', { sensitivity: 'base', numeric: true }))
+  const isDefault = providerId === '@default' || cloud && model === 'douchat-default'
+  const selected = isDefault ? 'default' : JSON.stringify([providerId, model])
+  const available = isDefault || options.some(item => item.providerId === providerId && item.model === model)
   return <div className="custom-model-selection">
-    <label className="field-row"><span>{t("Provider")}</span><select aria-label={t("Custom model provider")} value={providerId} disabled={disabled} onChange={event => {
-      const id = event.target.value
-      onChange(id, id === 'cloud' ? 'douchat-default' : config.providers.find(item => item.id === id)?.models[0] ?? '')
-    }}><option value="cloud">Douchat Cloud</option>{!cloud && !provider && <option value={providerId}>{tr('{name} (unavailable)', { name: providerId })}</option>}{config.providers.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    <label className="field-row"><span>{t('Model')}</span><select aria-label={t("Custom model")} value={model} disabled={disabled || (!cloud && !provider?.models.length)} onChange={event => onChange(providerId, event.target.value)}>
-      {!available && <option value={model}>{tr('{name} (unavailable)', { name: model || t('Choose a model') })}</option>}
-      {cloud ? <><option value="douchat-default">Douchat Default</option>{cloudModels.filter(item => item.model !== 'douchat-default').map(item => <option key={`${item.provider}/${item.model}`} value={item.model}>{item.label}</option>)}</> : provider?.models.map(item => <option key={item} value={item}>{provider.modelLabels?.[item] || item}</option>)}
-    </select></label>
+    <label className="field-row"><span>{t('Model source')}</span>
+      <select aria-label={t('Model source')} value={cloud ? 'cloud' : 'custom'} disabled={disabled} onChange={event => {
+        onChange(event.target.value === 'cloud' ? 'cloud' : '@default', event.target.value === 'cloud' ? 'douchat-default' : 'default')
+      }}><option value="cloud">{t('Douchat Cloud')}</option><option value="custom">{t('Custom Model')}</option></select>
+    </label>
+    <label className="field-row"><span>{t('Model')}</span>
+      <select aria-label={t('Custom model')} value={selected} disabled={disabled} onChange={event => {
+        if (event.target.value === 'default') onChange(cloud ? 'cloud' : '@default', cloud ? 'douchat-default' : 'default')
+        else {
+          const option = options.find(item => JSON.stringify([item.providerId, item.model]) === event.target.value)
+          if (option) onChange(option.providerId, option.model)
+        }
+      }}>
+        <option value="default" disabled={!cloud && !defaultAvailable}>{cloud ? cloudDefault?.label || cloudDefault?.model || 'Douchat Default' : t('Default model')}</option>
+        {!available && <option value={selected} disabled>{tr('{name} (unavailable)', { name: model || t('Choose a model') })}</option>}
+        {options.map(item => <option key={JSON.stringify([item.providerId, item.model])} value={JSON.stringify([item.providerId, item.model])}>{item.label}</option>)}
+      </select>
+    </label>
   </div>
 }

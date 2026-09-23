@@ -78,11 +78,10 @@ const customModels = new CustomModelStore(join(app.getPath('userData'), 'custom-
   decrypt: (value) => safeStorage.decryptString(Buffer.from(value, 'base64'))
 })
 function reloadCustomModels(): void {
-  runtime.configureCustomModels([])
   if (store.currentAccountId) {
-    try { runtime.configureCustomModels(customModels.records(store.currentAccountId)) }
-    catch { console.warn('[douchat] Custom model keys could not be loaded for this account') }
-  }
+    try { runtime.configureCustomModels(customModels.records(store.currentAccountId), customModels.list(store.currentAccountId).defaultModel) }
+    catch { runtime.configureCustomModels([]); console.warn('[douchat] Custom model keys could not be loaded for this account') }
+  } else runtime.configureCustomModels([])
 }
 const diagnostics = new DiagnosticLog(join(app.getPath('userData'), 'logs'))
 try {
@@ -765,7 +764,8 @@ app.whenReady().then(() => {
     const agent = store.createAgent({
       ...agentInput,
       localAgentName: localAgent?.custom ? localAgent.name : undefined,
-      ...binding
+      ...binding,
+      followDefaultModel: input.customModel?.providerId === '@default'
     })
     const direct = store.accountConversations.find(
       (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
@@ -785,7 +785,7 @@ app.whenReady().then(() => {
     if (customModel && cloudModel) throw new Error("Select one model source.")
     if ((customModel || cloudModel) && (existing.localAgentId || input.localAgentId)) throw new Error("Select one execution mode.")
     const selectedBinding = customModel ? runtime.customAgentModel(customModel.providerId, customModel.model) : cloudModel ? runtime.cloudAgentModel(cloudModel.model) : undefined
-    input = { ...update, ...selectedBinding }
+    input = { ...update, ...selectedBinding, followDefaultModel: customModel?.providerId === '@default' ? true : selectedBinding || input.localAgentId ? false : existing.followDefaultModel }
     if (input.model !== undefined && (input.localAgentId || existing.localAgentId)) {
       const model = localModelId(input.model)
       if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
@@ -954,6 +954,18 @@ app.whenReady().then(() => {
     const topicId = store.activeTopicId(conversationId)
     store.clearConversation(conversationId, topicId)
     runtime.resetConversation(conversationId, topicId)
+    return push()
+  })
+  ipcMain.handle('douchat:reset-conversation-context', async (_event, conversationId: string) => {
+    const conversation = store.accountConversations.find(item => item.id === conversationId)
+    if (!conversation) throw new Error('Chat not found')
+    if (conversation.remoteRoomId) {
+      if (!social) throw new Error('Chat service is unavailable')
+      await social.resetConversationContext(conversationId)
+    }
+    const topicId = store.activeTopicId(conversationId)
+    runtime.resetConversation(conversationId, topicId)
+    store.resetConversationContext(conversationId, topicId)
     return push()
   })
   ipcMain.handle('douchat:create-routine', (_event, input: CreateRoutineInput) => {

@@ -23,10 +23,11 @@ it('uses creation model selection for cloud agents and switches to a saved custo
     expect(host.textContent).toContain('Douchat Cloud')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(save).toHaveBeenLastCalledWith('douchat-default', 'cloud')
-    const provider = host.querySelector<HTMLSelectElement>('[aria-label="Custom model provider"]')!
-    await act(async () => { provider.value = 'mine'; provider.dispatchEvent(new Event('change', { bubbles: true })) })
-    expect(host.querySelector<HTMLSelectElement>('[aria-label="Custom model"]')!.value).toBe('org/model')
-    expect(host.textContent).toContain('My model')
+    const provider = host.querySelector<HTMLSelectElement>('[aria-label="Model source"]')!
+    await act(async () => { provider.value = 'custom'; provider.dispatchEvent(new Event('change', { bubbles: true })) })
+    const model = host.querySelector<HTMLSelectElement>('[aria-label="Custom model"]')!
+    await act(async () => { model.value = JSON.stringify(['mine', 'org/model']); model.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(host.textContent).toContain('mine/org/model')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(save).toHaveBeenLastCalledWith('org/model', 'custom:mine')
   } finally { await act(async () => root.unmount()) }

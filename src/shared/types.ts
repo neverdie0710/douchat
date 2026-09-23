@@ -34,6 +34,7 @@ export interface CustomLocalAgentInput {
 }
 
 export interface AgentConfig {
+  followDefaultModel?: boolean
   permissions?: AgentPermissions
   /** Account ownership used for shared group execution. */
   ownerId?: string
@@ -101,6 +102,7 @@ export interface BuiltInAgentManifest {
 }
 
 export interface Topic {
+  contextReset?: { id: string; at: number }
   id: string
   title: string
   createdAt: number
@@ -161,6 +163,8 @@ export interface MessageDeliveryReply {
 }
 
 export interface MessageDelivery {
+  kind?: 'group-invitation'
+  status?: string
   id: string
   recipientId: string
   recipientName: string
@@ -232,6 +236,7 @@ export interface EmailConnectionTestResult {
 }
 
 export interface ChatMessage {
+  contextVersion?: string
   /** Localizable application notice; user and agent text never carry this. */
   localization?: import('./groupText').GroupNotice
   socialTasks?: { id: string; agentId: string; agentName: string; status: string }[]
@@ -272,6 +277,7 @@ export interface MessageAction {
 }
 
 export interface PrivateMessage {
+  contextVersion?: string
   intent?: 'inform' | 'request'
   id: string
   conversationId: string
@@ -466,9 +472,10 @@ export interface CreateAgentInput {
 
 /** Provider/model bindings are resolved by the main process. Built-in cloud contacts
  * remain service-owned; custom selections are validated against saved providers. */
-export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model'>
+export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel'>
 
 export interface UpdateAgentInput {
+  followDefaultModel?: boolean
   customModel?: { providerId: string; model: string }
   cloudModel?: { model: string }
   permissions?: AgentPermissions
@@ -627,6 +634,7 @@ export interface DouchatApi {
   sendMessage: (conversationId: string, text: string, images?: MessageImageInput[]) => Promise<void>
   stopConversation: (conversationId: string) => Promise<void>
   clearConversation: (conversationId: string) => Promise<AppSnapshot>
+  resetConversationContext: (conversationId: string) => Promise<AppSnapshot>
   setEndpoint: (input: EndpointInput) => Promise<AppSnapshot>
   testEndpoint: (input: EndpointInput) => Promise<EndpointTestResult>
   createRoutine: (input: CreateRoutineInput) => Promise<AppSnapshot>

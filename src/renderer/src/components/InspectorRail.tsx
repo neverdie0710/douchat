@@ -48,10 +48,11 @@ export function InspectorRail({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [confirmClear, setConfirmClear] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState(conversation?.name ?? '')
   useEffect(() => {
-    setMemberQuery(''); setRecordsDialog(null); setQuery(''); setResults([]); setConfirmClear(false); setError('')
+    setMemberQuery(''); setRecordsDialog(null); setQuery(''); setResults([]); setConfirmClear(false); setConfirmReset(false); setError('')
     setEditingName(false); setNameDraft(conversation?.name ?? '')
   }, [conversation?.id])
   useEffect(() => { if (!editingName) setNameDraft(conversation?.name ?? '') }, [conversation?.name, editingName])
@@ -75,7 +76,7 @@ export function InspectorRail({
   }, [recordsDialog, query, conversation?.id, snapshot.messages])
   async function update(action: () => Promise<unknown>): Promise<boolean> {
     setBusy(true); setError('')
-    try { await action(); setConfirmClear(false); return true }
+    try { await action(); setConfirmClear(false); setConfirmReset(false); return true }
     catch { setError(t('Could not save changes')); return false }
     finally { setBusy(false) }
   }
@@ -143,7 +144,6 @@ export function InspectorRail({
               {conversation.type === 'group' && <button className="member-tile add" style={{ order: 10000 }} onClick={onRemoveMembers} aria-label={t('Remove group members')}><span className="member-add"><Minus size={26} strokeWidth={1.5} /></span><span>{t('Remove')}</span></button>}
             </div>}
             {conversation.type === 'group' && !memberQuery.trim() && <div className="group-conversation-details">
-              {conversation.socialRoom && <p className="shared-agent-response-hint">{t('Shared group agents respond only when explicitly mentioned or selected as a task recipient. Ordinary messages and @all do not start agent tasks.')}</p>}
               <section className="group-name-setting">
                 <h2>{t('Group chat name')}</h2>
                 {editingName ? <input
@@ -176,9 +176,19 @@ export function InspectorRail({
                 <label>{t('Mute notifications')}<button type="button" className="detail-switch" role="switch" aria-label={t('Mute notifications')} aria-checked={!!conversation.muted} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { muted: !conversation.muted }))} /></label>
                 <label>{t('Pin to top')}<button type="button" className="detail-switch" role="switch" aria-label={t('Pin to top')} aria-checked={!!conversation.pinned} disabled={busy} onClick={() => void update(() => window.douchat.setConversationPinned(conversation.id, !conversation.pinned))} /></label>
               </div>
-              {confirmClear ? <div className="detail-clear-confirm"><p>{t('Clear all messages in this chat? This cannot be undone.')}</p><button disabled={busy} onClick={() => setConfirmClear(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.clearConversation(conversation.id))}>{t('Clear chat history')}</button></div> : <button className="detail-clear" onClick={() => setConfirmClear(true)}>{t('Clear chat history')}</button>}
-              {error && <p role="alert">{t(error)}</p>}
             </div> : null}
+            {!memberQuery.trim() && <div className="detail-history-actions">
+              <div className="detail-history-action">
+                {confirmClear ? <div className="detail-clear-confirm"><p>{t('Clear all messages in this chat? This cannot be undone.')}</p><button disabled={busy} onClick={() => setConfirmClear(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.clearConversation(conversation.id))}>{t('Clear chat history')}</button></div> : <button className="detail-clear" disabled={busy} onClick={() => { setConfirmClear(true); setConfirmReset(false) }}>{t('Clear chat history')}</button>}
+              </div>
+              <div className="detail-history-action">
+                {confirmReset ? <div className="detail-clear-confirm"><p>{t(conversation.remoteRoomId
+                  ? 'Reset context for your future requests? Chat history will be kept. Other members will not be affected.'
+                  : 'Reset context? The current reply will stop and future replies will start fresh. Chat history will be kept.')}</p><button disabled={busy} onClick={() => setConfirmReset(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.resetConversationContext(conversation.id))}>{t('Reset context')}</button></div>
+                  : <button className="detail-clear" disabled={busy} onClick={() => { setConfirmReset(true); setConfirmClear(false) }}>{t('Reset context')}</button>}
+              </div>
+            </div>}
+            {error && <p role="alert">{t(error)}</p>}
 
           </section>
         )}

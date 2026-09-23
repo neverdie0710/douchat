@@ -1,5 +1,6 @@
 import { agentPermissions } from '../shared/agentPermissions'
-import { mentionedMembers } from '../shared/bot/mentions'
+import { addressesEveryone, mentionedMembers } from '../shared/bot/mentions'
+import { socialFollowUpTarget } from '../shared/socialFollowUp'
 import type { AgentConfig, MessageAttachment, MessageImageInput } from '../shared/types'
 import { randomUUID } from 'node:crypto'
 import type { DesktopAuth } from './desktopAuth'
@@ -33,9 +34,12 @@ export function privacySafeSocialSnapshot(snapshot: SocialSnapshot): SocialSnaps
   }
 }
 
-export function sharedGroupReplyTargets(content: string, agents: SocialAgent[], humans: { id: string; name: string }[] = []): string[] {
-  // Shared conversations are human-first. History, question marks and @all are
-  // not permission to start agents owned by this or any other account.
+export function sharedGroupReplyTargets(content: string, agents: SocialAgent[], humans: { id: string; name: string }[] = [], requesterId?: string): string[] {
+  if (addressesEveryone(content)) {
+    if (!requesterId || humans[0]?.id !== requesterId) throw new Error('Only the group owner can mention everyone.')
+    return agents.filter(agent => agent.ownerId === requesterId || agent.interactionHumans === 'allow' || agent.interactionHumans === 'ask').map(agent => agent.id)
+  }
+  // Explicit mentions take priority over any eligible follow-up recipient.
   const members = [...humans, ...agents]
   const addressed = mentionedMembers(content, members)
   const nameKey = (name: string) => name.normalize('NFKC').toLocaleLowerCase()
@@ -71,7 +75,7 @@ export class SocialClient {
   private inboxTimer?: ReturnType<typeof setTimeout>
   private syncing?: Promise<SocialSnapshot>
   private roomSync = new Map<string, { revision?: string; cursor: { time: string; id: string }; pending: Set<string>; checkedAt: number; auditedAt: number }>()
-  private pendingSends = new Map<string, { content: string; signature: string; id: string }>()
+  private pendingSends = new Map<string, { content: string; signature: string; id: string; agentIds: string[] }>()
   constructor(private url: string, private auth: DesktopAuth, private store: DouchatStore, private runtime: DouchatRuntime, private onInboxChanged: () => void = () => {}) {}
   private identity() {
     const state = this.auth.getState()
@@ -94,6 +98,12 @@ export class SocialClient {
     return payload.data as T
   }
   async snapshot(): Promise<SocialSnapshot> { return privacySafeSocialSnapshot(await this.request()) }
+  async resetConversationContext(conversationId: string): Promise<void> {
+    const identity = this.identity()
+    const conversation = this.store.accountConversations.find(item => item.id === conversationId)
+    if (!conversation?.remoteRoomId || conversation.ownerId !== identity.id) throw new Error('Chat not found')
+    await this.request({ action: 'reset-context', roomId: conversation.remoteRoomId }, identity)
+  }
   syncInbox(fresh = false, delivery?: InboxDelivery): Promise<SocialSnapshot> {
     if (this.syncing) return fresh || delivery
       ? this.syncing.catch(() => undefined).then(() => this.syncInbox())
@@ -210,15 +220,20 @@ export class SocialClient {
       return { name: image.name, mimeType: image.mimeType, base64: Buffer.from(image.data).toString('base64') }
     })
     const room = conversation.socialRoom
-    const agentIds = sharedGroupReplyTargets(content, room?.agents ?? [], room?.members ?? [])
+    const explicitIds = room?.kind !== 'group' && addressesEveryone(content) ? []
+      : sharedGroupReplyTargets(content, room?.agents ?? [], room?.members ?? [], identity.id)
+    const followUp = explicitIds.length ? undefined : socialFollowUpTarget(conversation, this.store.messagePage(conversationId, conversation.activeTopicId).messages, content)
+    const signature = JSON.stringify([content, images])
+    const key = `${identity.id}:${conversationId}`
+    let pending = this.pendingSends.get(key)
+    // A lost receipt must retry the same task even after optimistic insertion
+    // or a new group message changes the current follow-up context.
+    const agentIds = pending?.signature === signature ? pending.agentIds : explicitIds.length ? explicitIds : followUp ? [followUp.id] : []
     checkHumanAgentTargets(agentIds, room?.agents ?? [], identity.id)
     if (conversation.socialRoom && images.length) throw new Error("Images are not yet supported in shared group chats.")
     const agentId = agentIds[0]
-    const signature = JSON.stringify([content, images, agentIds])
-    const key = `${identity.id}:${conversationId}`
-    let pending = this.pendingSends.get(key)
     if (pending?.signature !== signature) {
-      pending = { content, signature, id: randomUUID() }
+      pending = { content, signature, id: randomUUID(), agentIds }
       this.pendingSends.set(key, pending)
     }
     const localId = `${conversationId}:${pending!.id}`
@@ -257,7 +272,13 @@ export class SocialClient {
       if (snapshot.userId !== identity.id) throw new Error('Chat account mismatch')
       const room = snapshot.rooms.find(item => item.id === input.roomId)
       if (!room) throw new Error('Chat not found')
-      const agentIds = input.agentId ? [input.agentId] : sharedGroupReplyTargets(input.content, room.agents, room.members)
+      const conversation = this.store.accountConversations.find(item => item.remoteRoomId === room.id)
+      const explicitIds = room.kind !== 'group' && addressesEveryone(input.content) ? [] : addressesEveryone(input.content) || !input.agentId
+        ? sharedGroupReplyTargets(input.content, room.agents, room.members, identity.id) : [input.agentId]
+      const followUp = conversation && !explicitIds.length ? socialFollowUpTarget(
+        { ...conversation, socialRoom: room }, this.store.messagePage(conversation.id, conversation.activeTopicId).messages, input.content
+      ) : undefined
+      const agentIds = explicitIds.length ? explicitIds : followUp ? [followUp.id] : []
       checkHumanAgentTargets(agentIds, room.agents, identity.id)
       return this.request({ ...input, agentId: agentIds[0], agentIds }, identity)
     }

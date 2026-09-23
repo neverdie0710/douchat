@@ -48,6 +48,15 @@ export function CustomModelSettings() {
   return <>
     <header className="settings-heading local-proxy-heading"><div><h1>{t("Models")}</h1><p>{t("Connect your model services to use when creating agents. Each provider handles billing.")}</p></div><button className="secondary-button" disabled={loading || busy} onClick={() => edit()}><Plus size={15} />{t("Add provider")}</button></header>
     {loading ? <p role="status">{t("Loading model settings…")}</p> : <>
+      {config.providers.length > 0 && <div className="field-row custom-default-model">
+        <label htmlFor="unified-default-model">{t('Default model')}</label>
+        <select id="unified-default-model" value={config.defaultModel} disabled={busy} onChange={event => void persist(config.providers, event.target.value)}>
+          {config.providers.flatMap(provider => provider.models.map(model => `${provider.id}/${model}`))
+            .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base', numeric: true }))
+            .map(model => <option key={model} value={model}>{model}</option>)}
+        </select>
+        <p className="settings-note">{t('Agents following the default will use this model for their next reply. Individually selected models stay unchanged.')}</p>
+      </div>}
       {!config.providers.length ? <div className="custom-model-empty"><strong>{t("No providers yet")}</strong><p>{t("Add a provider to create agents with your own models.")}</p><span>{t("Supports OpenAI Chat Completions and Anthropic Messages")}</span></div> : <div className="custom-model-table"><table><thead><tr><th>{t("Provider")}</th><th>{t("API URL")}</th><th>{t("Models")}</th><th>{t("Actions")}</th></tr></thead><tbody>{config.providers.map(p => <tr key={p.id}><td><strong>{p.name}</strong><small>{p.kind === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'}</small></td><td><code>{p.apiBase}</code></td><td>{p.models.length}</td><td><div className="custom-model-actions"><button className="icon-button" aria-label={tr('Edit {name}', { name: p.name })} onClick={() => edit(p)}><Pencil size={16} /></button><button className="icon-button" aria-label={tr('Delete {name}', { name: p.name })} disabled={busy} onClick={() => { if (window.confirm(tr('Remove {name}? Agents using these models will be unable to chat until reconfigured. Chat history will be kept.', { name: p.name }))) void persist(config.providers.filter(provider => provider.id !== p.id), config.defaultModel) }}><Trash2 size={16} /></button></div></td></tr>)}</tbody></table></div>}
     </>}
     {error && !draft && <p className="settings-error" role="alert">{t(error)}</p>}

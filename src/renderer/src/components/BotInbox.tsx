@@ -3,7 +3,14 @@ import { t, tr } from '../preferences'
 import {
   BellOff,
   Bot,
+  Check,
+  CheckCheck,
+  ChevronRight,
+  ListFilter,
   LoaderCircle,
+  Mail,
+  UserRound,
+  Users,
   UserPlus,
   MessageSquare,
   Pin,
@@ -24,6 +31,14 @@ interface ContextMenuState {
   y: number
 }
 
+const chatFilters = [
+  { id: 'all', label: 'All chats', icon: MessageSquare, empty: 'No chats yet' },
+  { id: 'unread', label: 'Unread', icon: Mail, empty: 'No unread chats' },
+  { id: 'direct', label: 'Direct chats', icon: UserRound, empty: 'No direct chats' },
+  { id: 'group', label: 'Group chats', icon: Users, empty: 'No group chats' }
+] as const
+type ChatFilter = typeof chatFilters[number]['id']
+
 export function BotInbox({
   snapshot,
   activeId,
@@ -36,6 +51,7 @@ export function BotInbox({
   onTogglePin,
   onDelete,
   onUpdate,
+  onMarkAllRead,
   onOpenWindow
 }: {
   snapshot: AppSnapshot
@@ -49,14 +65,25 @@ export function BotInbox({
   onTogglePin: (conversation: Conversation) => void
   onDelete: (conversation: Conversation) => void
   onUpdate: (conversation: Conversation, input: import('../../../shared/types').UpdateConversationInput) => void
+  onMarkAllRead: () => Promise<void>
   onOpenWindow: (conversation: Conversation) => void
 }): ReactElement {
   const [query, setQuery] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const [filter, setFilter] = useState<ChatFilter>('all')
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [markingRead, setMarkingRead] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [now, setNow] = useState(Date.now)
   const contextRef = useRef<HTMLDivElement>(null)
   const createRef = useRef<HTMLDivElement>(null)
+  const filterRef = useRef<HTMLDivElement>(null)
+  const filterButtonRef = useRef<HTMLButtonElement>(null)
+  const createButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (filterOpen) filterRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus()
+  }, [filterOpen])
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
@@ -64,16 +91,23 @@ export function BotInbox({
   }, [])
 
   useEffect(() => {
-    if (!createOpen && !contextMenu) return
+    if (!createOpen && !contextMenu && !filterOpen) return
     const close = (event: MouseEvent): void => {
       const target = event.target as Node
       if (createOpen && !createRef.current?.contains(target)) setCreateOpen(false)
+      if (filterOpen && !filterRef.current?.contains(target)) setFilterOpen(false)
       if (!contextRef.current?.contains(target)) setContextMenu(null)
     }
     const escape = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
-      setCreateOpen(false)
-      setContextMenu(null)
+      setFilterOpen(false)
+      if (filterOpen) {
+        filterButtonRef.current?.focus()
+      } else {
+        setCreateOpen(false)
+        setContextMenu(null)
+        if (createOpen) createButtonRef.current?.focus()
+      }
     }
     window.addEventListener('mousedown', close)
     window.addEventListener('keydown', escape)
@@ -81,7 +115,7 @@ export function BotInbox({
       window.removeEventListener('mousedown', close)
       window.removeEventListener('keydown', escape)
     }
-  }, [createOpen, contextMenu])
+  }, [createOpen, contextMenu, filterOpen])
 
   const messagesByConversation = useMemo(() => {
     const map = new Map<string, ChatMessage[]>()
@@ -117,10 +151,20 @@ export function BotInbox({
     const needle = query.trim().toLowerCase()
     return ordered.filter((conversation) => {
       if (conversation.hidden && !needle) return false
+      if (filter === 'unread' && !conversation.manuallyUnread && conversation.unread <= 0) return false
+      if ((filter === 'direct' || filter === 'group') && conversation.type !== filter) return false
       const displayName = conversationDisplayName(conversation, snapshot.agents)
       return !needle || `${conversation.name} ${displayName}`.toLowerCase().includes(needle)
     })
-  }, [ordered, query, snapshot.agents, document.documentElement.lang])
+  }, [ordered, query, filter, snapshot.agents, document.documentElement.lang])
+
+  const selectedFilter = chatFilters.find((item) => item.id === filter)!
+  const hasUnread = snapshot.conversations.some((conversation) => conversation.manuallyUnread || conversation.unread > 0)
+  const closeFilter = (): void => {
+    setFilterOpen(false)
+    setCreateOpen(false)
+    createButtonRef.current?.focus()
+  }
 
   const pinned = filtered.filter((conversation) => conversation.pinned)
   const rest = filtered.filter((conversation) => !conversation.pinned)
@@ -156,6 +200,8 @@ export function BotInbox({
         onClick={() => onSelect(conversation.id)}
         onContextMenu={(event) => {
           event.preventDefault()
+          setFilterOpen(false)
+          setCreateOpen(false)
           setContextMenu({
             id: conversation.id,
             x: Math.min(event.clientX, window.innerWidth - 180),
@@ -187,23 +233,31 @@ export function BotInbox({
     <aside className="sidebar messenger-inbox">
       <SidebarResizer />
       <div className="sidebar-titlebar window-drag">
-      <div className="search-box no-drag">
-        <Search size={15} />
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} />
-        {query && (
-          <button onClick={() => setQuery('')} aria-label={t('Clear search')}>
-            <X size={13} />
-          </button>
-        )}
-      </div>
-
+        <div className="search-box no-drag">
+          <Search size={15} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} aria-label={t('Search')} />
+          {query && (
+            <button onClick={() => setQuery('')} aria-label={t('Clear search')}>
+              <X size={13} />
+            </button>
+          )}
+        </div>
         <div className="sidebar-titlebar-actions no-drag">
           <div className="menu-anchor" ref={createRef}>
-            <button className="sidebar-add" onClick={() => setCreateOpen((open) => !open)} aria-label={t('New chat')}>
+            <button ref={createButtonRef} className="sidebar-add" onClick={() => { setCreateOpen((open) => !open); setFilterOpen(false); setContextMenu(null) }} aria-label={t('New chat')} aria-haspopup="menu" aria-expanded={createOpen}>
               <CirclePlus size={21} strokeWidth={1.7} />
             </button>
             {createOpen && (
-              <div className="dropdown-menu inbox-create-menu" role="menu">
+              <div className="dropdown-menu inbox-create-menu" role="menu" onKeyDown={(event) => {
+                if ((event.target as HTMLElement).closest('.inbox-filter-menu')) return
+                if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+                event.preventDefault()
+                const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(':scope > button, :scope > .inbox-filter-anchor > button')]
+                const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                  : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+                buttons[next]?.focus()
+              }}>
                 <button role="menuitem" onClick={() => { setCreateOpen(false); onCreateGroup() }}>
                   <MessageSquare size={14} /><span>{t('Start chat')}</span>
                 </button>
@@ -213,18 +267,71 @@ export function BotInbox({
                 <button role="menuitem" onClick={() => { setCreateOpen(false); onAddFriend() }}>
                   <UserPlus size={14} /><span>{t('Add friend')}</span>
                 </button>
+                <div className="dropdown-separator" role="separator" />
+                <div className="inbox-filter-anchor" ref={filterRef}
+                  onMouseEnter={() => setFilterOpen(true)} onMouseLeave={() => setFilterOpen(false)} onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFilterOpen(false)
+                }}>
+                  <button ref={filterButtonRef} role="menuitem" className={`inbox-filter-trigger ${filter !== 'all' ? 'active' : ''}`}
+                    aria-label={tr('Filter chats: {filter}', { filter: t(selectedFilter.label) })}
+                    title={t(selectedFilter.label)} aria-haspopup="menu" aria-expanded={filterOpen}
+                    onClick={() => setFilterOpen(true)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'ArrowRight') return
+                      event.preventDefault()
+                      setFilterOpen(true)
+                    }}>
+                    <ListFilter size={14} /><span>{t('Filter chats')}</span><ChevronRight size={14} className="submenu-arrow" />
+                  </button>
+                  {filterOpen && (
+                    <div className="dropdown-menu inbox-filter-menu" role="menu" aria-label={t('Filter chats')}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowLeft') {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          setFilterOpen(false)
+                          filterButtonRef.current?.focus()
+                          return
+                        }
+                        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+                        event.preventDefault()
+                        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+                        const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+                        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+                        buttons[next]?.focus()
+                      }}>
+                      {chatFilters.map(({ id, label, icon: Icon }) => (
+                        <button key={id} role="menuitemradio" aria-checked={filter === id}
+                          onClick={() => { setFilter(id); closeFilter() }}>
+                          <Icon size={17} /><span>{t(label)}</span>
+                          {filter === id && <Check size={16} className="menu-check" />}
+                        </button>
+                      ))}
+                      <div className="dropdown-separator" role="separator" />
+                      <button role="menuitem" disabled={!hasUnread || markingRead} onClick={async () => {
+                        setMarkingRead(true)
+                        closeFilter()
+                        try { await onMarkAllRead() } finally { setMarkingRead(false) }
+                      }}>
+                        <CheckCheck size={17} /><span>{t('Mark all as read')}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
       </div>
 
+
       <nav className="conversation-list" aria-label={t('Chats')}>
         {pinned.map(row)}
         {rest.map(row)}
         {!filtered.length && (
           <p className="empty-search">
-            {query.trim() ? tr('No chats match “{query}”.', { query: query.trim() }) : t('No chats yet')}
+            {query.trim() ? tr('No chats match “{query}”.', { query: query.trim() }) : t(selectedFilter.empty)}
           </p>
         )}
       </nav>
