@@ -26,14 +26,14 @@ export class AgentPermissionBroker {
   cancelAgent(id: string): void {
     for (const entry of this.pending.values()) if (entry.request.agentId === id) entry.finish('cancelled')
   }
-  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details'>, signal?: AbortSignal): Promise<void> {
+  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details' | 'context'>, signal?: AbortSignal, forceAsk = false): Promise<void> {
     signal?.throwIfAborted()
     if (!config.ownerId || config.ownerId !== this.currentOwner()) throw new Error('Agent account changed')
     if (input.details.length > 64000) throw new Error('Operation is too large to review; split it into smaller requests')
     const policy = agentPermissions(config.permissions)
     const rule = input.capability === 'groupHumans' || input.capability === 'groupAgents' ? policy[input.capability] : policy.sensitive[input.capability]
     if (rule === 'deny') throw new Error('The owner has disabled this permission')
-    if (rule === 'allow') return
+    if (rule === 'allow' && !forceAsk) return
     if (this.pending.size >= 20) throw new Error('Too many permission requests')
     const result = await new Promise<'allowed' | 'declined' | 'expired' | 'cancelled'>((resolve) => {
       const id = randomUUID()

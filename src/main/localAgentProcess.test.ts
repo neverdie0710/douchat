@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentConfig } from '../shared/types'
-import { runLocalAgent } from './localAgentRuntime'
+import { runLocalAgent, disposeLocalAgentSessions } from './localAgentRuntime'
 import { validateLocalAgent } from './localAgents'
 vi.mock('./localAgents', () => ({ validateLocalAgent: vi.fn() }))
 vi.mock('./shellPath', () => ({ spawnEnvironment: async () => ({ ...process.env, ANTHROPIC_API_KEY: 'test-key' }) }))
@@ -42,6 +42,18 @@ describe('local CLI process lifecycle', () => {
   })
   it('also retries when Claude reports the auth conflict in a successful JSON process response', async () => {
     await expect(runLocalAgent(config, 'auth-conflict-json')).resolves.toEqual({ text: 'account-login', images: [] })
+  })
+  it('disposes one-shot processes on agent removal even without a caller signal', async () => {
+    let ready!: () => void
+    const started = new Promise<void>(resolve => { ready = resolve })
+    const work = runLocalAgent(config, 'wait', undefined, [], { onProgress: progress => {
+      if (progress.phase === 'ready') ready()
+    } })
+    const stopped = expect(work).rejects.toThrow('Stopped')
+    await started
+    disposeLocalAgentSessions(config.id)
+    await stopped
+    expect((await runLocalAgent(config, 'hello')).text).toBe('hello')
   })
   it('stops a running child process', async () => {
     const abort = new AbortController()

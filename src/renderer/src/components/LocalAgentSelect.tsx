@@ -19,7 +19,7 @@ export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAge
     option?.focus({ preventScroll: true })
     return () => doc.removeEventListener('pointerdown', dismiss)
   }, [open])
-  const icon = (agent: LocalAgent) => <span className="agent-select-logo" data-agent={agent.id}>{agentIcons[agent.id] ? <img src={agentIcons[agent.id]} alt="" /> : <Bot size={18} />}</span>
+  const icon = (agent: LocalAgent) => <span className="agent-select-logo" data-agent={agent.id}>{(agent.avatar || agentIcons[agent.id]) ? <img src={agent.avatar || agentIcons[agent.id]} alt="" /> : <Bot size={18} />}</span>
   return <div className="agent-select" ref={root} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }} onKeyDown={(event) => {
     if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus({ preventScroll: true }) }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {

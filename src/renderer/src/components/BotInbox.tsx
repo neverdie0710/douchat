@@ -235,7 +235,7 @@ export function BotInbox({
       <div className="sidebar-titlebar window-drag">
         <div className="search-box no-drag">
           <Search size={15} />
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} aria-label={t('Search')} />
+          <input data-app-search aria-keyshortcuts="Meta+F Control+F" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t('Search')} aria-label={t('Search')} />
           {query && (
             <button onClick={() => setQuery('')} aria-label={t('Clear search')}>
               <X size={13} />

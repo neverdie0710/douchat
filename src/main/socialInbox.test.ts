@@ -43,6 +43,34 @@ function server(messages: SocialMessage[] = [], sharedRoom = room) {
   return { messages, fetcher, loseReceipt: () => { failAfterDelivery = true } }
 }
 
+it('saves a group roster without waiting for message sync or letting an older poll overwrite it', async () => {
+  const alice = account('alice')
+  const sharedRoom: SocialRoom = { ...room, id: 'team', kind: 'group', name: 'Before' }
+  alice.store.syncFriendConversation('alice', sharedRoom, [])
+  let release!: () => void
+  let started!: () => void
+  const entered = new Promise<void>(resolve => { started = resolve })
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', friendships: [], rooms: [sharedRoom] } })
+    const input = JSON.parse(String(options.body))
+    if (input.action === 'messages') { started(); await pending; return Response.json({ data: { messages: [] } }) }
+    if (input.action === 'rename-room') sharedRoom.name = input.name
+    return Response.json({ data: {} })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const polling = alice.client.syncInbox()
+  await entered
+  try {
+    await alice.client.action({ action: 'rename-room', roomId: 'team', name: 'After' })
+    expect(alice.store.accountConversations.find(item => item.remoteRoomId === 'team')?.name).toBe('After')
+  } finally { release(); await polling }
+  expect(alice.store.accountConversations.find(item => item.remoteRoomId === 'team')?.name).toBe('After')
+  expect(fetcher.mock.calls.filter(([, options]) => options?.body && JSON.parse(String(options.body)).action === 'messages')).toHaveLength(1)
+  expect(fetcher.mock.calls.filter(([, options]) => !options?.body)).toHaveLength(1)
+  alice.store.close()
+})
+
 it('delivers text and images into the other account’s standard inbox without touching a model', async () => {
   const remote = server()
   const alice = account('alice'), bob = account('bob')

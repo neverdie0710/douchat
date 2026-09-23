@@ -1,3 +1,4 @@
+import { appendLocalAgentArguments } from '../shared/localAgentArguments'
 import { localModelId, withLocalModel } from '../shared/localModels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
@@ -9,6 +10,8 @@ export interface LocalProgress {
   detail?: string
 }
 export type ProgressListener = (progress: LocalProgress) => void
+export interface LocalToolApproval { message: string; details: string }
+export type LocalApprovalHandler = (request: LocalToolApproval, signal: AbortSignal) => Promise<void>
 
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
@@ -39,6 +42,9 @@ export class LocalAgentConnection {
   private failure?: Error
   private turnCount = 0
   private lastEvent = Date.now()
+  private approvalHandler?: LocalApprovalHandler
+  private activeTurnId?: string
+  private approvals = new Map<string | number, AbortController>()
   private readonly closedPromise: Promise<void>
   private resolveClosed!: () => void
 
@@ -49,13 +55,15 @@ export class LocalAgentConnection {
   get hasHistory(): boolean { return this.turnCount > 0 }
   get thread(): string | undefined { return this.threadId }
 
-  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false): Promise<void> {
+  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false, resume?: { thread?: string; remember: (thread?: string) => void }, toolApprovals = false, extraArgs: string[] = []): Promise<void> {
     const command = await executableCommand(path)
     if (this.failure) throw this.failure
     const args = this.kind === 'codex'
       ? ['app-server']
-      : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence', '--allowedTools', 'WebSearch,WebFetch', '--permission-mode', 'dontAsk']
-    this.child = spawn(command.file, [...command.prefix, ...(this.kind === 'claude' ? withLocalModel('claude', args, model) : args)], {
+      : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(resume ? resume.thread ? ['--resume', resume.thread] : [] : ['--no-session-persistence']), '--allowedTools', 'WebSearch,WebFetch', '--permission-mode', 'dontAsk']
+    this.rememberThread = resume?.remember
+    if (this.kind === 'claude' && resume?.thread) { this.threadId = resume.thread; this.turnCount = 1 }
+    this.child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', args, model) : args, extraArgs)], {
       cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout.setEncoding('utf8')
@@ -73,14 +81,66 @@ export class LocalAgentConnection {
       await this.request('initialize', { clientInfo: { name: 'douchat', version: '1.0.0' }, capabilities: { experimentalApi: true } })
       this.write({ method: 'initialized' })
       if (discoveryOnly) return
-      const response = await this.request('thread/start', {
+      const params = {
         ...(localModelId(model) ? { model: localModelId(model) } : {}),
-        cwd, approvalPolicy: 'never', sandbox: 'workspace-write', ephemeral: true,
+        cwd, approvalPolicy: toolApprovals
+          ? { granular: { sandbox_approval: false, rules: false, skill_approval: false, request_permissions: false, mcp_elicitations: true } }
+          : 'never', sandbox: 'workspace-write',
         config: { 'sandbox_workspace_write.network_access': true, web_search: 'live' }
-      })
+      }
+      let response: any
+      if (resume?.thread) {
+        try {
+          response = await this.request('thread/resume', { ...params, threadId: resume.thread })
+          this.turnCount = response.thread?.turns?.length ? 1 : 0
+        } catch (error) {
+          if (!/not found|no rollout|does not exist/i.test(String(error))) throw error
+          resume.remember(undefined)
+        }
+      }
+      response ??= await this.request('thread/start', { ...params, ephemeral: !resume })
       if (typeof response.thread?.id !== 'string') throw new Error('Codex did not return a thread ID')
       this.threadId = response.thread.id
+      resume?.remember(this.threadId)
     }
+  }
+
+  private rememberThread?: (thread?: string) => void
+
+  private async approveComputerUse(packet: Packet): Promise<void> {
+    if (this.approvals.has(packet.id)) { this.close(new Error('Duplicate local agent approval request')); return }
+    const p = packet.params ?? {}
+    const schema = p.requestedSchema
+    // Only the observed native Computer Use confirmation contract is supported.
+    // Forms requiring input, URL flows and verification challenges need their own UI.
+    const supported = p.serverName === 'cua_repl' && p.mode === 'form'
+      && p._meta?.connector_id === 'computer-use' && p._meta?.codex_approval_kind === 'mcp_tool_call'
+      && schema?.type === 'object' && schema.properties && typeof schema.properties === 'object'
+      && !Array.isArray(schema.properties) && Object.keys(schema.properties).length === 0
+      && (!schema.required || (Array.isArray(schema.required) && schema.required.length === 0))
+      && typeof p.message === 'string' && p.message.trim() && p.message.length <= 4000
+      && p.threadId === this.threadId && p.turnId === this.activeTurnId && this.activeTurnId
+    const handler = this.approvalHandler
+    if (!supported || !handler) {
+      this.write({ id: packet.id, result: { action: 'decline', content: null, _meta: null } })
+      return
+    }
+    const abort = new AbortController()
+    this.approvals.set(packet.id, abort)
+    let allowed = false
+    try {
+      await handler({ message: p.message, details: JSON.stringify({ tool: p._meta.tool_name, arguments: p._meta.tool_params ?? {} }, null, 2) }, abort.signal)
+      allowed = true
+    } catch { /* Denial, expiry and cancellation never grant access. */ }
+    if (!abort.signal.aborted && !this.failure) {
+      this.write({ id: packet.id, result: { action: allowed ? 'accept' : 'decline', content: allowed ? {} : null, _meta: null } })
+    }
+    if (this.approvals.get(packet.id) === abort) this.approvals.delete(packet.id)
+  }
+
+  private cancelApprovals(): void {
+    for (const abort of this.approvals.values()) abort.abort()
+    this.approvals.clear()
   }
 
   async models(): Promise<Array<{ id: string; name: string }>> {
@@ -146,17 +206,30 @@ export class LocalAgentConnection {
           else pending.resolve(packet.result)
         }
       } else if (packet.id !== undefined && packet.method) {
-        this.write({ id: packet.id, error: { code: -32601, message: 'Interactive requests are not supported in Douchat.' } })
+        if (packet.method === 'mcpServer/elicitation/request') void this.approveComputerUse(packet).catch(error => this.close(error))
+        else this.write({ id: packet.id, error: { code: -32601, message: 'Interactive requests are not supported in Douchat.' } })
       } else if (packet.type === 'control_request') {
         this.write({ type: 'control_response', response: { subtype: 'error', request_id: packet.request_id, error: 'Interactive requests are not supported in Douchat' } })
-      } else this.listener?.(packet)
+      } else {
+        if (packet.method === 'serverRequest/resolved') {
+          const id = packet.params?.requestId
+          this.approvals.get(id)?.abort()
+          this.approvals.delete(id)
+        }
+        if (packet.params?.threadId === this.threadId) {
+          if (packet.method === 'turn/started') this.activeTurnId = packet.params.turn?.id
+          if (packet.method === 'turn/completed') { this.activeTurnId = undefined; this.cancelApprovals() }
+        }
+        this.listener?.(packet)
+      }
     }
   }
 
-  async turn(prompt: string, signal: AbortSignal | undefined, progress?: ProgressListener): Promise<string> {
+  async turn(prompt: string, signal: AbortSignal | undefined, progress?: ProgressListener, onApproval?: LocalApprovalHandler): Promise<string> {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
     if (this.listener) throw new Error('This local agent session is already working')
+    this.approvalHandler = onApproval
     const started = Date.now()
     this.lastEvent = started
     let detail: string | undefined
@@ -176,6 +249,7 @@ export class LocalAgentConnection {
         this.failTurn = reject
         this.listener = (packet) => {
           if (this.kind === 'claude') {
+            if (packet.type === 'system' && packet.subtype === 'init' && typeof packet.session_id === 'string') { this.threadId = packet.session_id; this.rememberThread?.(this.threadId) }
             if (packet.type === 'system' && packet.subtype === 'init') progress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
             if (packet.type === 'assistant') {
               for (const item of packet.message?.content ?? []) {
@@ -223,6 +297,9 @@ export class LocalAgentConnection {
         }
       })
     } finally {
+      this.cancelApprovals()
+      this.approvalHandler = undefined
+      this.activeTurnId = undefined
       clearInterval(heartbeat)
       signal?.removeEventListener('abort', abort)
       this.listener = undefined
@@ -233,6 +310,7 @@ export class LocalAgentConnection {
   close(error = new Error('Local agent session closed')): void {
     if (this.failure) return
     this.failure = error
+    this.cancelApprovals()
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
     this.pending.clear()
     this.failTurn?.(error)

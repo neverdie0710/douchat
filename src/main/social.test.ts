@@ -8,7 +8,7 @@ function setup() {
   let userId = 'alice'
   const auth = { getState: () => ({ status: 'signed-in', user: { id: userId } }), getAccessToken: () => `token-${userId}`, invalidateSession: vi.fn() } as unknown as DesktopAuth
   const store = { agents: [{ id: 'local', ownerId: 'alice' }], socialTaskOutbox: () => [], saveSocialTaskResult: vi.fn(), removeSocialTaskResult: vi.fn(), claimSocialAgent: vi.fn(() => ({ id: 'local', name: 'Owned agent', ownerId: 'alice' })), agent: vi.fn(() => ({ ownerId: 'alice' })) } as unknown as DouchatStore
-  const runtime = { executeSocialTask: vi.fn(async () => ({ text: 'Done' })) } as unknown as DouchatRuntime
+  const runtime = { snapshot: () => ({ permissionRequests: [] }), executeSocialTask: vi.fn(async () => ({ text: 'Done' })) } as unknown as DouchatRuntime
   const client = new SocialClient('https://example.com', auth, store, runtime)
   return { client, store, runtime, switchAccount: () => { userId = 'bob' } }
 }
@@ -18,7 +18,8 @@ describe('social IPC and task execution', () => {
     const { client, store } = setup()
     const conversation = { id: 'local-group', type: 'group', name: 'Team', agentIds: [] as string[], remoteRoomId: undefined as string | undefined }
     Object.defineProperty(store, 'accountConversations', { value: [conversation] })
-    const promote = vi.spyOn(client, 'syncInbox').mockResolvedValue({ userId: 'alice', friendships: [], rooms: [] })
+    vi.spyOn(client as any, 'refreshRoom').mockResolvedValue(undefined)
+    vi.spyOn(client, 'syncInbox').mockResolvedValue({ userId: 'alice', friendships: [], rooms: [] })
     Object.assign(store, { linkSharedGroup: (_id: string, roomId: string) => { conversation.remoteRoomId = roomId } })
     Object.assign((client as unknown as { runtime: object }).runtime, { snapshot: () => ({ activity: [] }) })
     const calls: Record<string, unknown>[] = []
@@ -31,7 +32,7 @@ describe('social IPC and task execution', () => {
     expect(calls.map((body) => body.action)).toEqual(['create-room', 'group-invite'])
     expect(calls[0].friendIds).toEqual([])
     expect(result.invite?.url).toBe(`https://example.com/join-group?room=shared-room&token=${'a'.repeat(43)}`)
-    expect(promote).toHaveBeenCalled()
+    expect((client as any).refreshRoom).toHaveBeenCalledWith('shared-room')
   })
 
   it('keeps email addresses only for the signed-in user and accepted friends', () => {
@@ -83,6 +84,42 @@ describe('social IPC and task execution', () => {
     expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }))
     const completed = JSON.parse(vi.mocked(fetch).mock.calls.find((call) => call[1]?.body && JSON.parse(call[1].body as string).action === 'complete')![1]!.body as string)
     expect(completed.failed).toBe(false)
+  })
+  it('executes shared tasks concurrently and does not publish crash placeholders for active work', async () => {
+    vi.useFakeTimers()
+    const { client, store, runtime } = setup()
+    const release = new Map<string, () => void>()
+    const outbox = new Map<string, any>()
+    Object.assign(store, { socialTaskOutbox: () => [...outbox.values()] })
+    vi.mocked(store.saveSocialTaskResult).mockImplementation(result => { outbox.set(result.id, result) })
+    vi.mocked(store.removeSocialTaskResult).mockImplementation(id => { outbox.delete(id) })
+    vi.mocked(runtime.executeSocialTask).mockImplementation(async (_owner, _agent, id) => {
+      await new Promise<void>(resolve => release.set(id, resolve))
+      return { text: id }
+    })
+    Object.assign(runtime, { snapshot: () => ({ permissionRequests: [] }) })
+    vi.spyOn(client, 'syncInbox').mockResolvedValue({ userId: 'alice', rooms: [], friendships: [] })
+    const completed: any[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+      const body = JSON.parse(options.body)
+      if (body.action === 'complete') completed.push(body)
+      const data = body.action === 'tasks' ? { tasks: ['one', 'two'].map(id => ({ id, localId: 'local' })) }
+        : body.action === 'claim' ? { task: { id: body.id, claim: 'secret', ownerId: 'alice', authorId: 'alice', agent: { localId: 'local', ownerId: 'alice' }, content: 'run' } } : {}
+      return Response.json({ data })
+    }))
+    try {
+      client.start()
+      await vi.waitFor(() => expect(release.size).toBe(2))
+      await vi.advanceTimersByTimeAsync(2600)
+      expect(runtime.executeSocialTask).toHaveBeenCalledTimes(2)
+      expect(completed).toEqual([])
+      release.get('two')!()
+      await vi.waitFor(() => expect(completed.map(item => item.id)).toEqual(['two']))
+      expect(completed[0].failed).toBe(false)
+      release.get('one')!()
+      await vi.waitFor(() => expect(completed.map(item => item.id)).toEqual(['two', 'one']))
+      expect(outbox.size).toBe(0)
+    } finally { release.forEach(resolve => resolve()); client.stop() }
   })
   it('leaves tasks on another device queued', async () => {
     const { client, store, runtime } = setup()

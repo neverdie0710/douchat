@@ -1,3 +1,4 @@
+import { appendLocalAgentArguments } from '../shared/localAgentArguments'
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,13 +8,19 @@ import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 import { executableCommand } from './windowsCommand'
 import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
-import { localAgentExecutable } from './localAgentRuntime'
+import { acquireLocalProcessSlot, localAgentExecutable } from './localAgentRuntime'
 
 export function parseLocalModels(id: string, output: string): LocalModel[] {
   const clean = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
   if (id === 'openclaw') {
     const data = JSON.parse(clean)
     return (data.models ?? []).filter((m: any) => typeof m.key === 'string').map((m: any) => ({ id: m.key, name: m.name || m.key }))
+  }
+  if (id === 'omp') {
+    const data = JSON.parse(clean)
+    return (data.models ?? [])
+      .filter((m: any) => typeof m.provider === 'string' && m.provider && typeof m.id === 'string' && m.id)
+      .map((m: any) => ({ id: `${m.provider}/${m.id}`, name: m.name || m.id }))
   }
   const models: LocalModel[] = []
   for (const line of clean.split(/\r?\n/)) {
@@ -30,36 +37,68 @@ export function parseLocalModels(id: string, output: string): LocalModel[] {
   return [...new Map(models.map(model => [model.id, model])).values()]
 }
 
-export async function listLocalAgentModels(id: string): Promise<LocalModelList> {
+const modelRequests = new Map<string, Promise<LocalModelList>>()
+const modelCancellations = new Map<string, AbortController>()
+export function cancelLocalModelQueries(): void {
+  for (const abort of modelCancellations.values()) abort.abort(new Error('Model discovery stopped'))
+  modelCancellations.clear()
+  modelRequests.clear()
+}
+export function listLocalAgentModels(id: string): Promise<LocalModelList> {
+  const existing = modelRequests.get(id)
+  if (existing) return existing
+  const abort = new AbortController()
+  modelCancellations.set(id, abort)
+  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(15000)])
+  const work = (async () => {
+    const release = await acquireLocalProcessSlot(signal)
+    try { return await discoverLocalAgentModels(id, signal) } finally { release() }
+  })().finally(() => {
+    if (modelRequests.get(id) === work) modelRequests.delete(id)
+    if (modelCancellations.get(id) === abort) modelCancellations.delete(id)
+  })
+  modelRequests.set(id, work)
+  return work
+}
+
+async function discoverLocalAgentModels(id: string, signal: AbortSignal): Promise<LocalModelList> {
   if (!configurableLocalAgents.includes(id)) return { models: [], source: 'manual', configurable: false }
   const agent = await validateLocalAgent(id)
   // These CLIs accept a model override but don't expose a stable non-interactive catalog.
-  if (!['codex', 'claude', 'opencode', 'cursor', 'grok', 'openclaw'].includes(id)) return { models: [], source: 'manual', configurable: true }
+  if (!['codex', 'claude', 'opencode', 'cursor', 'grok', 'openclaw', 'omp'].includes(id)) return { models: [], source: 'manual', configurable: true }
   const env = await spawnEnvironment()
   const cwd = await mkdtemp(join(tmpdir(), 'douchat-models-'))
   try {
-    const executable = await localAgentExecutable(id, agent.path!)
+    const executable = id === 'grok' && agent.command !== 'grok' ? agent.path! : await localAgentExecutable(id, agent.path!)
+    signal.throwIfAborted()
     if (id === 'codex' || id === 'claude') {
       const connection = new LocalAgentConnection(id)
+      const cancel = () => connection.close(new Error('Model discovery stopped'))
+      signal.addEventListener('abort', cancel, { once: true })
       const timer = setTimeout(() => connection.close(new Error('Model discovery timed out')), 15000)
       try {
-        await connection.connect(executable, cwd, env, undefined, true)
+        await connection.connect(executable, cwd, env, undefined, true, undefined, false, agent.args)
         return { models: await connection.models(), source: 'agent', configurable: true }
-      } finally { clearTimeout(timer); connection.close(); await connection.disposed() }
+      } finally { signal.removeEventListener('abort', cancel); clearTimeout(timer); connection.close(); await connection.disposed() }
     }
     const command = await executableCommand(executable)
-    const args = id === 'openclaw' ? ['models', 'list', '--json'] : ['models']
+    const args = id === 'openclaw' ? ['models', 'list', '--json'] : id === 'omp' ? ['models', '--json'] : ['models']
+    signal.throwIfAborted()
     const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...args], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+      const child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(args, agent.args)], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
       let stdout = ''
-      const timer = setTimeout(() => { killLocalProcess(child); reject(new Error('Model discovery timed out')) }, 15000)
+      let failure: Error | undefined
+      const stop = (error: Error): void => { failure = error; killLocalProcess(child) }
+      const cancel = () => stop(new Error('Model discovery stopped'))
+      signal.addEventListener('abort', cancel, { once: true })
+      const timer = setTimeout(() => stop(new Error('Model discovery timed out')), 15000)
       child.stdout.on('data', chunk => {
         stdout += chunk.toString()
-        if (stdout.length > 2_000_000) { killLocalProcess(child); reject(new Error('Model list is too large')) }
+        if (stdout.length > 2_000_000) stop(new Error('Model list is too large'))
       })
       child.stderr.resume()
-      child.on('error', error => { clearTimeout(timer); reject(error) })
-      child.on('close', code => { clearTimeout(timer); code === 0 ? resolve(stdout) : reject(new Error('Could not load models. Check the local agent login and configuration.')) })
+      child.on('error', error => { failure = error; killLocalProcess(child) })
+      child.on('close', code => { signal.removeEventListener('abort', cancel); clearTimeout(timer); killLocalProcess(child); failure ? reject(failure) : code === 0 ? resolve(stdout) : reject(new Error('Could not load models. Check the local agent login and configuration.')) })
       child.stdin.on('error', () => {})
       child.stdin.end()
     })

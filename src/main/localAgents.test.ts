@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, removeCustomLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { resolveExecutable } from './shellPath'
 vi.mock('./shellPath', () => ({ resolveExecutable: vi.fn() }))
 let registryDirectory = ''
@@ -63,6 +63,31 @@ describe('local agent discovery', () => {
     vi.mocked(resolveExecutable).mockResolvedValue('/local/bin/codex')
     await validateLocalAgent('codex')
     expect(resolveExecutable).toHaveBeenCalledExactlyOnceWith('codex')
+  })
+  it('persists builtin overrides without duplicating or changing its adapter', async () => {
+    await updateLocalAgent('codex', { name: 'Work Codex', command: '/tools/codex', args: ['--profile', 'work'], avatar: 'data:image/png;base64,YQ==' })
+    configureLocalAgentRegistry(registryDirectory)
+    vi.mocked(resolveExecutable).mockImplementation(async command => command)
+    const agent = await validateLocalAgent('codex')
+    expect(agent).toMatchObject({ id: 'codex', name: 'Work Codex', path: '/tools/codex', custom: undefined, args: ['--profile', 'work'], avatar: 'data:image/png;base64,YQ==' })
+    const all = await detectLocalAgents({ executable: async () => undefined, desktopApp: async () => undefined })
+    expect(all).toHaveLength(11)
+    await expect(removeCustomLocalAgent('codex')).rejects.toThrow('Invalid custom')
+  })
+  it('edits a custom command in place and preserves simultaneous registry writes', async () => {
+    await Promise.all([
+      addCustomLocalAgent({ name: 'First', command: 'first' }),
+      addCustomLocalAgent({ name: 'Second', command: 'second' })
+    ])
+    const scan = () => detectLocalAgents({ executable: async () => undefined, desktopApp: async () => undefined })
+    const first = (await scan()).find(item => item.name === 'First')!
+    await updateLocalAgent(first.id, { name: 'Renamed', command: '/new/path', args: ['--prompt', '{prompt}'] })
+    const all = await scan()
+    expect(all.filter(item => item.custom)).toHaveLength(2)
+    expect(all.find(item => item.id === first.id)).toMatchObject({ name: 'Renamed', command: '/new/path', args: ['--prompt', '{prompt}'] })
+    await expect(updateLocalAgent('unknown', { name: 'Bad', command: 'bad' })).rejects.toThrow('Unknown')
+    await expect(updateLocalAgent(first.id, { name: 'Bad', command: 'bad', args: ['bad\0arg'] })).rejects.toThrow('arguments')
+    await expect(updateLocalAgent(first.id, { name: 'Bad', command: 'bad', avatar: 'https://example.com/a.png' })).rejects.toThrow('avatar')
   })
   it('rejects stale installation state and unknown commands', async () => {
     await expect(validateLocalAgent('codex')).rejects.toThrow('not installed')

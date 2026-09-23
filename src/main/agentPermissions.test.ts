@@ -6,6 +6,18 @@ const config = { id: 'agent', ownerId: 'owner', name: 'Agent' } as AgentConfig
 const input = { requester: 'Friend', roomName: 'Group', capability: 'filesRead' as const, operation: 'read', details: '/private/file' }
 afterEach(() => vi.useRealTimers())
 describe('agent permission boundary', () => {
+  it('requires a fresh native-tool confirmation even with broad allow, while preserving deny', async () => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const permissions = agentPermissions()
+    permissions.sensitive.filesRead = 'allow'
+    const work = broker.authorize({ ...config, permissions }, input, undefined, true)
+    expect(broker.snapshot()).toHaveLength(1)
+    broker.resolve(broker.snapshot()[0].id, true)
+    await work
+    permissions.sensitive.filesRead = 'deny'
+    await expect(broker.authorize({ ...config, permissions }, input, undefined, true)).rejects.toThrow('disabled')
+    expect(broker.snapshot()).toHaveLength(0)
+  })
   it('defaults to social interaction with explicit approval for sensitive operations', () => {
     expect(agentPermissions()).toMatchObject({ groupHumans: 'allow', groupAgents: 'allow', sensitive: { filesRead: 'ask', localExecution: 'ask' } })
     expect(agentPermissions({ groupHumans: 'bogus', sensitive: { filesRead: true } })).toMatchObject({ groupHumans: 'deny', sensitive: { filesRead: 'deny' } })

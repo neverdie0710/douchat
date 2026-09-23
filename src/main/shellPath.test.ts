@@ -24,12 +24,14 @@ it('falls back to executable paths without loading model credentials when shell 
 
 it.skipIf(process.platform === 'win32')('passes Gemini shell configuration only to agent processes', async () => {
   resetShellPath()
-  Object.assign(shellValues, { GOOGLE_CLOUD_PROJECT: 'test-project', GOOGLE_CLOUD_LOCATION: 'test-region', GOOGLE_API_KEY: 'test-key' })
+  Object.assign(shellValues, { GOOGLE_CLOUD_PROJECT: 'test-project', GOOGLE_CLOUD_LOCATION: 'test-region', GOOGLE_API_KEY: 'test-key', NANOBANANA_API_KEY: 'test-image-key', NANOBANANA_MODEL: 'test-image-model' })
   try {
     const env = await spawnEnvironment()
     expect(env.GOOGLE_CLOUD_PROJECT).toBe('test-project')
     expect(env.GOOGLE_CLOUD_LOCATION).toBe('test-region')
     expect(env.GOOGLE_API_KEY).toBe('test-key')
+    expect(env.NANOBANANA_API_KEY).toBe('test-image-key')
+    expect(env.NANOBANANA_MODEL).toBe('test-image-model')
   } finally {
     for (const name of Object.keys(shellValues)) delete shellValues[name]
     resetShellPath()

@@ -54,6 +54,14 @@ describe('local agent output', () => {
     expect(() => localAgentText('opencode', '{"type":"error","error":{"data":{"message":"No model"}}}')).toThrow('No model')
     expect(() => localAgentText('openclaw', '{"ok":false,"status":"error","error":{"message":"Log in first"}}')).toThrow('Log in first')
   })
+  it('prioritizes the OpenClaw result error over unrelated startup warnings', () => {
+    const cause = 'No route-compatible authentication source is configured for openai.'
+    const warning = '[skills] Skill precedence collision: skill="skill-creator"'
+    expect(localAgentExitError({ id: 'openclaw', name: 'OpenClaw' }, 1,
+      JSON.stringify({ ok: false, status: 'error', error: { message: cause } }), warning).message
+    ).toBe(`OpenClaw: ${cause}\n${warning}`)
+    expect(localAgentExitError({ id: 'openclaw', name: 'OpenClaw' }, 1, 'not json', cause).message).toBe(`OpenClaw: ${cause}`)
+  })
   it('keeps useful structured stdout when a CLI exits non-zero', () => {
     expect(localAgentExitError(
       { id: 'claude', name: 'Claude Code' },
@@ -72,8 +80,8 @@ describe('local agent output', () => {
     expect(localAgentArgs('codex', 'Research', '/tmp/output')).toContain('sandbox_workspace_write.network_access=true')
     expect(localAgentArgs('codex', 'Research', '/tmp/output')).toContain('--json')
     expect(localAgentArgs('grok', 'Research', '/tmp/output')).toEqual(expect.arrayContaining([
-      '--output-format', 'json', '--permission-mode', 'dontAsk', '--sandbox', 'strict',
-      '--allow', 'Read', 'Grep', 'WebFetch', 'WebSearch'
+      '--output-format', 'streaming-json', '--permission-mode', 'dontAsk', '--sandbox', 'strict',
+      '--allow', 'Read', 'Grep', 'WebFetch', 'WebSearch', 'image_gen', 'image_edit'
     ]))
     expect(localAgentArgs('grok', 'Research', '/tmp/output')).not.toContain('--always-approve')
   })

@@ -4988,6 +4988,39 @@ html[data-platform='win32'] .messenger .app-rail {
 [data-theme='dark'] .messenger .workspace-header-actions button { color: var(--muted); }
 [data-theme='dark'] .messenger .workspace-header-actions button[aria-expanded='true'] { background: #35363b; }
 [data-theme='dark'] .messenger .message-bubble { color: var(--ink); }
+[data-theme='dark'] .messenger .message-bubble.has-error {
+  background: #402c2d;
+  color: #f2b8b0;
+}
+[data-theme='dark'] .messenger .bubble-error { color: #f2b8b0; }
+[data-theme='dark'] .messenger :is(.field-row > span, .field-row label > span, .two-fields label > span) {
+  color: #b6b7be;
+}
+[data-theme='dark'] .messenger :is(.field-row, .two-fields) :is(input, textarea) {
+  background: #28292e;
+  color: var(--ink);
+  border-color: #484a50;
+}
+[data-theme='dark'] .messenger :is(.field-row, .two-fields) :is(input, textarea)::placeholder {
+  color: var(--faint);
+}
+[data-theme='dark'] .messenger :is(.field-row, .two-fields) :is(input, textarea):focus {
+  border-color: var(--accent-600);
+  box-shadow: 0 0 0 3px rgba(128, 170, 255, .14);
+}
+[data-theme='dark'] .messenger .primary-button:not(:disabled) {
+  background: #3d6fc4;
+  color: #fff;
+}
+[data-theme='dark'] .messenger .primary-button:hover:not(:disabled) { background: #4d7bd2; }
+[data-theme='dark'] .messenger .primary-button:disabled {
+  background: #34353b;
+  color: #9597a1;
+  border-color: #414249;
+  box-shadow: none;
+  opacity: 1;
+  cursor: default;
+}
 [data-theme='dark'] .messenger .message-actions { border-color: rgba(255, 255, 255, .1); }
 [data-theme='dark'] .messenger :is(.message-action,.message-actions-toggle) { color: var(--muted); }
 [data-theme='dark'] .messenger .message-actions-toggle:hover { color: var(--ink); }
@@ -5197,7 +5230,9 @@ html[data-platform='win32'] .messenger .app-rail {
 .detail-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform 150ms; }
 .detail-switch[aria-checked='true'] { background: var(--accent-500); }
 .detail-switch[aria-checked='true']::after { transform: translateX(12px); }
-.detail-clear { width: 100%; padding: 22px 0; border: 0; color: #ff4d4f; background: none; font: inherit; cursor: pointer; }
+.detail-history-actions { font-size: calc(14px * var(--font-scale, .92)); font-weight: 400; }
+.detail-history-actions + .detail-history-actions { border-top: 1px solid var(--line); }
+.detail-clear { width: 100%; padding: 20px 0; border: 0; color: #ff4d4f; background: none; font: inherit; cursor: pointer; }
 .detail-history-action + .detail-history-action { border-top: 1px solid var(--line); }
 .detail-history-action .detail-clear:disabled { opacity: .45; cursor: default; }
 .detail-history-action .detail-clear-confirm { padding: 14px 0 20px; }
@@ -6686,3 +6721,28 @@ html.native-dialog-window,
   top: auto;
   bottom: -4px;
 }
+
+/* Local CLI settings use the same surfaces and controls in both themes. */
+.local-agent-heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.local-agent-editor { width: 100%; max-width: 540px; padding: 24px; color: var(--ink); background: var(--canvas); border: 1px solid var(--line); border-radius: 14px; box-sizing: border-box; }
+.local-agent-editor header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.local-agent-editor h2 { margin: 0; font-size: calc(20px * var(--font-scale, .92)); }
+.local-agent-editor fieldset { min-width: 0; padding: 0; margin: 0; border: 0; display: grid; gap: 14px; }
+.local-agent-editor label { display: grid; gap: 7px; font-size: calc(13px * var(--font-scale, .92)); font-weight: 500; }
+.local-agent-editor :is(input:not([type='file']), textarea) { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+.local-agent-editor textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, monospace; }
+.local-agent-editor :is(input, textarea):focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.local-agent-editor-avatar { display: flex; align-items: center; gap: 12px; }
+.local-agent-picture { position: relative; width: 64px; height: 64px; display: grid; place-items: center; padding: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 12px; cursor: pointer; }
+.local-agent-picture img { width: 100%; height: 100%; object-fit: contain; border-radius: 6px; }
+.local-agent-picture > svg:last-child { position: absolute; bottom: -3px; right: -3px; padding: 4px; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); box-sizing: content-box; }
+.local-agent-editor .settings-note { margin: 0; font-size: calc(12px * var(--font-scale, .92)); line-height: 1.6; }
+.local-agent-editor > .settings-note { margin-top: 16px; }
+.local-agent-editor .settings-error { overflow-wrap: anywhere; max-height: 140px; overflow-y: auto; white-space: pre-wrap; }
+.local-agent-test-result { color: var(--brand-ink); font-size: calc(13px * var(--font-scale, .92)); }
+.local-agent-editor footer { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 18px; margin-top: 20px; }
+.local-agent-editor footer > span { flex: 1; }
+.local-agent-editor footer .primary-button { padding: 9px 16px; }
+.local-agent-editor .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: calc(12px * var(--font-scale, .92)); white-space: nowrap; cursor: pointer; }
+.messenger .local-agent-editor .secondary-button:hover:not(:disabled) { background: var(--surface); border-color: var(--muted); }
+.local-agent-editor .secondary-button:disabled { opacity: .55; cursor: default; }

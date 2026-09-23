@@ -8,6 +8,7 @@ export interface SocialSnapshot { permissionsVersion?: number; syncVersion?: num
 export interface SocialMessage { parentMessageId?: string; id: string; roomId: string; authorId: string; authorName: string; content: string; images?: SocialImage[]; agentId?: string; agentName?: string; status: 'sent' | 'pending' | 'running' | 'succeeded' | 'failed'; reply?: string; replyImages?: SocialImage[]; createdAt: string }
 export interface GroupInvite { roomId: string; name: string; token: string; expiresAt: string; url: string }
 export type SocialAction =
+  | { action: 'leave-room'; roomId: string }
   | { action: 'group-invite'; conversationId: string; regenerate?: boolean }
   | { action: 'rename-room'; roomId: string; name: string }
   | { action: 'remove-members'; roomId: string; friendIds: string[]; agentIds: string[] }

@@ -327,6 +327,27 @@ describe('summarizeRuntimeError', () => {
     )
   })
 
+  it('explains OpenClaw authentication and migration failures without promoting startup warnings', () => {
+    const raw = 'OpenClaw: [skills] Skill precedence collision: skill="skill-creator"\n[diagnostic] lane task error: lane=main durationMs=23 error="No route-compatible authentication source is configured for openai." errorName=Error'
+    expect(summarizeRuntimeError(raw)).toEqual({
+      title: 'OpenClaw cannot authenticate with the selected model',
+      guidance: 'Configure authentication for this model in OpenClaw, or select a model already configured there, then try again.',
+      detail: raw
+    })
+    expect(summarizeRuntimeError('OpenClaw agent database uses schema version 19; stop active agents and run openclaw doctor --fix to migrate session identities.').title).toBe('OpenClaw needs a local data upgrade')
+    expect(isRetryableRuntimeError(raw)).toBe(false)
+  })
+
+  it('shows the OMP billing failure instead of its Working progress line', () => {
+    const raw = 'OMP: Working...\n400 {"error":{"message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}'
+    expect(summarizeRuntimeError(raw)).toEqual({
+      title: 'OMP’s Anthropic API credit is insufficient',
+      guidance: 'Select the model you use in OMP, or top up that provider’s API balance. Douchat credits do not cover local agent usage.',
+      detail: raw
+    })
+    expect(isRetryableRuntimeError(raw)).toBe(false)
+  })
+
   it('turns local Claude failures into an immediate next step', () => {
     expect(summarizeRuntimeError('Claude Code: Exited with status 1')).toMatchObject({
       title: 'Claude Code could not start',

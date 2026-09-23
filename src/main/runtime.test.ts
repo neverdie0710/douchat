@@ -208,6 +208,32 @@ describe('DouchatRuntime', () => {
     expect(reply).toHaveBeenCalledTimes(1)
   })
 
+  it('reads the current requester and cancellation signal when reusing shared tools', async () => {
+    const { store } = createRuntime()
+    const operation = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'Done' }], details: {} }))
+    const runtime = new DouchatRuntime(store, { ...idleComputer, createTools: () => [{
+      name: 'computer_list_files', label: 'Read', description: 'Read', parameters: { type: 'object', properties: {} } as any, execute: operation
+    }] }, () => {})
+    const internal = runtime as any
+    const agent = store.accountAgents[0]
+    vi.spyOn(internal, 'resolveModel').mockReturnValue({ id: 'mock', provider: 'mock', api: 'openai-completions' })
+    const authorize = vi.spyOn(internal.permissions, 'authorize').mockResolvedValue(undefined)
+    const old = new AbortController()
+    internal.sharedCallers.set('shared', { requesterId: 'first', requester: 'First', roomName: 'Room', signal: old.signal, delegate: vi.fn() })
+    const session = internal.session(agent, 'shared', 'group')
+    const tool = session.state.tools.find((item: any) => item.name === 'computer_list_files')
+    await tool.execute('first', {})
+    old.abort()
+    internal.sharedCallers.set('shared', { requesterId: 'second', requester: 'Second', roomName: 'Room', signal: new AbortController().signal, delegate: vi.fn() })
+    expect(internal.session(agent, 'shared', 'group')).toBe(session)
+    await tool.execute('second', {})
+    expect(authorize.mock.calls.map(call => (call[1] as any).requesterId)).toEqual(['first', 'second'])
+    internal.sharedCallers.delete('shared')
+    await expect(tool.execute('late', {})).rejects.toThrow('No active shared task')
+    expect(operation).toHaveBeenCalledTimes(2)
+    internal.disposeSession('shared')
+  })
+
   it('guards the actual shared cloud tool invocation and leaves private owner tools separate', async () => {
     const { store } = createRuntime()
     const operation = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'secret' }], details: {} }))

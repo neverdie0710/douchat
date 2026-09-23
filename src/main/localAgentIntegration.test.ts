@@ -9,17 +9,37 @@ import { DouchatStore } from './store'
 vi.mock('./localAgentRuntime', () => ({ runLocalAgent: vi.fn(), disposeLocalAgentSessions: vi.fn(), resetLocalAgentConversation: vi.fn() }))
 const directories: string[] = []
 afterEach(() => { vi.resetAllMocks(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
-function setup() {
+function setup(localAgentId = 'codex') {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-local-test-'))
   directories.push(directory)
   const store = new DouchatStore(join(directory, 'state.json'))
   store.setCurrentAccountId('test-account')
   const computer: ComputerProvider = { snapshots: () => [], start: vi.fn(), stop: vi.fn(), show: vi.fn(), createTools: () => [], dispose: vi.fn() }
   const runtime = new DouchatRuntime(store, computer, () => {})
-  const agent = store.createAgent({ name: 'Local researcher', role: 'Researcher', instructions: 'Find evidence', color: '#14B8A6', localAgentId: 'codex', provider: 'local', model: 'default' })
+  const agent = store.createAgent({ name: 'Local researcher', role: 'Researcher', instructions: 'Find evidence', color: '#14B8A6', localAgentId, provider: 'local', model: 'default' })
   return { store, runtime, agent, conversationId: `direct-${agent.id}` }
 }
 describe('local contact routing', () => {
+  it('shows native Codex app access in the owner permission UI before resuming', async () => {
+    const { store, runtime, agent, conversationId } = setup()
+    const resumed = vi.fn()
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, _prompt, signal, _images, options) => {
+      if (!options?.onApproval) throw new Error('Missing native approval handler')
+      await options.onApproval({ message: 'Allow Computer Use to use Finder?', details: '{"app":"com.apple.finder"}' }, signal!)
+      resumed()
+      return { text: 'Approved app access', images: [] }
+    })
+    const work = runtime.sendMessage(conversationId, 'Inspect Finder')
+    await vi.waitFor(() => expect(runtime.snapshot().permissionRequests).toHaveLength(1))
+    const request = runtime.snapshot().permissionRequests![0]
+    expect(request).toMatchObject({ agentId: agent.id, context: 'direct', operation: 'Allow Computer Use to use Finder?' })
+    expect(resumed).not.toHaveBeenCalled()
+    runtime.resolveAgentPermission(request.id, true)
+    await work
+    expect(resumed).toHaveBeenCalledOnce()
+    expect(runtime.snapshot().permissionRequests).toHaveLength(0)
+    expect(store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)?.text).toBe('Approved app access')
+  })
   it('calls the local CLI without endpoint auth and isolates topic history', async () => {
     const { store, runtime, conversationId } = setup()
     vi.mocked(runLocalAgent).mockResolvedValue({ text: 'Local reply', images: [] })
@@ -119,8 +139,8 @@ describe('local contact routing', () => {
     const messages = store.topicMessages(conversationId, store.activeTopicId(conversationId))
     expect(messages.some((message) => message.error?.includes('Sign in') || message.text.includes('Sign in'))).toBe(true)
   })
-  it('persists an image-only Codex reply without turning it into an error', async () => {
-    const { store, runtime, conversationId } = setup()
+  it.each(['codex', 'grok', 'gemini'])('persists an image-only %s reply and clears its loading state', async localAgentId => {
+    const { store, runtime, conversationId } = setup(localAgentId)
     vi.mocked(runLocalAgent).mockResolvedValue({
       text: '',
       images: [{
@@ -135,6 +155,21 @@ describe('local contact routing', () => {
     expect(reply?.attachments).toHaveLength(1)
     expect(reply?.attachments?.[0]).toMatchObject({ name: 'cat.png', mimeType: 'image/png' })
     expect(reply?.error).toBeUndefined()
+    expect(runtime.snapshot().activity).toHaveLength(0)
+    expect(vi.mocked(runLocalAgent).mock.calls[0][1]).toContain('no background work continues after your turn ends')
+  })
+  it('clears Grok image progress and persists an actionable error when generation fails', async () => {
+    const { store, runtime, conversationId } = setup('grok')
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, _prompt, _signal, _images, options) => {
+      options?.onProgress?.({ phase: 'working', elapsedSeconds: 12, silentSeconds: 0, detail: 'Generating an image; waiting for the tool result' })
+      expect(runtime.snapshot().activity[0]?.localProgress?.detail).toContain('Generating an image')
+      throw new Error('Grok: Image generation failed. Permission denied')
+    })
+    await runtime.sendMessage(conversationId, 'Draw a cat')
+    expect(runtime.snapshot().activity).toHaveLength(0)
+    const messages = store.topicMessages(conversationId, store.activeTopicId(conversationId))
+    expect(messages.some(message => message.detail?.includes('Permission denied'))).toBe(true)
+    expect(messages.some(message => message.text.includes('Grok did not generate an image'))).toBe(true)
   })
   it('forwards Stop to the running local process', async () => {
     const { runtime, conversationId } = setup()

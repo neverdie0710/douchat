@@ -1,15 +1,21 @@
+import { appendLocalAgentArguments, customLocalAgentArguments } from '../shared/localAgentArguments'
+import { localAgentSettingsVersion } from './localAgentSettingsVersion'
+import { LocalProcessBudget } from './localProcessBudget'
 import { withLocalModel } from '../shared/localModels'
-import { LocalAgentConnection, killLocalProcess, type ProgressListener } from './localAgentConnection'
+import { LocalAgentConnection, killLocalProcess, type ProgressListener, type LocalApprovalHandler } from './localAgentConnection'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { executableCommand } from './windowsCommand'
 import { spawn } from 'node:child_process'
-import { access, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import type { AgentConfig, LocalAgent, MessageAttachment } from '../shared/types'
 import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
+import { GrokStream } from './grokStream'
+import { GeminiStream, geminiImagePolicy } from './geminiStream'
+import { localWorkspace, resetLocalWorkspaces } from './localWorkspaces'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
  * Keep the official CLI untouched and retain strict sandbox arguments below. */
@@ -26,11 +32,12 @@ export function localAgentArgs(id: string, prompt: string, output: string, appOw
   switch (id) {
     case 'codex': return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'web_search="live"', '--output-last-message', output, '-']
     case 'claude': return ['-p', '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch', '--', prompt]
-    case 'gemini': return ['-p', prompt, '--output-format', 'json']
+    case 'gemini': return ['-p', prompt, '--output-format', 'stream-json']
     case 'grok': return [
-      '--no-auto-update', '-p', prompt, '--output-format', 'json',
+      '--no-auto-update', '-p', prompt, '--output-format', 'streaming-json',
       '--permission-mode', 'dontAsk',
       '--allow', 'Read', '--allow', 'Grep', '--allow', 'WebFetch', '--allow', 'WebSearch',
+      '--allow', 'image_gen', '--allow', 'image_edit',
       '--sandbox', 'strict'
     ]
     case 'cursor': return [...(appOwnedWorkspace ? ['--trust'] : []), '--print', '--output-format', 'json', '--mode', 'ask', '--', prompt]
@@ -45,6 +52,16 @@ export function localAgentArgs(id: string, prompt: string, output: string, appOw
 }
 
 export function localAgentText(id: string, stdout: string): string {
+  if (id === 'gemini' && stdout.trim().split('\n').some(line => /"type"\s*:\s*"(?:init|message|result|tool_use|error)"/.test(line))) {
+    const stream = new GeminiStream()
+    stream.push(stdout)
+    return stream.finish().text
+  }
+  if (id === 'grok' && stdout.trim().split('\n').some(line => /"type"\s*:\s*"(?:text|end|error|tool_call)"/.test(line))) {
+    const stream = new GrokStream()
+    stream.push(stdout)
+    return stream.finish().text
+  }
   if (['kimi', 'fastclaw', 'hermes', 'omp'].includes(id)) return stdout.trim()
   if (id === 'opencode') {
     const events = stdout.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line))
@@ -75,6 +92,17 @@ export function localAgentExitError(
   stderr: string
 ): Error {
   let diagnostic = cleanProcessOutput(stderr)
+  if (agent.id === 'openclaw' && stdout.trim()) {
+    // Exec reserves stdout for its result envelope. Warnings on stderr must
+    // not bury the actual failure behind skill/plugin startup diagnostics.
+    try {
+      const data = JSON.parse(stdout)
+      const message = data.error?.message
+      if (typeof message === 'string' && message.trim()) {
+        return new Error(`${agent.name}: ${cleanProcessOutput(message)}${diagnostic ? `\n${diagnostic.slice(-1200)}` : ''}`)
+      }
+    } catch { /* Older CLI failures may only contain stderr. */ }
+  }
   if (!diagnostic && stdout.trim()) {
     try {
       // Structured CLIs often put their useful authentication/configuration
@@ -193,7 +221,105 @@ async function generatedImages(threadId: string | undefined, env: NodeJS.Process
   return images
 }
 
+/** Only attach typed image-tool outputs from this run's private Grok session.
+ * Never follow a filename written in an assistant reply or read arbitrary paths. */
+export async function grokGeneratedImages(
+  result: { paths: string[]; sessionId?: string }, env: NodeJS.ProcessEnv, workspace: string
+): Promise<LocalAgentImage[]> {
+  if (!result.paths.length) return []
+  if (!/^[0-9a-f-]{36}$/i.test(result.sessionId ?? '')) throw new Error('Grok: Invalid image session')
+  const sessions = join(env.GROK_HOME || join(homedir(), '.grok'), 'sessions')
+  const sessionsRoot = await realpath(sessions)
+  const workspaces = [workspace, await realpath(workspace)]
+  const images: LocalAgentImage[] = []
+  let total = 0
+  for (const path of result.paths) {
+    // Check both lexical and resolved containment: a symlink must not attach a
+    // file from another conversation or from elsewhere on the computer.
+    const parts = relative(sessions, path).split(sep)
+    if (parts.length !== 4 || parts[0] === '..' || parts[1] !== result.sessionId || parts[2] !== 'images') {
+      throw new Error('Grok: Image output is outside this session')
+    }
+    const resolved = await realpath(path)
+    if (dirname(resolved) !== join(sessionsRoot, parts[0], result.sessionId!, 'images')) throw new Error('Grok: Image output is outside this session')
+    let cwd: string
+    try { cwd = decodeURIComponent(parts[0]) } catch { throw new Error('Grok: Invalid image workspace') }
+    if (!workspaces.includes(cwd)) {
+      // Grok uses a hashed directory plus a .cwd marker for long workspace paths.
+      const marker = join(sessionsRoot, parts[0], '.cwd')
+      if (await realpath(marker) !== marker || (await stat(marker)).size > 8192) throw new Error('Grok: Invalid image workspace')
+      cwd = (await readFile(marker, 'utf8')).trim()
+      if (!workspaces.includes(cwd)) throw new Error('Grok: Image output is outside this workspace')
+    }
+    const info = await stat(resolved)
+    if (!info.isFile() || images.length >= 4 || info.size > 8 * 1024 * 1024 || total + info.size > 20 * 1024 * 1024) {
+      throw new Error('Grok: Generated image exceeds attachment limits')
+    }
+    const data = await readFile(resolved)
+    const mimeType = imageMime(data)
+    if (!mimeType) throw new Error('Grok: Generated file is not a supported image')
+    images.push({ name: basename(path), mimeType, data })
+    total += data.byteLength
+  }
+  return images
+}
+
+/** Snapshot the extension's isolated output directory before each turn. The
+ * model cannot nominate an arbitrary local file as an attachment. */
+export async function geminiImageFiles(workspace: string): Promise<Set<string>> {
+  const root = join(await realpath(workspace), 'nanobanana-output')
+  try {
+    if (await realpath(root) !== root) throw new Error('Gemini: Image output is outside this workspace')
+    return new Set((await readdir(root, { withFileTypes: true })).filter(entry => entry.isFile()).map(entry => entry.name))
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return new Set()
+    throw cause
+  }
+}
+
+export async function geminiGeneratedImages(workspace: string, before: Set<string>): Promise<LocalAgentImage[]> {
+  const names = [...await geminiImageFiles(workspace)].filter(name => !before.has(name))
+  const root = join(await realpath(workspace), 'nanobanana-output')
+  const images: LocalAgentImage[] = []
+  let total = 0
+  for (const name of names) {
+    if (!/\.(?:png|jpe?g|webp|gif)$/i.test(name)) continue
+    const path = join(root, name)
+    if (dirname(await realpath(path)) !== root) throw new Error('Gemini: Image output is outside this workspace')
+    const info = await stat(path)
+    if (!info.isFile() || images.length >= 4 || info.size > 8 * 1024 * 1024 || total + info.size > 20 * 1024 * 1024) throw new Error('Gemini: Generated image exceeds attachment limits')
+    const data = await readFile(path)
+    const mimeType = imageMime(data)
+    if (!mimeType) throw new Error('Gemini: Generated file is not a supported image')
+    images.push({ name, mimeType, data })
+    total += data.byteLength
+  }
+  if (!images.length) throw new Error('Gemini: Image generation failed. The tool did not produce a new image file.')
+  return images
+}
+
+const processBudget = new LocalProcessBudget(8)
+export function acquireLocalProcessSlot(signal?: AbortSignal): Promise<() => void> {
+  return processBudget.acquire(signal, evictIdleConnection)
+}
+const activeLocalRuns = new Set<{ agentId: string; sessionKey?: string; abort: AbortController }>()
 export async function runLocalAgent(
+  config: AgentConfig, prompt: string, signal?: AbortSignal,
+  inputImages: LocalAgentImage[] = [], options: LocalRunOptions = {}
+): Promise<LocalAgentReply> {
+  const run = { agentId: config.id, sessionKey: options.sessionKey, abort: new AbortController() }
+  activeLocalRuns.add(run)
+  const combined = signal ? AbortSignal.any([signal, run.abort.signal]) : run.abort.signal
+  const connected = options.sessionKey && ['codex', 'claude'].includes(config.localAgentId!)
+  let release: (() => void) | undefined
+  try {
+    if (!connected) release = await processBudget.acquire(combined, evictIdleConnection)
+    combined.throwIfAborted()
+    return await executeLocalAgent(config, prompt, combined, inputImages, options)
+  } finally { release?.(); activeLocalRuns.delete(run) }
+}
+
+async function executeLocalAgent(
   config: AgentConfig,
   prompt: string,
   signal?: AbortSignal,
@@ -204,26 +330,36 @@ export async function runLocalAgent(
   if (options.sessionKey && ['codex', 'claude'].includes(config.localAgentId!)) {
     return runConnectedAgent(config, prompt, signal, inputImages, options)
   }
-  const agent = await validateLocalAgent(config.localAgentId!)
+  const agent = options.agentOverride ?? await validateLocalAgent(config.localAgentId!)
   const env = await spawnEnvironment()
   signal?.throwIfAborted()
-  const directory = await mkdtemp(join(tmpdir(), 'douchat-agent-'))
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
+  const directory = workspace?.directory ?? await mkdtemp(join(tmpdir(), 'douchat-agent-'))
+  let geminiPolicyFile: string | undefined
+  const output = join(directory, `reply-${randomUUID()}.txt`)
   try {
     const extensions: Record<MessageAttachment['mimeType'], string> = {
       'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'
     }
     const imagePaths = await Promise.all(inputImages.map(async (image, index) => {
-      const path = join(directory, `input-image-${index + 1}.${extensions[image.mimeType]}`)
+      const path = join(directory, `input-image-${randomUUID()}.${extensions[image.mimeType]}`)
       await writeFile(path, image.data)
       return path
     }))
     const effectivePrompt = imagePaths.length
       ? `${prompt}\n\nThe human attached ${imagePaths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${imagePaths.length === 1 ? '' : 's'} before answering:\n${imagePaths.join('\n')}`
       : prompt
-    const output = join(directory, 'reply.txt')
-    const command = await executableCommand(await localAgentExecutable(agent.id, agent.path!))
+    const geminiBefore = agent.id === 'gemini' && !agent.custom ? await geminiImageFiles(directory) : new Set<string>()
+    if (agent.id === 'gemini' && !agent.custom) {
+      geminiPolicyFile = output + '.toml'
+      await writeFile(geminiPolicyFile, geminiImagePolicy(options.imageToolsAllowed !== false), { mode: 0o600 })
+    }
+    const command = await executableCommand(agent.id === 'grok' && agent.command !== 'grok' ? agent.path! : await localAgentExecutable(agent.id, agent.path!))
+    const runStarted = Date.now()
+    let grokStream: GrokStream | undefined
+    let geminiStream: GeminiStream | undefined
     const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? [effectivePrompt] : withLocalModel(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.model))], {
+      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
         cwd: directory, env: childEnvironment, windowsHide: true, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe']
       })
@@ -235,11 +371,18 @@ export async function runLocalAgent(
       const abort = (): void => { failure = new Error('Stopped'); kill() }
       const started = Date.now()
       let lastOutput = started
+      grokStream = agent.id === 'grok' && !agent.custom ? new GrokStream(detail => options.onProgress?.({
+        phase: 'working', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: 0, detail
+      })) : undefined
+      geminiStream = agent.id === 'gemini' && !agent.custom ? new GeminiStream(detail => options.onProgress?.({
+        phase: 'working', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: 0, detail
+      })) : undefined
+      const progressStream = grokStream ?? geminiStream
       options.onProgress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
       const timer = setInterval(() => options.onProgress?.({
         phase: 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000),
-        silentSeconds: Math.floor((Date.now() - lastOutput) / 1000)
-      }), 15_000)
+        silentSeconds: Math.floor((Date.now() - lastOutput) / 1000), detail: progressStream?.detail
+      }), progressStream ? 1000 : 15_000)
       const cleanup = (): void => { clearInterval(timer); signal?.removeEventListener('abort', abort) }
       child.stdout.setEncoding('utf8')
       child.stderr.setEncoding('utf8')
@@ -247,12 +390,12 @@ export async function runLocalAgent(
         lastOutput = Date.now()
         bytes += Buffer.byteLength(text)
         if (bytes > 8 * 1024 * 1024) { failure = new Error(`${agent.name} produced too much output`); kill(); return }
-        if (stream === 'stdout') stdout += text
+        if (stream === 'stdout') { stdout += text; progressStream?.push(text) }
         else stderr += text
       }
       child.stdout.on('data', (text: string) => collect(text, 'stdout'))
       child.stderr.on('data', (text: string) => collect(text, 'stderr'))
-      child.once('error', (error) => { cleanup(); kill(); reject(error) })
+      child.once('error', (error) => { failure = error; kill() })
       child.once('close', (code) => {
         cleanup()
         kill()
@@ -274,10 +417,15 @@ export async function runLocalAgent(
       usedClaudeAccountLogin = true
       stdout = await run(localAgentEnvironment(agent.id, env, true))
     }
-    const images = agent.id === 'codex' ? await generatedImages(codexThreadId(stdout), env) : []
+    const grokResult = grokStream?.finish()
+    const geminiResult = geminiStream?.finish()
+    if (grokResult?.paths.length || geminiResult?.imageToolsSucceeded) options.onProgress?.({ phase: 'working', elapsedSeconds: Math.floor((Date.now() - runStarted) / 1000), silentSeconds: 0, detail: 'Attaching generated images' })
+    const images = agent.id === 'codex' ? await generatedImages(codexThreadId(stdout), env)
+      : grokResult ? await grokGeneratedImages(grokResult, env, directory)
+        : geminiResult?.imageToolsSucceeded ? await geminiGeneratedImages(directory, geminiBefore) : []
     const replyText = async (): Promise<string> => agent.custom
       ? stdout.trim()
-      : agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : localAgentText(agent.id, stdout)
+      : agent.id === 'codex' ? (await readFile(output, 'utf8')).trim() : grokResult?.text ?? geminiResult?.text ?? localAgentText(agent.id, stdout)
     let text: string
     try {
       text = await replyText()
@@ -289,21 +437,34 @@ export async function runLocalAgent(
     }
     return localAgentReply(agent.name, text, images)
   } finally {
-    await rm(directory, { recursive: true, force: true })
+    await rm(output, { force: true })
+    if (geminiPolicyFile) await rm(geminiPolicyFile, { force: true })
+    if (!workspace) await rm(directory, { recursive: true, force: true })
   }
 }
 
 
 export interface LocalRunOptions {
+  /** Validated, unsaved settings used only by the connection test. */
+  agentOverride?: LocalAgent
+  /** Read-only controllers must not gain image generation through MCP. */
+  imageToolsAllowed?: boolean
   sessionKey?: string
+  /** Internal planning/probes must not retain workspace or thread history. */
+  transient?: boolean
   /** Full transcript is needed only when a connection is cold. */
   continuationPrompt?: string
   onProgress?: ProgressListener
+  onApproval?: LocalApprovalHandler
   /** Internal retry for the specific Claude account-login configuration conflict. */
   claudeAccountLogin?: boolean
+  /** Retry only a rejected resume, before any model turn can have executed. */
+  freshSessionRetry?: boolean
   /** Tools exposed to Codex app-server as client-side dynamic tools. */
 }
 interface ConnectedSession {
+  evicted?: boolean
+  persistent?: boolean
   config: AgentConfig
   sessionKey: string
   connection: LocalAgentConnection
@@ -313,24 +474,42 @@ interface ConnectedSession {
   idle?: NodeJS.Timeout
 }
 const connections = new Map<string, ConnectedSession>()
-const MAX_CONNECTIONS = 8
 const IDLE_CONNECTION_MS = 5 * 60_000
+const MAX_IDLE_CONNECTIONS = 2
+
+function evictIdleConnection(): void {
+  const idle = [...connections].find(([, entry]) => !entry.busy)
+  if (idle) evictConnection(...idle)
+}
 
 function evictConnection(key: string, entry: ConnectedSession): void {
+  if (entry.evicted) return
+  entry.evicted = true
   if (connections.get(key) === entry) connections.delete(key)
   clearTimeout(entry.idle)
   entry.connection.close()
   void entry.directory.then(async (directory) => {
     await entry.connection.disposed()
-    await rm(directory, { recursive: true, force: true })
+    if (!entry.persistent) await rm(directory, { recursive: true, force: true })
   }).catch(() => { /* Startup already reports its error. */ })
 }
 
 export function disposeLocalAgentSessions(agentId: string): void {
+  for (const run of activeLocalRuns) if (run.agentId === agentId) run.abort.abort(new Error('Stopped'))
   for (const [key, entry] of connections) if (entry.config.id === agentId) evictConnection(key, entry)
 }
-export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = []): void {
+export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = [], owner = ''): void {
   const prefixes = [`direct:${conversationId}:`, `group:${encodeURIComponent(conversationId)}:`, `handoff:${conversationId}:`]
+  resetLocalWorkspaces(owner, (sessionKey) => {
+    const incoming = sessionKey.startsWith('a2a:') && directAgentIds.some(id => sessionKey.includes(`:bot:${encodeURIComponent(id)}:topic:`))
+    return (incoming || prefixes.some(prefix => sessionKey.startsWith(prefix))) && (!topicId || sessionKey.includes(encodeURIComponent(topicId)))
+  })
+  for (const run of activeLocalRuns) {
+    const key = run.sessionKey
+    if (!key) continue
+    const incoming = key.startsWith('a2a:') && directAgentIds.some(id => key.includes(`:bot:${encodeURIComponent(id)}:topic:`))
+    if ((incoming || prefixes.some(prefix => key.startsWith(prefix))) && (!topicId || key.includes(encodeURIComponent(topicId)))) run.abort.abort(new Error('Stopped'))
+  }
   for (const [key, entry] of connections) {
     const incoming = entry.sessionKey.startsWith('a2a:') && directAgentIds.some(id => entry.sessionKey.includes(`:bot:${encodeURIComponent(id)}:topic:`))
     if ((incoming || prefixes.some((prefix) => entry.sessionKey.startsWith(prefix)))
@@ -341,30 +520,35 @@ export function resetLocalAgentConversation(conversationId: string, topicId?: st
 async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
   images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
   signal?.throwIfAborted()
+  const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
-  let key = JSON.stringify([config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, options.claudeAccountLogin])
+  let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient)])
   if (config.localAgentId === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
-    const accountKey = JSON.stringify([config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, true])
+    const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, true, Boolean(options.onApproval), Boolean(options.transient)])
     if (connections.has(accountKey)) key = accountKey
   }
   let entry = connections.get(key)
   if (entry && !entry.connection.alive) { evictConnection(key, entry); entry = undefined }
   if (entry?.busy) throw new Error('This local agent conversation is already working')
   if (!entry) {
-    if (connections.size >= MAX_CONNECTIONS) {
-      const idle = [...connections].find(([, candidate]) => !candidate.busy)
-      if (idle) evictConnection(...idle)
-      else throw new Error('All local agent connections are busy. Wait for a task to finish or stop one.')
-    }
     const connection = new LocalAgentConnection(config.localAgentId as 'codex' | 'claude')
-    const directory = mkdtemp(join(tmpdir(), 'douchat-session-'))
-    const ready = Promise.all([validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
-      .then(async ([agent, env, cwd]) => {
-        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model)
+    const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
+    const directory = workspace ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
+    const ready = (async () => {
+      const release = await processBudget.acquire(signal, evictIdleConnection)
+      void connection.disposed().then(release)
+      try {
+        signal?.throwIfAborted()
+        const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
+        signal?.throwIfAborted()
+        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args)
         return { agent, env, directory: cwd }
-      })
-    entry = { config, sessionKey: options.sessionKey!, connection, directory, ready, busy: true }
+      } catch (error) { connection.close(); throw error }
+    })()
+    entry = { config, sessionKey: options.sessionKey!, connection, directory, ready, busy: true, persistent: Boolean(workspace) }
     connections.set(key, entry)
+    const created = entry
+    void connection.disposed().then(() => evictConnection(key, created))
   }
   entry.busy = true
   clearTimeout(entry.idle)
@@ -386,12 +570,17 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     const text = current.connection.hasHistory ? options.continuationPrompt ?? prompt : prompt
     const effective = paths.length ? `${text}\n\nInspect these attached image files before answering:\n${paths.join('\n')}` : text
     const started = Date.now()
-    const reply = await current.connection.turn(effective, signal, options.onProgress)
+    const reply = await current.connection.turn(effective, signal, options.onProgress, options.onApproval)
     const outputImages = agent.id === 'codex' ? await generatedImages(current.connection.thread, env, started) : []
     return localAgentReply(agent.name, reply, outputImages)
   } catch (error) {
     // Never replay a failed turn automatically: tools may already have caused side effects.
     evictConnection(key, current)
+    if (config.localAgentId === 'claude' && current.persistent && !options.freshSessionRetry
+      && /No conversation found with session ID/i.test(String(error))) {
+      localWorkspace(config, options.sessionKey)?.remember(undefined)
+      return runConnectedAgent(config, prompt, signal, images, { ...options, freshSessionRetry: true })
+    }
     if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !current.connection.hasHistory
       && shouldRetryClaudeWithAccountLogin(config.localAgentId!, error, await spawnEnvironment())) {
       return runConnectedAgent(config, prompt, signal, images, { ...options, claudeAccountLogin: true })
@@ -401,9 +590,14 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     clearInterval(connectingTimer)
     signal?.removeEventListener('abort', abort)
     current.busy = false
+    if (connections.get(key) === current && (options.transient || processBudget.hasWaiters)) evictConnection(key, current)
     if (connections.get(key) === current) {
+      // Map order is the idle LRU order, rather than the connection's creation order.
+      connections.delete(key); connections.set(key, current)
       current.idle = setTimeout(() => evictConnection(key, current), IDLE_CONNECTION_MS)
       current.idle.unref()
+      const idle = [...connections].filter(([, candidate]) => !candidate.busy)
+      for (const [idleKey, candidate] of idle.slice(0, Math.max(0, idle.length - MAX_IDLE_CONNECTIONS))) evictConnection(idleKey, candidate)
     }
   }
 }

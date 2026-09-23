@@ -42,6 +42,11 @@ export function InspectorRail({
   onRunRoutineNow?: (routineId: string) => Promise<void>
 }): ReactElement {
   const [memberQuery, setMemberQuery] = useState('')
+  const [confirmLeave, setConfirmLeave] = useState(false)
+  const canLeave = conversation?.type === 'group' && Boolean(conversation.remoteRoomId)
+    && Boolean(conversation.socialRoom?.members[0]?.id) && Boolean(conversation.ownerId)
+    && conversation.socialRoom!.members[0].id !== conversation.ownerId
+  useEffect(() => { setConfirmLeave(false) }, [conversation?.id])
   const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | null>(null)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ChatMessage[]>([])
@@ -187,6 +192,12 @@ export function InspectorRail({
                   : 'Reset context? The current reply will stop and future replies will start fresh. Chat history will be kept.')}</p><button disabled={busy} onClick={() => setConfirmReset(false)}>{t('Cancel')}</button><button className="danger" disabled={busy} onClick={() => void update(() => window.douchat.resetConversationContext(conversation.id))}>{t('Reset context')}</button></div>
                   : <button className="detail-clear" disabled={busy} onClick={() => { setConfirmReset(true); setConfirmClear(false) }}>{t('Reset context')}</button>}
               </div>
+            </div>}
+            {canLeave && !memberQuery.trim() && <div className="detail-history-actions detail-history-action">
+              {confirmLeave ? <div className="detail-clear-confirm"><p>{t('Leave this group? Your agents will also leave.')}</p>
+                <button disabled={busy} onClick={() => setConfirmLeave(false)}>{t('Cancel')}</button>
+                <button className="danger" disabled={busy} onClick={() => void update(async () => { await window.douchat.socialAction({ action: 'leave-room', roomId: conversation.remoteRoomId! }); setConfirmLeave(false) })}>{t('Leave group')}</button>
+              </div> : <button className="detail-clear" disabled={busy} onClick={() => { setConfirmLeave(true); setConfirmClear(false); setConfirmReset(false) }}>{t('Leave group')}</button>}
             </div>}
             {error && <p role="alert">{t(error)}</p>}
 

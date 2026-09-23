@@ -1,4 +1,5 @@
-import { listLocalAgentModels } from './localAgentModels'
+import { testLocalAgent } from './localAgentTest'
+import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
 import { CustomModelStore } from './customModels'
 import type { CustomProviderInput, CustomModelTest } from '../shared/customModels'
@@ -35,7 +36,7 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
@@ -43,6 +44,7 @@ import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUr
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
+import { configureLocalWorkspaces } from './localWorkspaces'
 import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
 import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLauncher'
 
@@ -70,6 +72,7 @@ const webAppUrl = normalizeWebAppUrl(
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
+configureLocalWorkspaces(app.getPath('userData'))
 const customModels = new CustomModelStore(join(app.getPath('userData'), 'custom-models'), {
   encrypt: (value) => {
     if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error("System credential storage is unavailable. Enable the system keychain and try again.")
@@ -288,6 +291,7 @@ function broadcastAuth(state: DesktopAuthState): void {
   const nextSocialAccount = state.status === 'signed-in' ? state.user.id : ''
   const accountChanged = Boolean(store && store.currentAccountId !== nextSocialAccount)
   if (store && accountChanged) {
+    cancelLocalModelQueries()
     const previousAgents = store.accountAgents
     const previousConversations = store.accountConversations
     runtime?.games.stopAll()
@@ -681,6 +685,29 @@ app.whenReady().then(() => {
     resetShellPath()
     return checkLocalAgentUpdates(await detectLocalAgents())
   })
+  ipcMain.handle('douchat:update-local-agent', async (event, id: string, input: CustomLocalAgentInput) => {
+    if (!isDouchatRenderer(event.sender) || typeof id !== 'string') throw new Error('Invalid local agent request')
+    await updateLocalAgent(id, input)
+    cancelLocalModelQueries()
+    resetShellPath()
+    return checkLocalAgentUpdates(await detectLocalAgents())
+  })
+  const localAgentTests = new Map<number, AbortController>()
+  ipcMain.handle('douchat:test-local-agent', async (event, id: string | undefined, input: CustomLocalAgentInput) => {
+    if (!isDouchatRenderer(event.sender) || (id !== undefined && typeof id !== 'string')) throw new Error('Invalid local agent request')
+    const senderId = event.sender.id
+    if (localAgentTests.has(senderId)) throw new Error('A connection test is already running.')
+    const abort = new AbortController()
+    const cancel = () => abort.abort(new Error('Connection test cancelled.'))
+    localAgentTests.set(senderId, abort)
+    event.sender.once('destroyed', cancel)
+    try { return await testLocalAgent(id, input, abort.signal) }
+    finally { event.sender.removeListener('destroyed', cancel); localAgentTests.delete(senderId) }
+  })
+  ipcMain.handle('douchat:cancel-local-agent-test', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid local agent request')
+    localAgentTests.get(event.sender.id)?.abort(new Error('Connection test cancelled.'))
+  })
   ipcMain.handle('douchat:remove-custom-local-agent', async (event, id: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
     if (store.agents.some((agent) => agent.localAgentId === id)) {
@@ -763,6 +790,7 @@ app.whenReady().then(() => {
     const { customModel: _selection, cloudModel: _cloudSelection, ...agentInput } = input
     const agent = store.createAgent({
       ...agentInput,
+      avatar: agentInput.avatar || (agentInput.avatarEmoji ? undefined : localAgent?.avatar),
       localAgentName: localAgent?.custom ? localAgent.name : undefined,
       ...binding,
       followDefaultModel: input.customModel?.providerId === '@default'
@@ -829,7 +857,7 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:update-conversation', async (_event, conversationId: string, input: UpdateConversationInput) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     const target = store.accountConversations.find((conversation) => conversation.id === conversationId)!
-    if (target.type === 'group' && target.remoteRoomId && input.name !== undefined) {
+    if (target.type === 'group' && target.remoteRoomId && input.name !== undefined && input.name.trim() !== target.name) {
       await social!.action({ action: 'rename-room', roomId: target.remoteRoomId, name: input.name.trim() })
     }
     store.updateConversation(conversationId, input)
@@ -1030,6 +1058,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (quitting) return
   quitting = true
+  cancelLocalModelQueries()
   social?.stop()
   if (localWorkBlocker !== undefined) { powerSaveBlocker.stop(localWorkBlocker); localWorkBlocker = undefined }
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)

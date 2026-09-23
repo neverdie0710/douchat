@@ -92,6 +92,50 @@ export function isDouchatCreditError(raw: string | undefined): boolean {
 }
 
 function localAgentFailure(source: string): Omit<RuntimeErrorSummary, 'detail'> | undefined {
+  if (/^Gemini: Image generation failed\./i.test(source)) {
+    if (/No valid API key|NANOBANANA_API_KEY.*(?:missing|not set)|API key.*(?:not found|missing)/i.test(source)) return {
+      title: 'Gemini image generation needs an API key',
+      guidance: 'Configure a Google AI Studio key locally with gemini extensions config nanobanana, then retry. Do not paste the key in chat.'
+    }
+    return {
+      title: 'Gemini did not generate an image',
+      guidance: 'The image tool failed or was denied. This task has stopped; see details for the reason.'
+    }
+  }
+  if (/^Gemini: (?:Incomplete event stream|Gemini stopped before completing)/i.test(source)) return {
+    title: 'Gemini stopped before completing the task',
+    guidance: 'This task is no longer running. See details before trying again.'
+  }
+  if (/\bOMP:/i.test(source) && /credit balance is too low.*Anthropic API/i.test(source)) {
+    return {
+      title: 'OMP’s Anthropic API credit is insufficient',
+      guidance: 'Select the model you use in OMP, or top up that provider’s API balance. Douchat credits do not cover local agent usage.'
+    }
+  }
+  if (/^Grok: Image generation failed\./i.test(source)) {
+    return {
+      title: 'Grok did not generate an image',
+      guidance: 'The image tool failed or was denied. This task has stopped; see details for the reason.'
+    }
+  }
+  if (/^Grok(?::)? .*stopped before completing the task/i.test(source)) {
+    return {
+      title: 'Grok stopped before completing the task',
+      guidance: 'This task is no longer running. See details before trying again.'
+    }
+  }
+  if (/openclaw/i.test(source) && /No route-compatible authentication source is configured/i.test(source)) {
+    return {
+      title: 'OpenClaw cannot authenticate with the selected model',
+      guidance: 'Configure authentication for this model in OpenClaw, or select a model already configured there, then try again.'
+    }
+  }
+  if (/openclaw/i.test(source) && /schema version|migrate session identities/i.test(source) && /doctor --fix/i.test(source)) {
+    return {
+      title: 'OpenClaw needs a local data upgrade',
+      guidance: 'Stop active OpenClaw tasks, run openclaw doctor --fix in Terminal, then try again.'
+    }
+  }
   if (/cursor/i.test(source) && /workspace trust required/i.test(source)) {
     return {
       title: 'Cursor needs workspace trust',

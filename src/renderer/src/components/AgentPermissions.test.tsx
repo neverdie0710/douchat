@@ -24,7 +24,7 @@ it('does not pretend that local CLI internal tools are individually controlled',
   await act(async () => root.render(<AgentPermissionsDialog agent={{ id: 'a', name: 'Local', localAgentId: 'codex' } as AgentConfig} onClose={vi.fn()} onSave={vi.fn()} />))
   expect(node.querySelector('select[aria-label="Read local files"]')).toBeNull()
   expect(node.querySelector<HTMLSelectElement>('select[aria-label="Run on my computer"]')?.value).toBe('ask')
-  expect(node.textContent).toContain('individual actions cannot currently be approved separately')
+  expect(node.textContent).toContain('Codex Computer Use requests separate approval')
 })
 it('shows requester and exact operation, with explicit single-operation approval', async () => {
   const resolve = vi.fn(async () => {})

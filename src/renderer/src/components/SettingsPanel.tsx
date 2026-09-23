@@ -1,3 +1,4 @@
+import { LocalAgentEditor } from './LocalAgentEditor'
 import { CustomModelSettings } from './CustomModelSettings'
 import { SchedulingSettings } from './SchedulingSettings'
 import { messageSendError } from '../messageQueue'
@@ -14,7 +15,7 @@ import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayN
 
 export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about'
 
-export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
+export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
   agents: LocalAgent[]
   routines?: Routine[]
@@ -32,6 +33,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   onSignOut: () => Promise<void>
   onUpdateProfile: (input: UpdateDesktopProfileInput) => Promise<void>
   onDetect: () => void
+  onLocalAgentsChange?: (agents: LocalAgent[]) => void
   onRemoveCustom?: (id: string) => Promise<void>
   onDeleteRoutine?: (id: string) => Promise<void>
   onSetRoutineEnabled?: (id: string, enabled: boolean) => Promise<void>
@@ -66,6 +68,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState('')
   const [customError, setCustomError] = useState('')
+  const [editingLocalAgent, setEditingLocalAgent] = useState<LocalAgent | 'new'>()
   const installed = agents.filter((agent) => agent.installed)
   const desktopOnly = agents.filter((agent) => agent.status === 'desktop-only')
   const missing = agents.filter((agent) => agent.status === 'not-found')
@@ -100,9 +103,9 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
     finally { setMaintaining('') }
   }
   const row = (agent: LocalAgent): ReactElement => {
-    const version = agent.custom ? '' : agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
+    const version = agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
     return <article className="local-agent-row" key={agent.id}>
-        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{agentIcons[agent.id] ? <img src={agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
+        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{(agent.avatar || agentIcons[agent.id]) ? <img src={agent.avatar || agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
         <div className="local-agent-copy">
           <strong>{agent.name}</strong>
           <code title={agent.path || agent.desktopPath}>{agent.path || agent.desktopPath || agent.command}</code>
@@ -110,12 +113,13 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <div className="local-agent-row-aside">
           {version && <span className="local-agent-version" title={agent.version}>{version}</span>}
           {agent.installed && !agent.custom && (!agent.updateStatus || agent.updateStatus === 'unknown') && <span className="local-agent-version" title={t('Could not confirm the latest version. Detect again later.')}>{t('Version unconfirmed')}</span>}
-          {(agent.custom || !agent.installed || agent.updateStatus === 'available') && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.custom ? 'Installation instructions' : agent.installed ? 'Update' : 'Install')}</button>}
+          {(!agent.custom && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
+          <button type="button" className="secondary-button" aria-label={`${t('Edit')} ${agent.name}`} onClick={() => setEditingLocalAgent(agent)}>{t('Edit')}</button>
           {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
         </div>
       </article>
   }
-  return <NativeDialog className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={980} height={720}>
+  return <><NativeDialog className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={980} height={720}>
     <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <aside className="settings-sidebar">
       <div className="settings-modal-title"><div id="settings-title" className="wordmark">{t('Settings')}</div></div>
@@ -157,7 +161,8 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         onRunNow={onRunRoutineNow}
       /> : tab === 'agents'  ? <>
         <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
-          <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button>
+          <div className="local-agent-heading-actions"><button className="secondary-button" onClick={() => setEditingLocalAgent('new')}><Plus size={15} />{t('Add')}</button>
+          <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button></div>
         </header>
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         {maintaining && <p role="status">{t('Preparing to install or update. Downloading the runtime for the first time may take a few minutes.')}</p>}
@@ -172,6 +177,8 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
     </main>
     </section>
   </NativeDialog>
+  {editingLocalAgent && <LocalAgentEditor agent={editingLocalAgent === 'new' ? undefined : editingLocalAgent} onSaved={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} onClose={() => setEditingLocalAgent(undefined)} />}
+  </>
 }
 
 function routineScheduleLabel(schedule: RoutineSchedule): string {

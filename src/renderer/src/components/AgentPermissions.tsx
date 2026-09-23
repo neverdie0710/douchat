@@ -35,7 +35,7 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
       <h3>{t(agent.localAgentId ? 'When should it ask me?' : 'What can it do for others?')}</h3>
       <p className="muted">{t('These settings only apply when someone else asks your agent to do something. Your own requests are unchanged.')}</p>
       {agent.localAgentId ? <>
-        <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Approval covers the whole run; individual actions cannot currently be approved separately.')}</p>
+        <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>
         {row('localExecution', value.sensitive.localExecution, (v) => setValue({ ...value, sensitive: { ...value.sensitive, localExecution: v } }))}
       </> : sensitiveCapabilities.filter((key) => key !== 'localExecution').map((key) => row(key, value.sensitive[key], (v) => setValue({ ...value, sensitive: { ...value.sensitive, [key]: v } })))}
       {error && <p role="alert">{t(error)}</p>}
@@ -55,8 +55,8 @@ export function AgentPermissionPrompt({ request, onResolve }: { request: Permiss
       <p className="muted">{t('Requested by')}: {request.requester} · {request.roomName}</p>
       {request.requesterId && <p className="muted permission-requester-id">{t(request.requesterKind === 'agent' ? 'Agent' : 'Human member')} · {request.requesterId}</p>}
       <p>{request.operation}</p><pre className="permission-details">{request.details}</pre>
-      {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Approval covers the whole run; individual actions cannot currently be approved separately.')}</p>}
-      <p className="muted">{t('Results may be visible to everyone in this group.')}</p>
+      {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
+      {request.context !== 'direct' && <p className="muted">{t('Results may be visible to everyone in this group.')}</p>}
       <p className="muted">{t('This approval is for this operation only. No response within 10 minutes means deny.')}</p>
       {error && <p role="alert">{t(error)}</p>}
       </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button></footer>

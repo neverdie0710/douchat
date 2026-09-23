@@ -706,6 +706,24 @@ describe('private delivery disclosure', () => {
     expect(container.textContent).toContain('3:05')
     expect(container.textContent).toContain('Checking results')
   })
+  it('keeps an attributed loading indicator for an image tool and displays elapsed time, not a percentage', async () => {
+    const activity: ConversationActivityState = {
+      conversationId: directConversation.id, topicId: 'topic-2', phase: 'replying',
+      agentIds: ['agent-1'], label: 'Grok', startedAt: 1,
+      localProgress: { phase: 'working', elapsedSeconds: 42, silentSeconds: 20, detail: 'Generating an image; waiting for the tool result' }
+    }
+    await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
+    expect(container.querySelector('[data-testid="agent-avatar"]')).not.toBeNull()
+    expect(container.querySelector('.reply-status-dots')).not.toBeNull()
+    expect(container.textContent).toContain('Generating an image; waiting for the tool result')
+    expect(container.textContent).toContain('0:42')
+    expect(container.textContent).not.toContain('%')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, localProgress: {
+      phase: 'working', elapsedSeconds: 45, silentSeconds: 0, detail: 'Attaching generated images'
+    } }} agents={agents} />))
+    expect(container.textContent).toContain('Attaching generated images')
+    expect(container.textContent).not.toContain('Generating an image;')
+  })
   it('shows the specific problem immediately while keeping raw detail folded', async () => {
     const onOpenCredits = vi.fn()
     const detail = '429: {"message":"Douchat credit balance is insufficient"}'

@@ -7,12 +7,23 @@ it('extracts model IDs without CLI banners or terminal colors', () => {
   expect(parseLocalModels('cursor', 'Available models\nauto - Auto (default)')).toEqual([{ id: 'auto', name: 'Auto (default)' }])
   expect(parseLocalModels('grok', 'Default model: grok-test\n  * grok-test (default)')).toEqual([{ id: 'grok-test', name: 'grok-test' }])
   expect(parseLocalModels('openclaw', '{"models":[{"key":"local/test","name":"Test"}]}')).toEqual([{ id: 'local/test', name: 'Test' }])
+  expect(parseLocalModels('omp', JSON.stringify({ models: [
+    { provider: 'openrouter', id: 'qwen/qwen3.5-plus-20260420', name: 'Qwen3.5 Plus' },
+    { provider: 'openai-codex', id: 'gpt-test' },
+    { id: 'missing-provider' }
+  ] }))).toEqual([
+    { id: 'openrouter/qwen/qwen3.5-plus-20260420', name: 'Qwen3.5 Plus' },
+    { id: 'openai-codex/gpt-test', name: 'gpt-test' }
+  ])
 })
 it('passes a chosen model before the prompt terminator and preserves default behavior', () => {
   const args = localAgentArgs('opencode', 'hello', '/tmp/result')
   expect(withLocalModel('opencode', args, 'provider/model')).toEqual(['run', '--format', 'json', '--model', 'provider/model', '--', 'hello'])
   expect(withLocalModel('opencode', args, 'default')).toBe(args)
   expect(withLocalModel('openclaw', ['agent', 'exec', '--json'], 'provider/model')).toEqual(['agent', 'exec', '--model', 'provider/model', '--json'])
+  expect(withLocalModel('omp', localAgentArgs('omp', 'hello', '/tmp/result'), 'openrouter/qwen/test')).toEqual([
+    '--model', 'openrouter/qwen/test', '--print', '--mode', 'text', '--no-session', '--no-tools', 'hello'
+  ])
   expect(() => withLocalModel('custom:test', args, 'x')).toThrow('does not support')
   expect(() => withLocalModel('claude', args, '--help')).toThrow('Invalid model')
 })

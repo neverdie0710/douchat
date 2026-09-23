@@ -25,12 +25,17 @@ export interface LocalAgent {
   authentication: 'unchecked'
   /** User-registered commands use the generic prompt-argument/text-output adapter. */
   custom?: boolean
+  avatar?: string
+  args?: string[]
 }
 
 export interface CustomLocalAgentInput {
   name: string
   /** Executable name on PATH or an absolute executable path. Never run through a shell. */
   command: string
+  avatar?: string
+  /** One argument per entry; custom commands may use {prompt}. */
+  args?: string[]
 }
 
 export interface AgentConfig {
@@ -595,6 +600,9 @@ export interface DouchatApi {
   maintainLocalAgent: (id: string) => Promise<boolean>
   openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>
   addCustomLocalAgent: (input: CustomLocalAgentInput) => Promise<LocalAgent[]>
+  updateLocalAgent: (id: string, input: CustomLocalAgentInput) => Promise<LocalAgent[]>
+  testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => Promise<{ reply: string; durationMs: number; version?: string }>
+  cancelLocalAgentTest: () => Promise<void>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   searchMessages: (conversationId: string, query: string) => Promise<ChatMessage[]>
   getMessagePage: (conversationId: string, topicId: string, before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>

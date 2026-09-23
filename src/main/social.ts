@@ -104,6 +104,24 @@ export class SocialClient {
     if (!conversation?.remoteRoomId || conversation.ownerId !== identity.id) throw new Error('Chat not found')
     await this.request({ action: 'reset-context', roomId: conversation.remoteRoomId }, identity)
   }
+  private rosterGeneration = 0
+
+  private async refreshRoom(roomId: string): Promise<SocialSnapshot> {
+    const identity = this.identity()
+    const generation = this.generation
+    // Invalidate older inbox snapshots so an in-flight poll cannot restore the
+    // previous roster after the mutation has been confirmed by the server.
+    ++this.rosterGeneration
+    const snapshot = privacySafeSocialSnapshot(await this.request<SocialSnapshot>(undefined, identity, this.abort?.signal))
+    if (generation !== this.generation || snapshot.userId !== identity.id || this.identity().id !== identity.id) throw new Error('Chat account mismatch')
+    const room = snapshot.rooms.find(item => item.id === roomId)
+    if (!room) throw new Error('Chat could not be synchronized')
+    ++this.rosterGeneration
+    this.store.syncFriendConversation(identity.id, room, [])
+    this.onInboxChanged()
+    return snapshot
+  }
+
   syncInbox(fresh = false, delivery?: InboxDelivery): Promise<SocialSnapshot> {
     if (this.syncing) return fresh || delivery
       ? this.syncing.catch(() => undefined).then(() => this.syncInbox())
@@ -111,6 +129,7 @@ export class SocialClient {
     const generation = this.generation
     const signal = this.abort?.signal
     const work = async () => {
+      const rosterGeneration = this.rosterGeneration
       const identity = this.identity()
       const snapshot = privacySafeSocialSnapshot(delivery?.snapshot ?? await this.request<SocialSnapshot>(undefined, identity, signal))
       if (snapshot.userId !== identity.id) throw new Error('Chat account mismatch')
@@ -183,6 +202,7 @@ export class SocialClient {
           }
         }
         if (generation !== this.generation || this.identity().id !== identity.id) throw new Error('Chat account mismatch')
+        if (rosterGeneration !== this.rosterGeneration) return
         this.store.syncFriendConversation(identity.id, room, incoming, attachments)
         if (snapshot.syncVersion === 1) this.roomSync.set(stateKey, { revision: room.revision, cursor, pending, checkedAt: Date.now(), auditedAt: incremental ? previous.auditedAt : Date.now() })
         this.onInboxChanged()
@@ -262,8 +282,22 @@ export class SocialClient {
     void this.syncInbox().catch(() => { /* The next inbox poll recovers confirmed delivery. */ })
   }
   async action(input: SocialAction): Promise<SocialResult> {
-    const allowed = ['group-invite', 'rename-room', 'remove-members', 'invite-members', 'add-members', 'lookup', 'request', 'respond', 'create-room', 'add-agent', 'remove-agent', 'messages', 'send']
+    const allowed = ['leave-room', 'group-invite', 'rename-room', 'remove-members', 'invite-members', 'add-members', 'lookup', 'request', 'respond', 'create-room', 'add-agent', 'remove-agent', 'messages', 'send']
     if (!input || !allowed.includes(input.action)) throw new Error("Unsupported operation.")
+    if (input.action === 'leave-room') {
+      const identity = this.identity()
+      const generation = this.generation
+      const conversation = this.store.accountConversations.find(item => item.remoteRoomId === input.roomId)
+      if (!conversation?.socialRoom || conversation.type !== 'group') throw new Error('Chat not found')
+      if (conversation.socialRoom.members[0]?.id === identity.id) throw new Error('群主不能退出自己的群聊。')
+      const result = await this.request<SocialResult>(input, identity)
+      if (generation !== this.generation || this.identity().id !== identity.id) throw new Error('Chat account mismatch')
+      ++this.rosterGeneration
+      this.runtime.resetConversation(conversation.id)
+      this.store.updateConversation(conversation.id, { savedToContacts: false, hidden: true })
+      this.onInboxChanged()
+      return result
+    }
     if (input.action === 'send') {
       // The legacy workspace has an explicit recipient picker. Apply the same
       // default silence and permissions as the standard inbox, using a fresh roster.
@@ -295,9 +329,25 @@ export class SocialClient {
       url.searchParams.set('token', result.invite.token)
       return { ...result, invite: { ...result.invite, url: url.toString() } }
     }
-    if (input.action === 'remove-members' || input.action === 'rename-room') {
+    if (input.action === 'rename-room') {
+      const identity = this.identity()
+      const generation = this.generation
+      const name = input.name.trim()
+      const result = await this.request<SocialResult>({ ...input, name }, identity)
+      if (generation !== this.generation || this.identity().id !== identity.id) throw new Error('Chat account mismatch')
+      // The mutation acknowledgement is sufficient; do not fetch the complete
+      // inbox just to rediscover the name we saved. Discard older poll results.
+      ++this.rosterGeneration
+      const conversation = this.store.accountConversations.find(item => item.remoteRoomId === input.roomId)
+      if (conversation?.socialRoom) {
+        this.store.syncFriendConversation(identity.id, { ...conversation.socialRoom, name }, [])
+      } else if (conversation) this.store.updateConversation(conversation.id, { name })
+      this.onInboxChanged()
+      return result
+    }
+    if (input.action === 'remove-members') {
       const result = await this.request<SocialResult>(input)
-      const snapshot = await this.syncInbox(true)
+      const snapshot = await this.refreshRoom(input.roomId)
       if (input.action === 'remove-members') {
         const room = snapshot.rooms.find((entry) => entry.id === input.roomId)
         if (room && (room.members.some((person) => input.friendIds.includes(person.id)) || room.agents.some((agent) =>
@@ -323,7 +373,7 @@ export class SocialClient {
       }
       if (input.friendIds.length) await this.request({ action: 'add-members', roomId, friendIds: input.friendIds }, identity)
       for (const agent of agents) await this.request({ action: 'add-agent', roomId, localId: agent.id, ...sharedAgentProfile(agent) }, identity)
-      await this.syncInbox(true)
+      await this.refreshRoom(roomId)
       return { roomId, conversationId: conversation.id }
     }
     if (input.action === 'add-agent') {
@@ -342,7 +392,7 @@ export class SocialClient {
     return this.request(input)
   }
   private heartbeatTimer?: ReturnType<typeof setTimeout>
-  private activeTask?: { localId: string; taskId: string }
+  private readonly activeTasks = new Map<string, { localId: string; taskId: string }>()
   start(): void {
     this.stop()
     const generation = this.generation
@@ -351,8 +401,8 @@ export class SocialClient {
     const heartbeat = async () => {
       try {
         const identity = this.identity()
-        const active = this.activeTask
-        const approvals = active && this.runtime.snapshot().permissionRequests?.some((request) => request.agentId === active.localId) ? [active] : []
+        const requests = this.runtime.snapshot().permissionRequests ?? []
+        const approvals = [...this.activeTasks.values()].filter(active => requests.some(request => request.agentId === active.localId))
         await this.request({ action: 'heartbeat', localIds: this.store.agents.filter((agent) => agent.ownerId === identity.id).map((agent) => agent.id), approvals }, identity, signal)
       } catch { /* Older services and offline devices do not advertise presence. */ }
       finally { if (!signal.aborted && generation === this.generation) this.heartbeatTimer = setTimeout(() => void heartbeat(), 10000) }
@@ -384,40 +434,44 @@ export class SocialClient {
     const poll = async (): Promise<void> => {
       try {
         const identity = this.identity()
-        for (const result of this.store.socialTaskOutbox().filter((item) => item.ownerId === identity.id)) {
+        for (const result of this.store.socialTaskOutbox().filter((item) => item.ownerId === identity.id && !this.activeTasks.has(item.id))) {
           await this.request({ action: 'complete', ...result }, identity)
           this.store.removeSocialTaskResult(result.id, identity.id)
         }
         const { tasks } = await this.request<{ tasks: (SocialTask & { localId?: string })[] }>({ action: 'tasks', localIds: this.store.agents.filter((agent) => agent.ownerId === identity.id).map((agent) => agent.id) }, identity)
         for (const pending of tasks) {
-          if (signal.aborted) break
+          if (signal.aborted || this.activeTasks.size >= 8) break
+          if (this.activeTasks.has(pending.id)) continue
           // Tasks for an agent on another computer remain queued there.
           if (pending.localId && this.store.agent(pending.localId)?.ownerId !== identity.id) continue
           const { task } = await this.request<{ task: SocialTask | null }>({ action: 'claim', id: pending.id }, identity)
           if (!task) continue
           this.store.saveSocialTaskResult({ id: task.id, ownerId: identity.id, claim: task.claim, failed: true, reply: '设备在执行期间中断，任务未自动重试。请确认执行结果后再派发新任务。' })
-          let reply: string
-          let images: SocialImage[] | undefined
-          let failed = false
-          try {
-            if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error("Task permission check failed.")
-            this.activeTask = { localId: task.agent.localId, taskId: task.id }
-            const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
-              requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',
-              delegate: async (agentId, content) => { await this.request({ action: 'delegate', taskId: task.id, claim: task.claim, agentId, content }, identity, signal) }
-            })
-            reply = output.text
-            images = output.images
-          } catch (error) { failed = true; reply = error instanceof Error ? error.message : '任务执行失败。' }
-          finally { this.activeTask = undefined }
-          const result = { id: task.id, ownerId: identity.id, claim: task.claim, reply: reply.slice(0, 32000), ...(images?.length ? { images } : {}), failed }
-          this.store.saveSocialTaskResult(result)
-          if (!signal.aborted) {
+          this.activeTasks.set(task.id, { localId: task.agent.localId, taskId: task.id })
+          void (async () => {
+            let reply: string
+            let images: SocialImage[] | undefined
+            let failed = false
             try {
-              await this.request({ action: 'complete', ...result }, identity)
-              this.store.removeSocialTaskResult(task.id, identity.id)
-            } catch { /* The durable outbox retries publication without rerunning work. */ }
-          }
+              if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error("Task permission check failed.")
+              const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
+                roomId: task.roomId, requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',
+                delegate: async (agentId, content) => { await this.request({ action: 'delegate', taskId: task.id, claim: task.claim, agentId, content }, identity, signal) }
+              })
+              reply = output.text
+              images = output.images
+            } catch (error) { failed = true; reply = error instanceof Error ? error.message : '任务执行失败。' }
+            const result = { id: task.id, ownerId: identity.id, claim: task.claim, reply: reply.slice(0, 32000), ...(images?.length ? { images } : {}), failed }
+            this.store.saveSocialTaskResult(result)
+            if (!signal.aborted) {
+              try {
+                await this.request({ action: 'complete', ...result }, identity)
+                this.store.removeSocialTaskResult(task.id, identity.id)
+              } catch { /* The durable outbox retries publication without rerunning work. */ }
+            }
+          })().catch(() => { /* Keep the result in the durable outbox. */ }).finally(() => {
+            if (generation === this.generation) this.activeTasks.delete(task.id)
+          })
         }
       } catch { /* Offline/sign-out does not interrupt local chats. The UI shows request errors. */ }
       finally { if (generation === this.generation) this.timer = setTimeout(() => { void poll() }, 2500) }
@@ -427,7 +481,7 @@ export class SocialClient {
   stop(): void {
     this.generation++
     clearTimeout(this.heartbeatTimer)
-    this.activeTask = undefined
+    this.activeTasks.clear()
     clearTimeout(this.timer)
     clearTimeout(this.inboxTimer)
     this.abort?.abort()

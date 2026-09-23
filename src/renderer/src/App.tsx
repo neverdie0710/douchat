@@ -83,6 +83,21 @@ function WorkspaceApp(): ReactElement {
   const [contact, setContact] = useState<ContactSelection>()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [showInspector, setShowInspector] = useState(false)
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.isComposing || event.altKey || event.shiftKey
+        || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return
+      // Do not move focus out of a modal into the inactive window behind it.
+      if (document.querySelector('dialog[open], [aria-modal="true"]')) return
+      const input = document.querySelector<HTMLInputElement>('input[data-app-search]')
+      if (!input || input.disabled) return
+      event.preventDefault()
+      input.focus()
+      input.select()
+    }
+    window.addEventListener('keydown', focusSearch)
+    return () => window.removeEventListener('keydown', focusSearch)
+  }, [])
   const [inspectorAgentId, setInspectorAgentId] = useState<string>()
   const interfaceLanguage = resolveInterfaceLanguage(preferences.language)
   const openCreditRecovery = useCallback(() => {
@@ -701,6 +716,7 @@ function WorkspaceApp(): ReactElement {
             if (next.status !== 'signed-in') setSettingsOpen(false)
           }}
           onDetect={() => void scanAgents()}
+          onLocalAgentsChange={setLocalAgents}
           onRemoveCustom={async (id) => setLocalAgents(await window.douchat.removeCustomLocalAgent(id))}
           onDeleteRoutine={async (id) => setSnapshot(await window.douchat.deleteRoutine(id))}
           onSetRoutineEnabled={async (id, enabled) => setSnapshot(await window.douchat.setRoutineEnabled(id, enabled))}
