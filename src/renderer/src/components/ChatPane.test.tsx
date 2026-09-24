@@ -222,6 +222,37 @@ describe('private delivery disclosure', () => {
     expect(scroller.scrollTop).toBe(200)
   })
 
+  it('tracks deferred message layout before paint without pulling readers away from history', async () => {
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    let resized!: () => void
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resized = callback }
+      observe = observe
+      disconnect = disconnect
+    })
+    try {
+      const messages = [{ ...incomingReply, conversationId: directConversation.id }]
+      await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={messages} allMessages={messages} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}} />))
+      const scroller = container.querySelector<HTMLDivElement>('.message-scroll')!
+      expect(observe).toHaveBeenCalledWith(scroller)
+      expect(observe).toHaveBeenCalledWith(container.querySelector('.message-canvas'))
+      Object.defineProperties(scroller, { scrollHeight: { configurable: true, value: 1200 }, clientHeight: { configurable: true, value: 400 } })
+      scroller.scrollTop = 600
+      resized()
+      expect(scroller.scrollTop).toBe(1200)
+      scroller.scrollTop = 200
+      await act(async () => scroller.dispatchEvent(new Event('scroll')))
+      Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1500 })
+      resized()
+      expect(scroller.scrollTop).toBe(200)
+      await act(async () => root.render(null))
+      expect(disconnect).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('copies, quotes and deletes the selected message from its context menu', async () => {
     const message = { ...incomingReply, conversationId: directConversation.id, source: undefined }
     const writeText = vi.fn().mockResolvedValue(undefined)

@@ -38,3 +38,29 @@ it('retains files and thread IDs across reloads, isolates identities, and invali
     expect(readFileSync(join(first.directory, 'notes.md'), 'utf8')).toBe('Remember the task')
   } finally { configureLocalWorkspaces(); rmSync(directory, { recursive: true, force: true }) }
 })
+
+it('migrates Cursor files to a short path while retaining isolation, reloads and topic resets', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'douchat-cursor-test-'))
+  const config = { id: 'cursor-agent', ownerId: 'alice', localAgentId: 'cursor', model: 'default', name: 'Cursor', role: '', instructions: '' } as AgentConfig
+  try {
+    configureLocalWorkspaces(directory)
+    // Simulate the previous layout without mutating real user workspaces.
+    const legacy = localWorkspace({ ...config, localAgentId: 'codex' }, 'topic')!
+    writeFileSync(join(legacy.directory, 'notes.md'), 'Preserve this file')
+    const migrated = localWorkspace(config, 'topic')!
+    expect(migrated.directory.length).toBeLessThan(255)
+    expect(migrated.directory).not.toBe(legacy.directory)
+    expect(readFileSync(join(migrated.directory, 'notes.md'), 'utf8')).toBe('Preserve this file')
+    migrated.remember('cursor-thread')
+    expect(localWorkspace(config, 'topic')!.thread).toBe('cursor-thread')
+    expect(localWorkspace({ ...config, ownerId: 'bob' }, 'topic')!.directory).not.toBe(migrated.directory)
+    expect(localWorkspace({ ...config, id: 'another' }, 'topic')!.directory).not.toBe(migrated.directory)
+    expect(localWorkspace(config, 'other-topic')!.directory).not.toBe(migrated.directory)
+    expect(localWorkspace({ ...config, localAgentId: 'codex' }, 'topic')!.directory).toBe(migrated.directory)
+    resetLocalWorkspaces('alice', key => key === 'topic')
+    const reset = localWorkspace(config, 'topic')!
+    expect(reset.directory).not.toBe(migrated.directory)
+    expect(reset.thread).toBeUndefined()
+    expect(readFileSync(join(migrated.directory, 'notes.md'), 'utf8')).toBe('Preserve this file')
+  } finally { configureLocalWorkspaces(); rmSync(directory, { recursive: true, force: true }) }
+})

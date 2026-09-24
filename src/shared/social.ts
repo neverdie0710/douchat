@@ -22,7 +22,7 @@ export type SocialAction =
   | { action: 'messages'; roomId: string; before?: string }
   | { action: 'send'; roomId: string; id: string; content: string; images?: SocialImage[]; agentId?: string }
 export type SocialRelationship = 'none' | 'self' | 'accepted' | 'outgoing' | 'incoming'
-export interface SocialResult { invite?: GroupInvite; conversationId?: string; person?: SocialPerson | null; relationship?: SocialRelationship; friendshipId?: string; roomId?: string; messages?: SocialMessage[]; updates?: SocialMessage[]; hasMore?: boolean }
+export interface SocialResult { snapshot?: SocialSnapshot; invite?: GroupInvite; conversationId?: string; person?: SocialPerson | null; relationship?: SocialRelationship; friendshipId?: string; roomId?: string; messages?: SocialMessage[]; updates?: SocialMessage[]; hasMore?: boolean }
 export interface SocialTask extends SocialMessage { requesterAgentId?: string; roomName?: string; context?: string; claim: string; agent: SocialAgent; ownerId: string }
 
 export interface SocialTaskReply { text: string; images?: SocialImage[] }

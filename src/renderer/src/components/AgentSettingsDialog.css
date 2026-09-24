@@ -1,0 +1,66 @@
+.agent-settings-dialog {
+  width: min(980px, calc(100vw - 56px)); max-width: none;
+  height: min(720px, calc(100vh - 56px)); max-height: none;
+  padding: 0; margin: auto; border: 0; border-radius: 17px;
+  background: transparent; color: var(--ink); overflow: visible;
+}
+.agent-settings-dialog::backdrop { background: #0003; backdrop-filter: blur(3px); }
+html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: none; }
+/* Share the Settings shell, including its theme colors and navigation states.
+   Match the 190px sidebar used by Settings in its native window. */
+.agent-settings-dialog .agent-settings-layout {
+  width: 100%; height: 100%; min-height: 0;
+  grid-template-columns: 190px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.agent-settings-dialog .settings-modal-title .wordmark { font-size: 16px; }
+.agent-settings-dialog .settings-sidebar { overflow-y: auto; }
+.agent-settings-dialog .agent-settings-content { min-height: 0; overflow-x: hidden; overscroll-behavior-y: contain; }
+.agent-settings-dialog .settings-modal .agent-settings-content { padding-inline: clamp(20px, 3vw, 36px); }
+.agent-settings-dialog .settings-content .agent-settings-panel > section,
+.agent-settings-dialog .settings-content .agent-settings-embedded section { margin: 0; }
+.agent-settings-panel { position: relative; padding: 0; border: 0; margin: 0; min-width: 0; }
+.agent-settings-panel[hidden] { display: none; }
+.agent-settings-dialog .settings-modal .settings-heading { padding-right: 0; }
+.agent-settings-dialog .agent-settings-panel > .settings-heading { padding-right: 110px; }
+.agent-settings-heading .primary-button, .agent-skills-toolbar button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.agent-settings-dialog.messenger .agent-settings-embedded .agent-modal { position: static; width: 100%; max-width: none; max-height: none; border: 0; box-shadow: none; border-radius: 0; background: transparent; padding: 0; animation: none; overflow: visible; }
+.agent-settings-embedded .edit-contact-heading, .agent-settings-embedded .im-heading { display: none; }
+.agent-settings-dialog .agent-settings-embedded .permission-body,
+.agent-settings-dialog .agent-settings-embedded .im-body {
+  padding: 0; max-height: none; overflow: visible; overscroll-behavior: auto;
+}
+.agent-settings-embedded .im-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); }
+.agent-settings-embedded .permission-agent-name { display: none; }
+.agent-settings-dialog .agent-settings-embedded .edit-contact-footer { position: absolute; top: 4px; right: 0; display: flex; justify-content: flex-end; padding: 0; margin: 0; border: 0; }
+.agent-settings-dialog .agent-settings-embedded .edit-contact-footer .primary-button { min-width: 84px; min-height: 36px; padding: 8px 16px; }
+.agent-settings-embedded .edit-contact-footer .secondary-button { display: none; }
+.agent-settings-dialog .secondary-button.danger { color: #ce3434; }
+.agent-settings-delete { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--line); }
+.agent-settings-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-600); margin-left: auto; }
+.agent-settings-saved { color: var(--accent-600); font-size: 13px; margin: 0 0 12px; }
+.agent-file-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.agent-file-tabs button { padding: 12px 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); white-space: nowrap; font: inherit; cursor: pointer; }
+.agent-file-tabs button[aria-selected=true] { color: var(--accent-600); border-bottom-color: var(--accent-600); }
+.agent-file-label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+.agent-markdown-editor { display: block; box-sizing: border-box; width: 100%; min-height: 280px; height: min(48vh, 440px); resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--canvas); color: var(--ink); font: 13px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.agent-settings-dialog :is(button,input,textarea,select):focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+.agent-skills-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+.agent-skills-toolbar > label { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 140px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.agent-skills-toolbar input { min-width: 0; width: 100%; border: 0; background: transparent; color: var(--ink); outline: none; }
+.agent-skills-empty { padding: 60px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; margin-top: 20px; }
+.agent-skills-list { display: grid; gap: 10px; margin-top: 20px; }
+.agent-skills-list article { display: flex; align-items: center; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.agent-skills-list article.selected { border-color: var(--accent-500); }
+.agent-skill-name { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
+.agent-skill-name small { display: block; color: var(--muted); margin-top: 5px; }
+.agent-skill-toggle { display: flex; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; }
+.agent-skill-editor { margin-top: 24px; }
+@media (max-width: 720px) {
+  .agent-settings-dialog { width: calc(100vw - 28px); height: calc(100vh - 28px); }
+  .agent-settings-dialog .agent-settings-layout { grid-template-columns: 66px minmax(0, 1fr); }
+  .agent-settings-dialog .settings-modal-title .wordmark { font-size: 0; }
+  .agent-settings-dialog .settings-modal-title .wordmark::after { content: 'D'; font-size: 17px; }
+  .agent-settings-dialog .agent-settings-heading { flex-wrap: wrap; }
+}
+.agent-customize-panel > .settings-note { margin-top: 16px; }

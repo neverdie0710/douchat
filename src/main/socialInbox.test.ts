@@ -438,6 +438,49 @@ it('rejects a removal receipt when the refreshed group still contains the select
   await expect(alice.client.action({ action: 'remove-members', roomId: room.id, friendIds: [], agentIds: ['remote-agent'] })).resolves.toBeDefined()
 })
 
+it('adds only new members and returns the refreshed roster without another inbox fetch', async () => {
+  const alice = account('alice')
+  const existing = alice.store.createAgent({ name: 'Existing', role: 'Assistant', instructions: '', provider: 'local', model: 'default', color: '#123456' })
+  const added = alice.store.createAgent({ name: 'Added', role: 'Assistant', instructions: '', provider: 'local', model: 'default', color: '#123456' })
+  const group: SocialRoom = { ...room, id: 'team', kind: 'group', agents: [{ id: 'remote-existing', localId: existing.id, ownerId: 'alice', name: existing.name }] }
+  const conversation = alice.store.syncFriendConversation('alice', group, [])
+  const requests: Record<string, any>[] = []
+  const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', friendships: [], rooms: [group] } })
+    const input = JSON.parse(String(options.body)); requests.push(input)
+    if (input.action === 'add-agent') group.agents.push({ id: 'remote-added', ownerId: 'alice', localId: input.localId, name: input.name })
+    return Response.json({ data: {} })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const result = await alice.client.action({ action: 'invite-members', conversationId: conversation.id, friendIds: ['bob', 'bob'], agentIds: [existing.id, added.id, added.id] })
+  expect(requests.map(input => input.action)).toEqual(['add-agent'])
+  expect(requests[0].localId).toBe(added.id)
+  expect(fetcher).toHaveBeenCalledTimes(2) // One mutation and one confirmed roster.
+  expect(result.snapshot?.rooms[0].agents.map(agent => agent.localId)).toEqual([existing.id, added.id])
+  expect(result.snapshot?.rooms[0].members.find(person => person.id === 'bob')?.email).toBe('')
+  expect(alice.store.conversation(conversation.id)?.agentIds).toContain('remote-added')
+})
+
+it('does not add friends twice when promoting a local group', async () => {
+  const alice = account('alice')
+  const agent = alice.store.createAgent({ name: 'Helper', role: 'Assistant', instructions: '', provider: 'local', model: 'default', color: '#123456' })
+  const conversation = alice.store.createGroup({ name: 'Team', agentIds: [agent.id] })
+  vi.spyOn(alice.runtime, 'snapshot').mockReturnValue({ activity: [] } as never)
+  const group: SocialRoom = { ...room, id: 'team', kind: 'group', agents: [] }
+  const actions: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { userId: 'alice', friendships: [], rooms: [group] } })
+    const input = JSON.parse(String(options.body)); actions.push(input.action)
+    if (input.action === 'create-room') { expect(input.friendIds).toEqual(['bob']); return Response.json({ data: { roomId: 'team' } }) }
+    if (input.action === 'add-agent') group.agents.push({ id: 'remote-helper', localId: input.localId, ownerId: 'alice', name: input.name })
+    return Response.json({ data: {} })
+  }))
+  const result = await alice.client.action({ action: 'invite-members', conversationId: conversation.id, friendIds: ['bob', 'bob'], agentIds: [agent.id] })
+  expect(actions).toEqual(['create-room', 'add-agent'])
+  expect(result.snapshot?.rooms[0].id).toBe('team')
+  expect(alice.store.conversation(conversation.id)?.remoteRoomId).toBe('team')
+})
+
 it('isolates routing between two humans with multiple agents each and retains owner permissions', async () => {
   const shared: SocialRoom = { ...room, id: 'multi-owner', kind: 'group', agents: [
     { id: 'a1', localId: 'a1', ownerId: 'alice', name: 'Architect', interactionHumans: 'allow' },

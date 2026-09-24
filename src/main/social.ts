@@ -354,26 +354,29 @@ export class SocialClient {
           throw new Error("The group member has not been removed. Refresh and try again.")
         }
       }
-      return result
+      return { ...result, snapshot }
     }
     if (input.action === 'invite-members') {
       const identity = this.identity()
       const conversation = this.store.accountConversations.find((item) => item.id === input.conversationId)
       if (!conversation || conversation.type !== 'group') throw new Error('Chat not found')
-      const localIds = conversation.socialRoom ? input.agentIds : [...new Set([...conversation.agentIds, ...input.agentIds])]
+      const existingAgents = new Set(conversation.socialRoom?.agents.filter(agent => agent.ownerId === identity.id).map(agent => agent.localId))
+      const localIds = [...new Set(conversation.socialRoom ? input.agentIds : [...conversation.agentIds, ...input.agentIds])].filter(id => !existingAgents.has(id))
       const agents = localIds.map((id) => this.store.claimSocialAgent(id, identity.id))
+      const friendIds = [...new Set(input.friendIds)].filter(id => !conversation.socialRoom?.members.some(person => person.id === id))
       let roomId = conversation.remoteRoomId
       if (!roomId) {
         if (this.runtime.snapshot().activity.some((activity) => activity.conversationId === conversation.id)) throw new Error("Wait for the current reply to finish before inviting friends.")
-        const result = await this.request<SocialResult>({ action: 'create-room', kind: 'group', name: conversation.name, friendIds: input.friendIds, clientId: conversation.id }, identity)
+        const result = await this.request<SocialResult>({ action: 'create-room', kind: 'group', name: conversation.name, friendIds, clientId: conversation.id }, identity)
         if (!result.roomId) throw new Error('Chat could not be created')
         roomId = result.roomId
         this.store.linkSharedGroup(conversation.id, roomId)
-      }
-      if (input.friendIds.length) await this.request({ action: 'add-members', roomId, friendIds: input.friendIds }, identity)
+      } else if (friendIds.length) await this.request({ action: 'add-members', roomId, friendIds }, identity)
       for (const agent of agents) await this.request({ action: 'add-agent', roomId, localId: agent.id, ...sharedAgentProfile(agent) }, identity)
-      await this.refreshRoom(roomId)
-      return { roomId, conversationId: conversation.id }
+      const snapshot = await this.refreshRoom(roomId)
+      // Reuse this confirmed, privacy-filtered roster in the picker instead of
+      // making the renderer fetch the entire social snapshot a second time.
+      return { roomId, conversationId: conversation.id, snapshot }
     }
     if (input.action === 'add-agent') {
       const agent = this.store.claimSocialAgent(input.localId, this.identity().id)
@@ -453,6 +456,9 @@ export class SocialClient {
             let failed = false
             try {
               if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error("Task permission check failed.")
+              // A task can arrive before the inbox poll creates this room locally.
+              // Materialize its trusted room identity before resolving group memory.
+              if (task.roomId && !this.store.accountConversations.some(room => room.remoteRoomId === task.roomId)) await this.refreshRoom(task.roomId)
               const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
                 roomId: task.roomId, requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',
                 delegate: async (agentId, content) => { await this.request({ action: 'delegate', taskId: task.id, claim: task.claim, agentId, content }, identity, signal) }

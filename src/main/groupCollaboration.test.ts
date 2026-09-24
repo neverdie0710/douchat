@@ -46,7 +46,7 @@ it('completes roll call once per member while skipping a failed local adapter an
   const calls: string[] = []
   internal.runReply = async ({ config, context, prompt, timeoutMs, sessionKey, toolsDisabled }: any) => {
     if (context === 'controller') return scriptedPolicy(prompt, agents, { attendance: true })
-    expect(context).toBe('group'); expect(timeoutMs).toBe(15_000)
+    expect(context).toBe('group'); expect(timeoutMs).toBe(60_000)
     expect(sessionKey).toMatch(/:attendance$/); expect(toolsDisabled).toBe(true)
     calls.push(config.id)
     if (config.id === agents[0].id) return { text: '', error: 'No route-compatible authentication source is configured for openai.' }
@@ -251,7 +251,7 @@ it('removes executable tools from a cloud clarification session', () => {
   const { internal, agents } = fixture()
   internal.computer.createTools = () => [{ name: 'effect', label: 'Effect', description: 'External effect', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [] }) }]
   internal.resolveModel = () => ({ id: 'fixture', provider: 'test', api: 'openai-completions', baseUrl: 'https://fixture.invalid', input: ['text'], reasoning: false, contextWindow: 1000, maxTokens: 100 })
-  expect(internal.session(agents[0], 'group:normal', 'group').state.tools).toHaveLength(1)
+  expect(internal.session(agents[0], 'group:normal', 'group').state.tools.map((tool: { name: string }) => tool.name)).toContain('effect')
   expect(internal.session(agents[0], 'group:clarify', 'group', true).state.tools).toHaveLength(0)
 })
 
@@ -303,6 +303,95 @@ it('recovers a finished journal by replaying saved outputs without another model
   expect(workflow.group.members.map(member => member.id)).toContain(agents[2].id)
 })
 
+it.each(['leader', 'jev'])('reviews %s attendance with a compact roster decision instead of a full task plan', async mode => {
+  const { runtime, store, group, agents, internal } = fixture()
+  store.saveDecisionSettings({ mode: mode === 'leader' ? 'leader' : 'model', providerId: 'test', model: 'jev' })
+  internal.decisionProvider = async () => ({ id: 'test' })
+  vi.spyOn(internal.groupDecisionService, 'decide').mockRejectedValue(new DecisionEscalation('Review ordered .57', agents[0].id, 'ordered'))
+  const workers: string[] = []
+  let plans = 0
+  internal.runReply = async ({ context, prompt, config, toolsDisabled }: any) => {
+    if (context === 'controller') {
+      plans++
+      expect(prompt).toContain('Review only whether')
+      expect(prompt).not.toContain('bounded DAG')
+      expect(toolsDisabled).toBe(true)
+      return { text: JSON.stringify({ participation: true, memberIds: [agents[2].id, agents[1].id], ordered: true }) }
+    }
+    workers.push(config.id)
+    return { text: '到' }
+  }
+  await runtime.sendMessage(group.id, '请这两位来报数')
+  expect(plans).toBe(1)
+  expect(workers).toEqual([agents[2].id, agents[1].id])
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+})
+
+it.each(['leader', 'jev'])('falls back to full planning when %s lightweight participation review declines', async mode => {
+  const { runtime, store, group, agents, internal } = fixture()
+  store.saveDecisionSettings({ mode: mode === 'leader' ? 'leader' : 'model', providerId: 'test', model: 'jev' })
+  internal.decisionProvider = async () => ({ id: 'test' })
+  vi.spyOn(internal.groupDecisionService, 'decide').mockRejectedValue(new DecisionEscalation('Review ordered .57', agents[0].id, 'ordered'))
+  let reviews = 0
+  let fullPlans = 0
+  internal.runReply = async ({ context, prompt }: any) => {
+    if (context !== 'controller') return { text: '已完成。' }
+    if (prompt.startsWith('Review only whether')) { reviews++; return { text: '{"participation":false}' } }
+    fullPlans++
+    return scriptedPolicy(prompt, agents)
+  }
+  await runtime.sendMessage(group.id, '需要完整的协作方案')
+  expect(reviews).toBe(1)
+  expect(fullPlans).toBe(2)
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+})
+
+it.each(['complete', 'waiting', 'continue'])('uses compact default result review: %s', async status => {
+  const { runtime, store, group, agents, internal } = fixture()
+  store.saveDecisionSettings({ mode: 'leader', providerId: '', model: '' })
+  let reviews = 0
+  let fullReviews = 0
+  let workers = 0
+  internal.runReply = async ({ context, prompt }: any) => {
+    if (context !== 'controller') { workers++; return { text: '实际结果' } }
+    if (prompt.startsWith('Review the results')) {
+      reviews++
+      expect(prompt).toContain('实际结果')
+      return { text: JSON.stringify({ status }) }
+    }
+    const payload = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    if (payload.completedTurns.length) fullReviews++
+    return scriptedPolicy(prompt, agents)
+  }
+  await runtime.sendMessage(group.id, '给出建议')
+  expect(workers).toBe(1)
+  expect(reviews).toBe(1)
+  expect(fullReviews).toBe(status === 'continue' ? 1 : 0)
+  expect(store.groupWorkflows()[0].status).toBe(status === 'waiting' ? 'waiting' : 'completed')
+})
+
+it('allows a 45-second member plan without the old 20-second request cutoff', async () => {
+  const { runtime, store, group, agents, internal } = fixture()
+  let controllerCalls = 0
+  internal.runReply = async ({ context, prompt, timeoutMs, signal }: any) => {
+    if (context !== 'controller') return { text: '已完成。' }
+    controllerCalls++
+    expect(timeoutMs).toBe(60_000)
+    await new Promise(resolve => setTimeout(resolve, 45_000))
+    signal.throwIfAborted()
+    return scriptedPolicy(prompt, agents)
+  }
+  vi.useFakeTimers()
+  try {
+    const pending = runtime.sendMessage(group.id, '给出方案')
+    await vi.advanceTimersByTimeAsync(95_000)
+    await pending
+    expect(controllerCalls).toBe(2)
+    expect(store.groupWorkflows()[0].status).toBe('completed')
+    expect(store.runEvents.some(event => event.label === 'Coordinator unavailable')).toBe(false)
+  } finally { vi.useRealTimers() }
+})
+
 it('shows a recovered planning timeout in chat once and clears the pending activity', async () => {
   const { runtime, store, group, agents, internal } = fixture()
   internal.runReply = async ({ context, prompt }: any) => context === 'controller' ? scriptedPolicy(prompt, agents) : ({ text: '已回复。' })
@@ -313,13 +402,14 @@ it('shows a recovered planning timeout in chat once and clears the pending activ
   vi.useFakeTimers()
   try {
     const pending = runtime.recoverGroupWorkflows()
-    await vi.advanceTimersByTimeAsync(80_001)
+    await vi.advanceTimersByTimeAsync(180_001)
     await pending
     expect(store.groupWorkflows()[0].status).toBe('paused')
     expect(internal.activity.has(group.id)).toBe(false)
     const notices = () => store.topicMessages(group.id, group.activeTopicId).filter(message => message.id === `${workflow.id}:recovery-failed`)
     expect(notices()).toHaveLength(1)
-    expect(notices()[0].text).toContain('已尝试全部 4 位规划候选')
+    expect(notices()[0].text).toContain('180')
+    expect(notices()[0].text).not.toContain('The operation was aborted')
     await runtime.recoverGroupWorkflows()
     expect(notices()).toHaveLength(1)
   } finally { vi.useRealTimers() }
@@ -441,7 +531,7 @@ it('keeps a failed controller eligible to speak and ends a round after consecuti
   expect(store.groupHealth(group.id)[agents[0].id].status).toBe('healthy')
   expect(store.groupWorkflows().at(-1)?.status).toBe('completed')
   const messages = store.topicMessages(group.id, group.activeTopicId)
-  expect(messages.at(-1)?.text).toBe('本轮已结束：2 人已回复，2 人不可用，已跳过（工程, 测试）。')
+  expect(messages.at(-1)?.text).toBe('本轮已结束：2 人已回复，2 人本轮未回复（工程, 测试）。')
   expect(messages.some(message => message.text.includes('其他成员继续'))).toBe(false)
   const workflow = store.groupWorkflows().at(-1)!
   workflow.status = 'running'; store.saveGroupWorkflow(workflow)
@@ -497,9 +587,9 @@ it('automatically reaches a third planner after two timeouts and completes the t
   vi.useFakeTimers()
   try {
     const pending = runtime.sendMessage(group.id, '报数')
-    await vi.advanceTimersByTimeAsync(19_999)
+    await vi.advanceTimersByTimeAsync(59_999)
     expect(planners).toEqual([agents[0].id])
-    await vi.advanceTimersByTimeAsync(20_001)
+    await vi.advanceTimersByTimeAsync(60_001)
     await pending
     expect(planners).toEqual(agents.slice(0, 3).map(agent => agent.id))
     expect(slowSignals.every(signal => signal.aborted)).toBe(true)
@@ -538,7 +628,7 @@ it('repairs a hosted coordinator format error in a fresh session before falling 
   expect(store.topicMessages(group.id, group.activeTopicId).filter(message => message.authorId === agents[0].id).map(message => message.text)).toEqual(['已完成所需答复。'])
 })
 
-it('quarantines a failed member across tasks, skips repeat recovery, and admits it only after the next successful health check', async () => {
+it('rechecks a previously failed member on a new task and allows its recovered response', async () => {
   const { runtime, store, agents, group, internal } = fixture()
   internal.refreshHealth = (DouchatRuntime.prototype as any).refreshHealth.bind(runtime)
   const probe = vi.fn(async () => true)
@@ -561,13 +651,13 @@ it('quarantines a failed member across tasks, skips repeat recovery, and admits 
     fail = false; replies.length = 0
     vi.setSystemTime(1_060_000)
     await runtime.sendMessage(group.id, '重新报数')
-    expect(probe).toHaveBeenCalledTimes(4)
-    expect(replies).toEqual(agents.slice(1).map(agent => agent.id))
+    expect(probe).toHaveBeenCalledTimes(5)
+    expect(replies).toEqual(agents.map(agent => agent.id))
     expect(phases).toEqual(['initial', 'recovery', 'initial'])
-    expect(store.topicMessages(group.id, group.activeTopicId).some(message => message.text.includes('本轮不再调用，等待下次健康检测'))).toBe(true)
+    expect(store.topicMessages(group.id, group.activeTopicId).some(message => message.text.includes('本轮不再调用，等待下次健康检测'))).toBe(false)
     replies.length = 0; vi.setSystemTime(1_361_000)
     await runtime.sendMessage(group.id, '重新报数')
-    expect(probe).toHaveBeenCalledTimes(8)
+    expect(probe).toHaveBeenCalledTimes(9)
     expect(replies).toEqual(agents.map(agent => agent.id))
     expect(runtime.snapshot().groupMemberHealth![group.id][agents[0].id].status).toBe('healthy')
   } finally { vi.useRealTimers() }
@@ -660,7 +750,7 @@ it('writes English scheduling notices with reusable translation metadata', async
   const notices = store.topicMessages(group.id, group.activeTopicId).filter(message => message.kind === 'system')
   expect(notices).toHaveLength(4)
   expect(notices.every(message => message.localization && !/\p{Script=Han}/u.test(message.text))).toBe(true)
-  expect(notices.at(-1)?.text).toBe('Round complete: 3 replied; 1 unavailable and skipped (Member 2).')
+  expect(notices.at(-1)?.text).toBe('Round complete: 3 replied; 1 did not reply this round (Member 2).')
 })
 
 it.each([
@@ -702,4 +792,166 @@ it('accepts an Arabic clarification question without repairing it as non-questio
   await runtime.sendMessage(group.id, 'اسألني عن نطاق المشروع قبل البدء')
   expect(store.groupWorkflows().at(-1)?.status).toBe('waiting')
   expect(store.topicMessages(group.id, group.activeTopicId).at(-1)?.text).toBe('هل تريد تشغيل الاختبار داخليًا فقط؟')
+})
+
+it('defaults to cloud decisions and resumes a clarification from a short human answer', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  expect(store.decisionSettings()).toMatchObject({ mode: 'model', providerId: 'douchat:cloud' })
+  const provider = { id: 'douchat:cloud' }
+  internal.decisionProvider = vi.fn(async () => provider)
+  let answered = false
+  const decide = vi.spyOn(internal.groupDecisionService, 'decide').mockImplementation(async (...args: any[]) => {
+    expect(args[1]).toBe(provider)
+    const context = args[3]
+    if (context.completedTurns.length) return { mode: 'none', memberIds: [], triggerMessageIds: [] }
+    if (answered) {
+      expect(context.messages.at(-1).content).toContain('Human reply now:\nyes')
+      expect(context.messages.at(-1).content).toContain('如果明天不能见到你')
+      expect(context.messages.some((message: any) => message.content.includes('翻成英文'))).toBe(true)
+    }
+    return { mode: 'single', leaderMemberId: agents[0].id, memberIds: [agents[0].id],
+      triggerMessageIds: [context.messages.at(-1).id], waitForHuman: !answered }
+  })
+  internal.runReply = vi.fn(async ({ context }: any) => {
+    expect(context).toBe('group')
+    return { text: answered ? 'Good morning, good afternoon, and good night.' : '你想把这句话翻成英文吗？' }
+  })
+  await runtime.sendMessage(group.id, '如果明天不能见到你，祝你早安午安晚安')
+  expect(store.groupWorkflows().at(-1)?.status).toBe('waiting')
+  answered = true
+  await runtime.sendMessage(group.id, 'yes')
+  expect(decide).toHaveBeenCalled()
+  expect(store.groupWorkflows().at(-1)?.status).toBe('completed')
+  expect(store.topicMessages(group.id, group.activeTopicId).at(-1)?.text).toContain('Good morning')
+})
+
+it('repairs a cloud member clarification in a fresh session with tools disabled', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  const workerCalls: any[] = []
+  internal.runReply = async (input: any) => {
+    if (input.context === 'controller') {
+      const payload = JSON.parse(input.prompt.slice(input.prompt.indexOf('{')))
+      return { text: JSON.stringify({ mode: 'single', memberIds: [agents[0].id],
+        triggerMessageIds: [payload.messages.at(-1).id], waitForHuman: true }) }
+    }
+    workerCalls.push(input)
+    return { text: workerCalls.length === 1 ? '好的。' : '你希望翻译成英文吗？' }
+  }
+  await runtime.sendMessage(group.id, '请先确认翻译语言。')
+  expect(workerCalls).toHaveLength(2)
+  expect(workerCalls[1].toolsDisabled).toBe(true)
+  expect(workerCalls[1].sessionKey).not.toBe(workerCalls[0].sessionKey)
+  expect(store.groupWorkflows().at(-1)?.status).toBe('waiting')
+  expect(store.topicMessages(group.id, group.activeTopicId).at(-1)?.text).toBe('你希望翻译成英文吗？')
+})
+
+it.each(['invalid', 'error'])('reassigns a clarification after a bounded %s repair without publishing broken replies', async repair => {
+  const { runtime, store, agents, group, internal } = fixture()
+  const workers: string[] = []
+  internal.runReply = async ({ config, context, prompt, sessionKey }: any) => {
+    if (context === 'controller') {
+      const payload = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      if (payload.recovery) return scriptedPolicy(prompt, agents)
+      return { text: JSON.stringify({ mode: 'single', memberIds: [agents[0].id],
+        triggerMessageIds: [payload.messages.at(-1).id], waitForHuman: true }) }
+    }
+    workers.push(config.id)
+    if (config.id === agents[0].id) {
+      if (repair === 'error' && sessionKey.includes(':repair:')) throw new Error('upstream unavailable')
+      return { text: 'BROKEN_REPLY' }
+    }
+    return { text: '你希望翻译成哪种语言？' }
+  }
+  await runtime.sendMessage(group.id, '请先确认翻译语言。')
+  expect(workers).toEqual([agents[0].id, agents[0].id, agents[1].id])
+  expect(store.groupWorkflows().at(-1)?.status).toBe('waiting')
+  const messages = store.topicMessages(group.id, group.activeTopicId)
+  expect(messages.some(message => message.text.includes('BROKEN_REPLY'))).toBe(false)
+  expect(messages.at(-1)?.text).toBe('你希望翻译成哪种语言？')
+})
+
+it('routes using labelled agent file capabilities and skills without loading their private memory or persona into the controller', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  store.updateAgent(agents[1].id, { systemFiles: {
+    'SOUL.md': 'UNSHARED_PERSONA\n## Capabilities\nPUBLIC_ANALYSIS_SKILL', 'USER.md': 'PRIVATE_USER_SENTINEL', 'MEMORY.md': 'PRIVATE_MEMORY_SENTINEL'
+  }, skills: [{ id: 'sql', name: 'SQL analysis', content: '---\ndescription: Analyze database bottlenecks\n---\nPRIVATE_SKILL_IMPLEMENTATION', enabled: true }] })
+  internal.runReply = async ({ context, prompt }: any) => {
+    if (context === 'controller') {
+      expect(prompt).toContain('PUBLIC_ANALYSIS_SKILL'); expect(prompt).toContain('SQL analysis')
+      for (const privateText of ['UNSHARED_PERSONA', 'PRIVATE_USER_SENTINEL', 'PRIVATE_MEMORY_SENTINEL', 'PRIVATE_SKILL_IMPLEMENTATION']) expect(prompt).not.toContain(privateText)
+      return scriptedPolicy(prompt, agents, { target: agents[1].id })
+    }
+    return { text: 'Analysis complete' }
+  }
+  expect(internal.systemPrompt(store.agent(agents[1].id), 'controller', false)).not.toContain('PUBLIC_ANALYSIS_SKILL')
+  await runtime.sendMessage(group.id, '分析数据库性能')
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+})
+
+it('pauses partial errored work without marking it complete or asking a replacement to repeat it', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  const workers: string[] = []
+  internal.runReply = async ({ config, context, prompt }: any) => {
+    if (context === 'controller') return scriptedPolicy(prompt, agents, { target: agents[1].id })
+    workers.push(config.id)
+    return { text: 'Partial public result\n[[private:human]]PRIVATE_PARTIAL[[/private]]', error: 'Upstream disconnected' }
+  }
+  await runtime.sendMessage(group.id, '完成这个任务')
+  expect(workers).toEqual([agents[1].id])
+  expect(store.groupWorkflows()[0].status).toBe('paused')
+  const publicText = store.topicMessages(group.id, group.activeTopicId).map(message => message.text).join('\n')
+  expect(publicText).toContain('Partial public result'); expect(publicText).not.toContain('PRIVATE_PARTIAL')
+})
+
+it('persists independent DAG node results and replays them without worker execution', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  let executions = 0
+  internal.runReply = async ({ context, prompt }: any) => {
+    const p = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    if (context === 'controller') return { text: JSON.stringify(p.completedTurns.length ? { mode: 'none', memberIds: [], triggerMessageIds: [] } : {
+      mode: 'parallel', leaderMemberId: agents[0].id, memberIds: [agents[0].id, agents[1].id], triggerMessageIds: [p.currentRequest.id],
+      tasks: [
+        { id: 'research', memberId: agents[0].id, instruction: 'Research', dependsOn: [], expectedOutput: 'Findings' },
+        { id: 'draft', memberId: agents[1].id, instruction: 'Draft', dependsOn: ['research'], expectedOutput: 'Draft based on findings' },
+        { id: 'review', memberId: agents[0].id, instruction: 'Review', dependsOn: ['draft'], expectedOutput: 'Reviewed output' }
+      ]
+    }) }
+    executions++
+    return { text: `Actual result for ${p.turn.taskId}` }
+  }
+  await runtime.sendMessage(group.id, 'Research, draft, then review')
+  expect(executions).toBe(3)
+  const workflow = store.groupWorkflows()[0]
+  expect(workflow.status).toBe('completed')
+  expect(Object.keys(workflow.calls).filter(key => key.startsWith('task:'))).toHaveLength(3)
+  workflow.status = 'running'; store.saveGroupWorkflow(workflow)
+  await runtime.recoverGroupWorkflows()
+  expect(executions).toBe(3)
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+})
+
+it('gives dependent DAG workers the actual public image and distinct node sessions', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  const data = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+  const artifact = await store.saveImageAttachment({ name: 'chart.png', mimeType: 'image/png', data })
+  const keys: string[] = []
+  internal.runReply = async ({ context, prompt, sessionKey, images }: any) => {
+    const p = JSON.parse(prompt.slice(prompt.indexOf('{')))
+    if (context === 'controller') return { text: JSON.stringify(p.completedTurns.length ? { mode: 'none', memberIds: [], triggerMessageIds: [] } : {
+      mode: 'single', memberIds: [agents[0].id], triggerMessageIds: [p.currentRequest.id],
+      tasks: [
+        { id: 'chart', memberId: agents[0].id, instruction: 'Create a chart', dependsOn: [], expectedOutput: 'Chart image' },
+        { id: 'inspect', memberId: agents[0].id, instruction: 'Inspect the chart', dependsOn: ['chart'], expectedOutput: 'Review of the image' }
+      ]
+    }) }
+    keys.push(sessionKey)
+    if (p.turn.taskId === 'chart') return { text: '', attachments: [artifact] }
+    expect(images).toContainEqual({ type: 'image', mimeType: 'image/png', data: data.toString('base64') })
+    expect(prompt).toContain(artifact.id)
+    return { text: 'Reviewed the actual chart' }
+  }
+  await runtime.sendMessage(group.id, 'Create and review a chart')
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+  expect(keys).toHaveLength(2)
+  expect(new Set(keys).size).toBe(2)
 })

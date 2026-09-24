@@ -47,7 +47,7 @@ window.addEventListener('languagechange', () => {
 })
 apply()
 export function usePreferences(): Preferences {
-  return useSyncExternalStore((notify) => { listeners.add(notify); return () => { listeners.delete(notify) } }, () => current)
+  return useSyncExternalStore((notify) => { listeners.add(notify); return () => { listeners.delete(notify) } }, () => current, () => current)
 }
 export function t(text: string): string {
   if (resolveInterfaceLanguage(current.language) !== 'zh-CN') return text
@@ -89,6 +89,11 @@ export function tr(text: string, values: Record<string, string | number>): strin
   return interpolate(t(text), values)
 }
 const translations: Record<string, string> = {
+  "Group memory": "群记忆",
+  "About me": "关于我",
+  "Updating user memory": "正在更新用户记忆",
+  "Updated user memory": "已更新用户记忆",
+  "Could not update user memory": "未能更新用户记忆",
   'Remove picture': '移除头像',
   "Edit local agent": "编辑本地智能体",
   "Add local agent": "添加本地智能体",
@@ -159,6 +164,28 @@ const translations: Record<string, string> = {
   "No providers yet": "尚未添加服务商",
   "Add a provider to create agents with your own models.": "添加服务商后，即可使用自己的模型创建智能体。",
   "Supports OpenAI Chat Completions and Anthropic Messages": "支持 OpenAI Chat Completions 和 Anthropic Messages",
+  "Save this provider to keep the new credential on this device.": "保存服务商后，新凭证会加密保存在本机。",
+  "Your saved credential is ready to use. Authorize again only to replace it.": "可直接使用已保存的凭证；如需更换，可重新授权。",
+  "Continue in your browser. No API key to copy.": "在浏览器中完成授权，无需复制 API Key。",
+  "Create an API key on the provider website, then paste it above.": "前往服务商网站创建 API Key，然后粘贴到上方输入框。",
+  "Credential saved": "凭证已保存",
+  "Authentication method": "授权方式",
+  "OAuth (recommended)": "OAuth（推荐）",
+  "Enter API key manually": "手动填写 API Key",
+  "Authorize in your browser to connect TokenDance without copying an API key. Save the provider after authorization.": "在浏览器中授权即可连接 TokenDance，无需复制 API Key。授权完成后请保存服务商。",
+  "Waiting for browser authorization…": "等待浏览器授权…",
+  "Authorize again": "重新授权",
+  "Authorize TokenDance": "授权连接 TokenDance",
+  "Cancel authorization": "取消授权",
+  "Authorization successful. Save to finish.": "授权成功，请保存服务商。",
+  "A saved API key is available.": "已保存 API Key，可直接使用或重新授权。",
+  "Create an API key": "前往创建 API Key",
+  "TokenDance authorization cancelled.": "TokenDance 授权已取消。",
+  "TokenDance authorization declined.": "TokenDance 授权被拒绝。",
+  "TokenDance authorization failed. Please try again.": "TokenDance 授权失败，请重试。",
+  "TokenDance authorization timed out. Please try again.": "TokenDance 授权超时，请重试。",
+  "Could not start TokenDance authorization.": "无法启动 TokenDance 授权。",
+  "Could not open the authorization page.": "无法打开授权页面。",
   "Provider preset": "服务商预设",
   "Other / Custom": "其他 / 自定义",
   "e.g. openrouter": "例如 openrouter",

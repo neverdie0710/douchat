@@ -3,7 +3,7 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 vi.mock('./NativeDialog', () => ({ NativeDialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
-vi.mock('../preferences', () => ({ t: (s: string) => s, tr: (s: string, values: Record<string, string | number>) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll('{'+key+'}', String(value)), s) }))
+vi.mock('../preferences', () => ({ usePreferences: () => ({ language: 'zh-CN' }), resolveInterfaceLanguage: (language: string) => language, t: (s: string) => s, tr: (s: string, values: Record<string, string | number>) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll('{'+key+'}', String(value)), s) }))
 import { CustomModelSettings } from './CustomModelSettings'
 it('edits a saved provider, tests with the stored key, and saves multiple model IDs', async () => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -41,5 +41,82 @@ it('edits a saved provider, tests with the stored key, and saves multiple model 
     await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(saveCustomModels).toHaveBeenCalledWith([expect.objectContaining({ id: 'mine', apiKey: undefined, models: ['one', 'org/two'] })], 'mine/one')
     expect(container.querySelector('form')).toBeNull()
+  } finally { await act(async () => root.unmount()); container.remove() }
+})
+
+it('places TokenDance after OpenRouter, defaults to OAuth, saves the authorized key and offers manual key links', async () => {
+  ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+  const config = { providers: [], defaultModel: '' }
+  const saveCustomModels = vi.fn(async () => config)
+  const authorizeTokenDance = vi.fn(async () => 'oauth-fixture-key')
+  Object.defineProperty(window, 'douchat', { configurable: true, value: {
+    getCustomModels: vi.fn(async () => config), saveCustomModels, authorizeTokenDance,
+    cancelTokenDanceAuthorization: vi.fn(async () => {})
+  } })
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  const button = (text: string) => [...container.querySelectorAll('button')].find(b => b.textContent === text)!
+  const select = async (element: HTMLSelectElement, value: string) => {
+    await act(async () => { element.value = value; element.dispatchEvent(new Event('change', { bubbles: true })) })
+  }
+  try {
+    await act(async () => root.render(<CustomModelSettings />))
+    await act(async () => button('Add provider').click())
+    const preset = container.querySelector<HTMLSelectElement>('.custom-model-fields select')!
+    expect([...preset.options].map(o => o.value)).toEqual(['anthropic', 'openai', 'openrouter', 'tokendance', 'deepseek', 'custom'])
+    for (const id of ['anthropic', 'openai', 'openrouter', 'deepseek']) {
+      await select(preset, id)
+      expect(container.querySelector('a[target="_blank"]')?.textContent).toContain('Create an API key')
+    }
+    await select(preset, 'tokendance')
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')).toBeNull()
+    expect(button('Save').disabled).toBe(true)
+    await act(async () => button('Authorize TokenDance').click())
+    expect(authorizeTokenDance).toHaveBeenCalledOnce()
+    expect(container.textContent).toContain('Authorization successful')
+    expect(button('Save').disabled).toBe(false)
+    await select(container.querySelector('#tokendance-auth-mode')!, 'apikey')
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://tokendance.space/keys')
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    await act(async () => container.querySelector('a')!.click())
+    expect(open).toHaveBeenCalledWith('https://tokendance.space/keys', '_blank', 'noopener,noreferrer')
+    open.mockRestore()
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe('oauth-fixture-key')
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(saveCustomModels).toHaveBeenCalledWith([expect.objectContaining({ id: 'tokendance', apiKey: 'oauth-fixture-key', apiBase: 'https://tokendance.space/gateway/v1', models: ['mimo-v2.5'] })], 'tokendance/mimo-v2.5')
+  } finally { await act(async () => root.unmount()); container.remove() }
+})
+
+it('discards a late authorization result after switching providers and clears manually entered keys', async () => {
+  ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+  let complete!: (key: string) => void
+  const cancel = vi.fn(async () => {})
+  Object.defineProperty(window, 'douchat', { configurable: true, value: {
+    getCustomModels: async () => ({ providers: [], defaultModel: '' }),
+    authorizeTokenDance: () => new Promise<string>(resolve => { complete = resolve }),
+    cancelTokenDanceAuthorization: cancel
+  } })
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  const button = (text: string) => [...container.querySelectorAll('button')].find(b => b.textContent === text)!
+  try {
+    await act(async () => root.render(<CustomModelSettings />))
+    await act(async () => button('Add provider').click())
+    const preset = container.querySelector<HTMLSelectElement>('.custom-model-fields select')!
+    const choose = async (value: string) => { await act(async () => { preset.value = value; preset.dispatchEvent(new Event('change', { bubbles: true })) }) }
+    await choose('tokendance')
+    await act(async () => button('Authorize TokenDance').click())
+    await choose('openrouter')
+    expect(cancel).toHaveBeenCalled()
+    await act(async () => complete('late-secret'))
+    const key = container.querySelector<HTMLInputElement>('input[type="password"]')!
+    expect(key.value).toBe('')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(key, 'manual-secret')
+      key.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await choose('deepseek')
+    expect(key.value).toBe('')
+    expect(button('Save').disabled).toBe(true)
   } finally { await act(async () => root.unmount()); container.remove() }
 })

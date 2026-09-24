@@ -134,3 +134,15 @@ it('trusts Cursor only when launching in an application-owned workspace', () => 
   expect(args).toEqual(expect.arrayContaining(['--mode', 'ask']))
   expect(args).not.toContain('--force')
 })
+
+ it('reads Kimi structured replies without terminal bullets or tool output and preserves Markdown', () => {
+  expect(localAgentArgs('kimi', 'hello', '/tmp/out')).toEqual(['--prompt', 'hello', '--output-format', 'stream-json'])
+  const output = [
+    { role: 'assistant', content: null, tool_calls: [{ id: 'tool-1' }] },
+    { role: 'tool', content: 'private tool output' },
+    { role: 'meta', content: 'session resumed' },
+    { role: 'assistant', content: 'Kimi 到，6 ✅' },
+    { role: 'assistant', content: [{ type: 'think', text: 'private thinking' }, { type: 'text', text: '• Actual list item\n\n```python\n  indented()\n```' }] }
+  ].map(message => JSON.stringify(message)).join('\n')
+  expect(localAgentText('kimi', output)).toBe('Kimi 到，6 ✅\n\n• Actual list item\n\n```python\n  indented()\n```')
+})

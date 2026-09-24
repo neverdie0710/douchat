@@ -1,3 +1,4 @@
+import { UserMemoryPanel } from './UserMemoryPanel'
 import { LocalAgentEditor } from './LocalAgentEditor'
 import { CustomModelSettings } from './CustomModelSettings'
 import { SchedulingSettings } from './SchedulingSettings'
@@ -13,7 +14,7 @@ import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, R
 import { readAvatarFile } from '../avatarFile'
 import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about'
+export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about'
 
 export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
@@ -138,7 +139,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
       <button ref={closeRef} className="settings-close" onClick={onClose} aria-label={t('Close')} title={t('Close')}><X size={18} /></button>
       {tab === 'profile' ? (
         <ProfileTab user={user} signingOut={signingOut} signOutError={signOutError} onSignOut={() => void signOut()} onUpdateProfile={onUpdateProfile} />
-      ) : tab === 'general' ? <>
+      ) : tab === 'memory' ? <UserMemoryPanel key={user.id} /> : tab === 'general' ? <>
         <header className="settings-heading"><div><h1>{t('General')}</h1><p>{t('Choose your language and appearance.')}</p></div></header>
         <div className="general-settings">
           <label><span>{t('Language')}</span><select value={preferences.language} onChange={(event) => setPreferences({ language: event.target.value as LanguagePreference })}><option value="system">{t('Follow system')}</option><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>

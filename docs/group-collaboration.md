@@ -79,7 +79,8 @@ Private triggers cannot be reassigned to a member who cannot access them.
 Cloud attendance uses separate sessions without tools and a 15-second reply
 budget. Cloud decision planning has a shared 40-second budget across schema correction,
 local member-controller planning has 20 seconds, ordinary replies have
-120 seconds, and queue admission has six seconds. Expired queued work cannot run
+120 seconds, and reply queue admission is bounded by the requested reply timeout.
+The complete decision/fallback chain has a shared 120-second deadline. Expired queued work cannot run
 later. These execution limits and authorization checks apply to every policy.
 Authentication/startup failures can be reassigned; an interrupted local operation
 with unknown external effects pauses for review instead of repeating the operation.
@@ -90,12 +91,15 @@ Settings → Scheduling（调度）→ 群决策服务 offers two account-scoped
 
 - **默认** asks a group member's isolated controller to elect a leader, plan the
   work and decide recovery. It needs no separate decision model configuration.
-- **决策模型** uses the saved custom provider and model ID for those decisions.
-  Ordinary LLMs use chat completions and validated JSON plans. Jev IDs such as
-  `~typesafe/jev-latest` use `/api/v1/systemone` typed choices for leader, routing,
-  member relevance and recovery. Legacy `llm`/`jev` modes migrate to this mode;
-  the model ID determines the protocol, so an ordinary LLM is never sent to
-  System One just because a legacy setting said `jev`.
+- **决策模型** uses Douchat Cloud's published Jev model and charges the displayed
+  credits per successful call; no separate API key is entered in the desktop UI.
+  The runtime also retains ordinary custom-model and System One adapters for
+  compatibility and tests. Legacy self-funded settings are not silently converted
+  into paid cloud usage.
+
+See [routing profiles and task graphs](group-scheduling-improvements.md) for
+agent-file visibility, typed worker selection, catalog caching, task evidence,
+DAG execution, recovery and monitoring boundaries.
 
 Jev's uncertain or multi-stage decisions escalate to an isolated member controller;
 a confident Jev leader choice is preferred as the fallback controller. The
@@ -235,8 +239,8 @@ scripted human responses. Existing groups and saved model settings are unchanged
 ### 2026-09-23：规划等待与可见身份
 
 - 健康探测显示群调度头像和“检查群成员状态”；外部模型决策显示供应商 / 模型名称；成员生成计划时显示实际联系人头像。规划、选负责人和故障处理分别标记，不再统一显示“正在协调群聊”。
-- 配置决策模型仍先调用该模型，失败或需要复核后才使用成员规划。默认模式直接使用成员规划。
-- 成员规划按候选排序逐个尝试，同一时间只接受一名成员的计划。每名候选最多 20 秒（包括排队）；失败或超时自动切换下一位，不再限制为两名，也不再在 3 秒后并行启动备用请求。
+- 默认使用云端决策模型，失败或需要复核后才使用成员规划。已保存的调度选择继续保留，也可手动选择成员规划。
+- 成员规划按候选排序逐个尝试，同一时间只接受一名成员的计划。每名候选最多 40 秒（包括排队及一次格式纠正；成员会话每次请求最多 20 秒）；失败或超时自动切换下一位，不再限制为两名，也不再在 3 秒后并行启动备用请求。
 - 切换前取消旧请求并丢弃迟到结果，规划请求禁用宿主工具。规划失败只取消该成员当前任务的规划资格，不直接认定其无法执行后续工作。切换时在聊天中显示居中系统提示。
 - 整个成员规划阶段最多 120 秒；候选全部失败或总时间耗尽时明确暂停并显示原因。这个窗口不包括健康探测、配置模型请求或实际工作。用户主动停止会立即终止接力；失败接力同样适用于决策模型回退和执行故障后的重新规划。
 
@@ -251,3 +255,9 @@ scripted human responses. Existing groups and saved model settings are unchanged
 ### 2026-09-23：语言与硬编码检查
 
 调度设置和新系统通知接入中英文翻译；通知持久化模板与参数以支持切换语言。公开交付约束改为模型返回的结构化字段，能力辅助排序使用 Unicode 分词，配置式调度不再经过旧中英文静默关键词判断。详细修复、自动化覆盖与未覆盖范围见 [语言检查记录](group-language-audit.md)。
+
+### 2026-09-24：默认云端决策与回复恢复
+
+- 未保存调度配置时默认使用云端决策模型；保留已有明确配置。
+- 澄清续接结合上一条问题和原始任务理解 yes、好等短回答，已回答的问题不重复追问；简单文本任务优先使用合理的上下文假设。
+- 云端及自定义模型缺少必需的提问或公开交付物时，使用无工具请求补答一次；仍不满足要求时交由调度选择替补。已产生操作记录、附件或本地代理执行的结果继续保留原有保护，避免重复执行。

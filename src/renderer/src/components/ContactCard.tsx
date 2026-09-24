@@ -1,8 +1,8 @@
 import type { SocialSnapshot } from '../../../shared/social'
 import type { CustomModelConfig } from '../../../shared/customModels'
 import { t } from '../preferences'
-import { Check, Pencil, MessageSquare, MoreHorizontal, Star, Users, X } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { Check, Pencil, MessageSquare, Star, Users, X } from 'lucide-react'
+import { useEffect, useState, type ReactElement } from 'react'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import type { ContactSelection } from './ContactList'
 import { AgentAvatar, UserAvatar, ConversationAvatar, agentDisplayName, agentSourceLabel } from './common'
@@ -27,10 +27,6 @@ export function ContactCard({
   onMessage,
   onStartDirect,
   onEditBot,
-  onEditPermissions,
-  onConfigureModel,
-  onConfigureIM,
-  onDeleteBot,
   onDeleteConversation,
   onRemoveFromContacts,
   onTogglePin
@@ -56,10 +52,8 @@ export function ContactCard({
   const [friendBusy, setFriendBusy] = useState(false)
   const [friendError, setFriendError] = useState('')
   const friend = selection?.kind === 'friend' ? social?.friendships.find((item) => item.person.id === selection.id) : undefined
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [customModels, setCustomModels] = useState<CustomModelConfig>()
   const [localModelLabel, setLocalModelLabel] = useState<{ agentId: string; model: string; name: string }>()
-  const profileMenuRef = useRef<HTMLDivElement>(null)
   const agent = selection?.kind === 'bot' ? snapshot.agents.find((item) => item.id === selection.id) : undefined
   const group =
     selection?.kind === 'group' ? snapshot.conversations.find((item) => item.id === selection.id) : undefined
@@ -85,25 +79,8 @@ export function ContactCard({
   }, [agent?.id, agent?.localAgentId, agent?.model, readOnly])
 
   useEffect(() => {
-    setProfileMenuOpen(false)
     setFriendError('')
   }, [selection?.id, selection?.kind])
-
-  useEffect(() => {
-    if (!profileMenuOpen) return
-    const close = (event: MouseEvent): void => {
-      if (!profileMenuRef.current?.contains(event.target as Node)) setProfileMenuOpen(false)
-    }
-    const escape = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') setProfileMenuOpen(false)
-    }
-    window.addEventListener('mousedown', close)
-    window.addEventListener('keydown', escape)
-    return () => {
-      window.removeEventListener('mousedown', close)
-      window.removeEventListener('keydown', escape)
-    }
-  }, [profileMenuOpen])
 
   const person = friend?.person ?? (selection?.kind === 'friend' ? social?.rooms.flatMap((room) => room.members).find((member) => member.id === selection.id) : undefined)
   if (person) {
@@ -173,19 +150,7 @@ export function ContactCard({
                 </div>
                 <p>{categoryLabel}</p>
               </div>
-              {!readOnly && <div className="profile-menu-anchor" ref={profileMenuRef}>
-                <button className="profile-edit" onClick={() => setProfileMenuOpen((open) => !open)} aria-label={t('Agent menu')} aria-haspopup="menu" aria-expanded={profileMenuOpen} title={t('Agent menu')}><MoreHorizontal size={21} /></button>
-                {profileMenuOpen && <div className="dropdown-menu profile-actions-menu" role="menu">
-                  <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
-                  {onConfigureModel && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onConfigureModel(agent) }}>{t('Configure model')}</button>}
-                  {onEditPermissions && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditPermissions(agent) }}>{t('Agent permissions')}</button>}
-                  {onConfigureIM && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onConfigureIM(agent) }}>{t('Configure message channels')}</button>}
-                  {agent.systemRole !== 'admin' && <>
-                    <div className="dropdown-separator" />
-                    <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>
-                  </>}
-                </div>}
-              </div>}
+
             </section>
 
             <section className="contact-profile-section">
@@ -207,6 +172,7 @@ export function ContactCard({
               {readOnly
                 ? <p className="contact-profile-message-hint">{t('This agent belongs to another member. Direct messaging is not available.')}</p>
                 : <button onClick={() => direct ? onMessage(direct.id) : onStartDirect(agent.id)}><MessageSquare size={24} strokeWidth={1.7} /><span>{t('Send message')}</span></button>}
+              {!readOnly && <button onClick={() => onEditBot(agent)}><Pencil size={24} strokeWidth={1.7} /><span>{t('Edit agent')}</span></button>}
             </div>
           </div>
         </div>

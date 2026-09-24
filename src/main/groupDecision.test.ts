@@ -12,16 +12,27 @@ const signal = new AbortController().signal
 const response = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 
 describe('decision provider', () => {
+  it('uses a compact member-provider plan for default personal participation', async () => {
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(init!.body as string)
+      expect(body.messages[0].content).toContain('Review only whether')
+      return response({ choices: [{ message: { content: JSON.stringify({ participation: true, ordered: true, memberIds: ['eng', 'lead'] }) } }] })
+    })
+    const decision = await new GroupDecisionService(request).plan({ ...provider, apiBase: 'https://fixture.invalid/v1' }, 'ordinary', group,
+      { ...context, requestMessageId: 'user' }, signal, group.members[0], true)
+    expect(decision).toMatchObject({ participationOnly: true, mode: 'sequential', memberIds: ['eng', 'lead'] })
+    expect(request).toHaveBeenCalledOnce()
+  })
   it('does not let a member probe authentication failure disable the configured decision service', async () => {
     const request = vi.fn<typeof fetch>(async input => String(input).includes('broken.test') ? new Response('', { status: 401 })
-      : response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 1 } }, member_0: { noul: 0 }, member_1: { noul: 1 } } }))
+      : response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 1 } }, worker: { choice: 'eng', probabilities: { eng: 1 } }, member_0: { noul: 0 }, member_1: { noul: 1 } } }))
     const service = new GroupDecisionService(request)
     await service.decide(settings, provider, group, context, signal)
     await expect(service.complete({ ...provider, apiBase: 'https://broken.test/v1' }, 'broken', 'PONG', signal)).rejects.toThrow('401')
     await expect(service.decide(settings, provider, group, context, signal)).resolves.toMatchObject({ memberIds: ['eng'] })
   })
   it('calls System One with typed questions and validates the member subset', async () => {
-    const request = vi.fn().mockResolvedValue(response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 0.97, none: 0.01, parallel: 0.01, plan: 0.01 } }, member_0: { noul: 0.02 }, member_1: { noul: 0.95 } } }))
+    const request = vi.fn().mockResolvedValue(response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 0.97, none: 0.01, parallel: 0.01, plan: 0.01 } }, worker: { choice: 'eng', probabilities: { eng: .97 } }, member_0: { noul: 0.4 }, member_1: { noul: 0.95 } } }))
     const result = await new GroupDecisionService(request).decide(settings, provider, group, context, signal)
     expect(result).toEqual({ leaderMemberId: 'lead', mode: 'single', memberIds: ['eng'], triggerMessageIds: ['user'] })
     expect(request.mock.calls[0][0]).toBe('https://openrouter.ai/api/v1/systemone')
@@ -55,7 +66,7 @@ describe('decision provider', () => {
     }
   })
   it('allows a valid no-reply decision without activating agents', async () => {
-    const request = vi.fn().mockResolvedValue(response({ answers: { route: { choice: 'none', probabilities: { none: 0.98 } } } }))
+    const request = vi.fn().mockResolvedValue(response({ answers: { route: { choice: 'none', probabilities: { none: 0.98 } }, stop: { choice: 'ignore', probabilities: { ignore: 1 } }, needsReply: { noul: 0 } } }))
     expect(await new GroupDecisionService(request).decide(settings, provider, group, context, signal)).toEqual({ mode: 'none', memberIds: [], triggerMessageIds: [] })
   })
   it('opens the circuit after repeated failures, and does not expose provider response bodies', async () => {
@@ -154,7 +165,7 @@ it.each([false, true])('verifies an initial no-reply decision without overriding
 })
 
 it('lets Jev route an agent-originated group request using its real trigger and private envelopes only', async () => {
-  const request = vi.fn<typeof fetch>(async () => response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 1 } }, member_0: { noul: 0 }, member_1: { noul: 1 } } }))
+  const request = vi.fn<typeof fetch>(async () => response({ answers: { leader: { choice: 'lead', probabilities: { lead: 1 } }, route: { choice: 'single', probabilities: { single: 1 } }, worker: { choice: 'eng', probabilities: { eng: 1 } }, member_0: { noul: 0 }, member_1: { noul: 1 } } }))
   const c: GroupDecisionContext = { requestMessageId: 'posted', messages: [{ id: 'posted', role: 'assistant', sender: { id: 'lead', name: '组长' }, content: '@工程师 请在群里介绍自己' }], completedTurns: [], privateDeliveries: [] }
   const result = await new GroupDecisionService(request).decide(settings, provider, group, c, signal)
   expect(result.triggerMessageIds).toEqual(['posted'])
@@ -186,3 +197,19 @@ it('uses Jev classification for a fresh ordered roll call, preserving unavailabl
   expect(result.memberIds).toEqual(['lead', 'eng'])
   expect(result.assignments).toBeUndefined()
  })
+
+it.each(['waiting', 'completed'] as const)('keeps Jev stop status explicit: %s', async stop => {
+  const request = vi.fn<typeof fetch>(async () => response({ answers: { route: { choice: 'none', probabilities: { none: 1 } },
+    stop: { choice: stop, probabilities: { [stop]: 1 } }, needsReply: { noul: 0 } } }))
+  const c = { ...context, completedTurns: [{ round: 1, memberId: 'lead', triggerMessageIds: ['user'], messageIds: ['reply'], privateMessageIds: [] }] }
+  const result = await new GroupDecisionService(request).decide(settings, provider, group, c, signal)
+  expect(result.waitForHuman === true).toBe(stop === 'waiting')
+})
+
+it('escalates conflicting silence and premature completion without silently dropping the request', async () => {
+  for (const [stop, needsReply] of [['completed', 0], ['ignore', .9], ['waiting', .5]] as const) {
+    const request = vi.fn<typeof fetch>(async () => response({ answers: { route: { choice: 'none', probabilities: { none: 1 } },
+      stop: { choice: stop, probabilities: { [stop]: 1 } }, needsReply: { noul: needsReply } } }))
+    await expect(new GroupDecisionService(request).decide(settings, provider, group, context, signal)).rejects.toThrow('no-reply')
+  }
+})

@@ -19,6 +19,10 @@ import type {
 } from '../shared/types'
 
 const api: DouchatApi = {
+  getGroupMemory: conversationId => ipcRenderer.invoke('douchat:group-memory', conversationId),
+  saveGroupMemory: (document, conversationId) => ipcRenderer.invoke('douchat:save-group-memory', document, conversationId),
+  getUserMemory: agentId => ipcRenderer.invoke('douchat:user-memory', agentId),
+  saveUserMemory: (document, agentId) => ipcRenderer.invoke('douchat:save-user-memory', document, agentId),
   listIMChannels: agent => ipcRenderer.invoke('douchat:im-list', agent),
   connectIMChannel: (agent, input) => ipcRenderer.invoke('douchat:im-connect', agent, input),
   disconnectIMChannel: (agent, provider) => ipcRenderer.invoke('douchat:im-disconnect', agent, provider),
@@ -65,6 +69,8 @@ const api: DouchatApi = {
   getAttachmentData: (attachmentId) => ipcRenderer.invoke('douchat:attachment-data', attachmentId),
   openLocalFile: (path) => ipcRenderer.invoke('douchat:open-local-file', path),
   getSnapshot: () => ipcRenderer.invoke('douchat:get-snapshot'),
+  authorizeTokenDance: () => ipcRenderer.invoke('douchat:authorize-tokendance'),
+  cancelTokenDanceAuthorization: () => ipcRenderer.invoke('douchat:cancel-tokendance'),
   getCustomModels: () => ipcRenderer.invoke('douchat:custom-models'),
   getDecisionSettings: () => ipcRenderer.invoke('douchat:decision-settings'),
   getCloudDecisionModels: () => ipcRenderer.invoke('douchat:cloud-decision-models'),

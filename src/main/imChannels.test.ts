@@ -37,10 +37,11 @@ function setup() {
     return { ok: true, json: async () => data } as Response
   }) as unknown as typeof fetch
   const codec = { encrypt: (value: string) => Buffer.from(value).toString('base64'), decrypt: (value: string) => Buffer.from(value, 'base64').toString() }
-  const manager = new IMChannelManager(directory, codec, () => owner, id => ['agent-a', 'agent-b'].includes(id), reply, fetcher)
+  const received = vi.fn((_agent: string, _thread: string, _text: string, _provider: string, id: string) => `receipt:${id}`)
+  const manager = new IMChannelManager(directory, codec, () => owner, id => ['agent-a', 'agent-b'].includes(id), reply, fetcher, received)
   manager.activate()
   cleanup.push(() => { manager.stop(); rmSync(directory, { recursive: true, force: true }) })
-  return { manager, reply, fetcher, sent, updates, wechatUpdates, directory, owner: (value: string) => { owner = value } }
+  return { manager, reply, received, fetcher, sent, updates, wechatUpdates, directory, owner: (value: string) => { owner = value } }
 }
 const tg = (id: number, text: string, peer = 12) => ({ update_id: id, message: { text, from: { is_bot: false }, chat: { id: peer, type: 'private' } } })
 const wx = (id: number, text: string) => ({ message_id: id, from_user_id: 'wx-owner', message_type: 1, message_state: 2, context_token: 'reply-context', item_list: [{ type: 1, text_item: { text } }] })
@@ -383,6 +384,7 @@ describe('IM channels', () => {
     await vi.waitFor(() => expect(sdk.send).toHaveBeenCalledTimes(1))
     await sdk.handler(event('3', '飞书你好'))
     await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(sdk.send).toHaveBeenCalledTimes(2))
     expect(sdk.send.mock.calls[1][0].data).toMatchObject({ receive_id: 'oc_private', content: JSON.stringify({ text: 'Reply: 飞书你好' }) })
     expect(sdk.addReaction).toHaveBeenCalledTimes(1)
     expect(sdk.addReaction).toHaveBeenCalledWith({ path: { message_id: '3' }, data: { reaction_type: { emoji_type: 'Typing' } } })
@@ -433,6 +435,79 @@ describe('IM channels', () => {
     expect(sent[1].text).toContain('模型配置')
     expect(sent[1].text).not.toContain('private-provider-error')
     expect(reply).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['telegram', 'wechat', 'feishu'] as const)('receives, indicates typing and starts a second %s request while the first is still running', async provider => {
+    const { manager, reply, received, fetcher, updates, wechatUpdates, sent } = setup()
+    sdk.send.mockResolvedValue({ code: 0 }); sdk.addReaction.mockResolvedValue({ code: 0 })
+    if (provider === 'wechat') { const login = await manager.login('agent-a'); await manager.loginStatus('agent-a', login.sessionId) }
+    else await manager.connect('agent-a', provider === 'telegram' ? { provider, token: '123:secret' } : { provider, appId: 'cli_0123456789abcdef', appSecret: 'secret' })
+    const deliver = async (id: number, text: string) => {
+      if (provider === 'telegram') updates.push(tg(id, text))
+      else if (provider === 'wechat') wechatUpdates.push(wx(id, text))
+      else await sdk.handler({ sender: { sender_type: 'user' }, message: { message_id: String(id), chat_id: 'private', chat_type: 'p2p', message_type: 'text', content: JSON.stringify({ text }) } })
+    }
+    await deliver(1, `/pair ${manager.list('agent-a')[0].pairingCode}`)
+    await vi.waitFor(() => expect(manager.list('agent-a')[0].paired).toBe(true))
+    const releases = new Map<string, (value: string[]) => void>()
+    reply.mockImplementation((_agent, _thread, text) => new Promise(resolve => releases.set(text, resolve)))
+    await deliver(2, 'slow')
+    await vi.waitFor(() => expect(releases.has('slow')).toBe(true))
+    await deliver(3, 'fast')
+    await vi.waitFor(() => expect(releases.has('fast')).toBe(true))
+    expect(received).toHaveBeenCalledTimes(2)
+    if (provider === 'feishu') expect(sdk.addReaction).toHaveBeenCalledTimes(2)
+    else expect(vi.mocked(fetcher).mock.calls.some(([url]) => String(url).endsWith(provider === 'telegram' ? '/sendChatAction' : '/sendtyping'))).toBe(true)
+    releases.get('fast')!(['FAST ANSWER'])
+    const texts = () => provider === 'feishu' ? sdk.send.mock.calls.map(([request]) => request.data.content) : sent.map(message => JSON.stringify(message))
+    await vi.waitFor(() => expect(texts().some(text => text.includes('FAST ANSWER'))).toBe(true))
+    expect(texts().some(text => text.includes('SLOW ANSWER'))).toBe(false)
+    if (provider === 'wechat') expect(vi.mocked(fetcher).mock.calls.filter(([url]) => String(url).endsWith('/sendtyping')).map(([, init]) => JSON.parse(init!.body as string).status)).not.toContain(2)
+    await deliver(2, 'slow')
+    releases.get('slow')!(['SLOW ANSWER'])
+    await vi.waitFor(() => expect(texts().some(text => text.includes('SLOW ANSWER'))).toBe(true))
+    expect(reply).toHaveBeenCalledTimes(2)
+  })
+
+  it('persists pending receipts and advances polling before execution finishes, then restores queued work without repeating started work', async () => {
+    const { manager, reply, received, updates, directory, sent } = setup()
+    await manager.connect('agent-a', { provider: 'telegram', token: '123:secret' })
+    updates.push(tg(1, `/pair ${manager.list('agent-a')[0].pairingCode}`))
+    await vi.waitFor(() => expect(manager.list('agent-a')[0].paired).toBe(true))
+    reply.mockImplementation(() => new Promise(() => {}))
+    updates.push(...Array.from({ length: 6 }, (_, index) => tg(index + 2, `task-${index}`)))
+    await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(6))
+    expect(reply).toHaveBeenCalledTimes(4)
+    const records = JSON.parse(Buffer.from(readFileSync(join(directory, readdirSync(directory)[0]), 'utf8'), 'base64').toString())
+    expect(records[0].cursor).toBe('8')
+    expect(records[0].inbox.filter((entry: any) => entry.state === 'queued')).toHaveLength(2)
+    expect(records[0].inbox.every((entry: any) => entry.receiptId)).toBe(true)
+    reply.mockResolvedValue(['RESTORED'])
+    manager.activate()
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(6))
+    expect(reply.mock.calls.slice(4).map(call => call[2])).toEqual(['task-4', 'task-5'])
+    await vi.waitFor(() => expect(sent.filter(message => message.text.includes('未完成回传'))).toHaveLength(4))
+  })
+
+  it('does not wait for attachment download or model completion to persist receipts or fetch the next update', async () => {
+    const { manager, reply, received, updates, fetcher } = setup()
+    const request = vi.mocked(fetcher).getMockImplementation()!
+    let finish!: (value: Response) => void
+    vi.mocked(fetcher).mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/getFile')) return Response.json({ ok: true, result: { file_path: 'photo.jpg' } })
+      if (String(url).includes('/file/bot')) return new Promise(resolve => { finish = resolve })
+      return request(url, init)
+    })
+    await manager.connect('agent-a', { provider: 'telegram', token: '123:secret' })
+    updates.push(tg(1, `/pair ${manager.list('agent-a')[0].pairingCode}`), { ...tg(2, 'photo'), message: { ...tg(2, 'photo').message, photo: [{ file_id: 'photo' }] } })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    expect(received).toHaveBeenCalledTimes(1)
+    expect(reply).not.toHaveBeenCalled()
+    updates.push(tg(3, 'text'))
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(1))
+    expect(reply.mock.calls[0][2]).toBe('text')
+    finish(new Response('bytes'))
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledTimes(2))
   })
 
   it('rejects untrusted WeChat credential destinations and preserves Unicode on split', () => {

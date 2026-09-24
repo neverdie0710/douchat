@@ -1,13 +1,13 @@
 import type { CustomModelConfig } from '../../../shared/customModels'
 import { CustomModelSelection } from './CustomModelSelection'
-import { NativeDialog } from './NativeDialog'
+import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { conversationMembers } from './common'
 import type { SocialSnapshot } from '../../../shared/social'
 import { LocalAgentSelect } from './LocalAgentSelect'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
 import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -56,6 +56,7 @@ export function BotModal({
   onCreate: (input: CreateAgentInput) => Promise<void>
   onUpdate: (agentId: string, input: UpdateAgentInput) => Promise<void>
 }): ReactElement {
+  const embedded = useContext(EmbeddedAgentSettings)
   const [localAgentId, setLocalAgentId] = useState(agent?.localAgentId ?? initialLocalAgentId ?? (!agent ? localAgents.find((item) => item.installed)?.id : '') ?? '')
   const [agentSource, setAgentSource] = useState<'custom' | 'local'>(agent?.localAgentId || initialLocalAgentId ? 'local' : 'custom')
   const [customModels, setCustomModels] = useState<CustomModelConfig>({ providers: [], defaultModel: '' })
@@ -289,7 +290,7 @@ export function BotModal({
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="edit-contact-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>
-          <button className="primary-button" type="submit" disabled={saving || !name.trim()}>{t(saving ? 'Saving…' : 'Done')}</button>
+          <button className="primary-button" type="submit" disabled={saving || !name.trim()}>{t(saving ? 'Saving…' : embedded ? 'Save' : 'Done')}</button>
         </div>
       </form>
     </NativeDialog>

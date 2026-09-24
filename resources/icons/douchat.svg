@@ -11,7 +11,7 @@
       <rect x="571" y="568" width="95" height="95" rx="24" fill="black"/>
     </mask>
   </defs>
-  <g transform="translate(30.72 30.72) scale(.94)">
+  <g transform="translate(57.344 57.344) scale(.888)">
     <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
     <g transform="translate(512 512) scale(1.1) translate(-512 -512)">
       <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod)"/>

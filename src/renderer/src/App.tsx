@@ -1,8 +1,7 @@
-import { IMChannelsDialog } from './components/IMChannelsDialog'
-import { LocalModelDialog } from './components/LocalModelDialog'
+import { AgentSettingsDialog } from './components/AgentSettingsDialog'
 import { reportDiagnostic } from './diagnostics'
 import { ChatErrorBoundary } from './components/ChatErrorBoundary'
-import { AgentPermissionsDialog, AgentPermissionPrompt } from './components/AgentPermissions'
+import { AgentPermissionPrompt } from './components/AgentPermissions'
 import { DialogErrorBoundary } from './components/DialogErrorBoundary'
 import { messageSendError, MessageQueue, type QueuedMessage } from './messageQueue'
 import type { SocialSnapshot } from '../../shared/social'
@@ -81,6 +80,7 @@ function WorkspaceApp(): ReactElement {
   const [creditsAttention, setCreditsAttention] = useState(false)
   const knownCreditErrors = useRef<Set<string> | null>(null)
   const [socialSnapshot, setSocialSnapshot] = useState<SocialSnapshot>()
+  const socialRefreshVersion = useRef(0)
   const [socialError, setSocialError] = useState('')
   const [contact, setContact] = useState<ContactSelection>()
   const [dialog, setDialog] = useState<Dialog>(null)
@@ -223,8 +223,9 @@ function WorkspaceApp(): ReactElement {
     let timer: ReturnType<typeof setTimeout>
     const refresh = async () => {
       try {
+        const version = socialRefreshVersion.current
         const next = await window.douchat.getSocialSnapshot()
-        if (active && next.userId === userId) {
+        if (active && version === socialRefreshVersion.current && next.userId === userId) {
           setSocialSnapshot(next); setSocialError('')
 
         }
@@ -610,40 +611,34 @@ function WorkspaceApp(): ReactElement {
       )}
       {uiSnapshot.permissionRequests?.[0] && <AgentPermissionPrompt key={uiSnapshot.permissionRequests[0].id} request={uiSnapshot.permissionRequests[0]} social={socialSnapshot}
         onResolve={async (allow) => { setSnapshot(await window.douchat.resolveAgentPermission(uiSnapshot.permissionRequests![0].id, allow)) }} />}
-      {dialog?.kind === 'agent-permissions' && <AgentPermissionsDialog agent={dialog.agent} onClose={() => setDialog(null)}
-        onSave={async (permissions) => { setSnapshot(await window.douchat.updateAgent(dialog.agent.id, { permissions })) }} />}
       {dialog?.kind === 'add-friend' && <AddFriendModal onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'im-channels' && <IMChannelsDialog key={dialog.agent.id} agent={dialog.agent} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'local-model' && <LocalModelDialog key={dialog.agent.id} agent={dialog.agent} cloudModels={snapshot.models}
+      {dialog && ((dialog.kind === 'bot' && dialog.agent) || dialog.kind === 'agent-permissions' || dialog.kind === 'im-channels' || dialog.kind === 'local-model') && <AgentSettingsDialog
+        key={dialog.agent!.id} agent={uiSnapshot.agents.find(agent => agent.id === dialog.agent!.id) ?? dialog.agent!}
+        localAgents={localAgents} cloudModels={snapshot.models ?? []}
+        initialTab={dialog.kind === 'agent-permissions' ? 'permissions' : dialog.kind === 'im-channels' ? 'channels' : dialog.kind === 'local-model' ? 'models' : 'profile'}
+        onClose={() => setDialog(null)} onUpdate={updateAgent} onDelete={deleteAgent}
+        onModelSettings={() => { setDialog(null); setSettingsTab('models'); setSettingsOpen(true) }}
+        onCreditsSettings={() => { setDialog(null); setSettingsTab('usage'); setSettingsOpen(true) }} />}
+      {dialog?.kind === 'bot' && !dialog.agent && <BotModal localAgents={localAgents} cloudModels={snapshot.models}
+        initialLocalAgentId={dialog.localAgentId}
         onModelSettings={() => { setDialog(null); setSettingsTab('models'); setSettingsOpen(true) }}
         onCreditsSettings={() => { setDialog(null); setSettingsTab('usage'); setSettingsOpen(true) }}
-        onClose={() => setDialog(null)} onSave={async (model, provider) => { setSnapshot(await window.douchat.updateAgent(dialog.agent.id, provider === 'cloud' ? { cloudModel: { model } } : provider?.startsWith('custom:') ? { customModel: { providerId: provider.slice('custom:'.length), model } } : { model })) }} />}
-      {dialog?.kind === 'bot' && (
-        <BotModal
-          agent={dialog.agent}
-          localAgents={localAgents}
-          cloudModels={snapshot.models}
-          initialLocalAgentId={dialog.localAgentId}
-          onModelSettings={() => { setDialog(null); setSettingsTab('models'); setSettingsOpen(true) }}
-          onCreditsSettings={() => { setDialog(null); setSettingsTab('usage'); setSettingsOpen(true) }}
-          onSettings={() => { setDialog(null); setSettingsOpen(true) }}
-          onClose={() => setDialog(null)}
-          onCreate={createAgent}
-          onUpdate={updateAgent}
-        />
-      )}
+        onSettings={() => { setDialog(null); setSettingsOpen(true) }}
+        onClose={() => setDialog(null)} onCreate={createAgent} onUpdate={updateAgent} />}
       {(dialog?.kind === 'add-members' || dialog?.kind === 'remove-members') && (
         <AddMembersModal social={socialSnapshot}
           onRemoveContacts={dialog.conversation.remoteRoomId ? async (friendIds, agentIds) => {
-            await window.douchat.socialAction({ action: 'remove-members', roomId: dialog.conversation.remoteRoomId!, friendIds, agentIds })
+            const result = await window.douchat.socialAction({ action: 'remove-members', roomId: dialog.conversation.remoteRoomId!, friendIds, agentIds })
+            ++socialRefreshVersion.current
+            if (result.snapshot) setSocialSnapshot(result.snapshot)
             setSnapshot(await window.douchat.getSnapshot())
-            setSocialSnapshot(await window.douchat.getSocialSnapshot())
           } : undefined}
           onAddContacts={async (friendIds, agentIds) => {
             if (friendIds.length || dialog.conversation.remoteRoomId) {
-              await window.douchat.socialAction({ action: 'invite-members', conversationId: dialog.conversation.id, friendIds, agentIds })
+              const result = await window.douchat.socialAction({ action: 'invite-members', conversationId: dialog.conversation.id, friendIds, agentIds })
+              ++socialRefreshVersion.current
+              if (result.snapshot) setSocialSnapshot(result.snapshot)
               setSnapshot(await window.douchat.getSnapshot())
-              setSocialSnapshot(await window.douchat.getSocialSnapshot())
             } else await updateGroup(dialog.conversation.id, {
               name: dialog.conversation.name, description: dialog.conversation.description || '',
               agentIds: [...new Set([...dialog.conversation.agentIds, ...agentIds])], leadAgentId: dialog.conversation.leadAgentId || dialog.conversation.agentIds[0]

@@ -3,6 +3,7 @@ import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
+import { authorizeTokenDance } from './tokenDanceAuth'
 import { CustomModelStore } from './customModels'
 import type { CustomProviderInput, CustomModelTest } from '../shared/customModels'
 import { configureManagedNode, ensureManagedNode } from './managedNode'
@@ -588,11 +589,13 @@ app.whenReady().then(() => {
     },
     decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64'))
   }, () => store.currentAccountId, id => store.accountAgents.some(agent => agent.id === id),
-  async (agent, thread, text, signal, provider, media) => {
-    const answer = await replyToIM(store, runtime, agent, thread, text, signal, provider, media)
+  async (agent, thread, text, signal, provider, media, receiptId) => {
+    const answer = await replyToIM(store, runtime, agent, thread, text, signal, provider, media, receiptId)
     broadcast(runtime.snapshot())
     return answer
-  }, (input, init) => net.fetch(String(input), init))
+  }, (input, init) => net.fetch(String(input), init),
+  (agent, thread, text, provider, messageId) => runtime.receiveIMMessage(agent, thread, text, provider, messageId),
+  (event, detail) => diagnostics.write(event, detail))
   ipcMain.handle('douchat:im-list', (_event, agent) => imChannels!.list(agent))
   ipcMain.handle('douchat:im-connect', (_event, agent, input) => imChannels!.connect(agent, input))
   ipcMain.handle('douchat:im-disconnect', (_event, agent, provider) => imChannels!.disconnect(agent, provider))
@@ -638,6 +641,22 @@ app.whenReady().then(() => {
     return result
   })
   ipcMain.handle('douchat:get-auth-state', () => auth.getState())
+  ipcMain.handle('douchat:user-memory', (event, agentId?: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return store.userMemories.read(agentId)
+  })
+  ipcMain.handle('douchat:save-user-memory', (event, document: import('../shared/userMemory').UserMemoryDocument, agentId?: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return store.userMemories.save(document, agentId)
+  })
+  ipcMain.handle('douchat:group-memory', (event, conversationId: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return store.groupMemories.read(conversationId)
+  })
+  ipcMain.handle('douchat:save-group-memory', (event, document: import('../shared/userMemory').UserMemoryDocument, conversationId: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return store.groupMemories.save(document, conversationId)
+  })
   ipcMain.handle('douchat:request-microphone-access', async (event) => {
     if (!isDouchatRenderer(event.sender)) return 'denied'
     if (process.platform !== 'darwin') return 'granted'
@@ -770,6 +789,29 @@ app.whenReady().then(() => {
     return snapshot
   }
 
+  const tokenDanceFlows = new Map<number, AbortController>()
+  ipcMain.handle('douchat:authorize-tokendance', async (event) => {
+    if (!isDouchatRenderer(event.sender) || !store.currentAccountId) throw new Error('Unauthorized')
+    const owner = event.sender.id
+    const account = store.currentAccountId
+    tokenDanceFlows.get(owner)?.abort()
+    const controller = new AbortController()
+    tokenDanceFlows.set(owner, controller)
+    const cancel = () => controller.abort()
+    event.sender.once('destroyed', cancel)
+    try {
+      const key = await authorizeTokenDance(url => shell.openExternal(url), controller.signal)
+      if (store.currentAccountId !== account) throw new Error('Account changed. Please authorize again.')
+      return key
+    } finally {
+      event.sender.removeListener('destroyed', cancel)
+      if (tokenDanceFlows.get(owner) === controller) tokenDanceFlows.delete(owner)
+    }
+  })
+  ipcMain.handle('douchat:cancel-tokendance', (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    tokenDanceFlows.get(event.sender.id)?.abort()
+  })
   ipcMain.handle('douchat:custom-models', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return customModels.list(store.currentAccountId)

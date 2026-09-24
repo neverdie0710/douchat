@@ -12,9 +12,10 @@ interface RecordData {
   id: string; owner: string; agentId: string; provider: IMProvider; label: string
   token: string; remoteId?: string; appId?: string; baseURL?: string; peer?: string; pairingCode: string
   cursor?: string; seen: string[]
+  inbox?: { id: string; raw: any; state: 'queued' | 'running'; receiptId?: string; receivedAt?: number }[]
 }
 interface Codec { encrypt(value: string): string; decrypt(value: string): string }
-interface Worker { abort: AbortController; close?: () => void; status: IMChannel['status']; error?: string; queue: Promise<void> }
+interface Worker { abort: AbortController; close?: () => void; status: IMChannel['status']; error?: string; active: number; pending: (() => Promise<void>)[]; accepted: Set<string>; delivery: Promise<void>; typingCount: number; typingStop?: ReturnType<typeof startIMTyping>; typingBarrier?: Promise<void> }
 interface Inbound { id: string; peer: string; text: string; context?: string; media?: () => Promise<IMMedia[]> }
 const WECHAT = 'https://ilinkai.weixin.qq.com'
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, trace() {} }
@@ -41,8 +42,10 @@ export class IMChannelManager {
   private connecting = new Set<string>()
   constructor(private directory: string, private codec: Codec,
     private currentOwner: () => string, private hasAgent: (id: string) => boolean,
-    private reply: (agentId: string, thread: string, text: string, signal: AbortSignal, provider?: IMProvider, media?: IMMedia[]) => Promise<IMReplyPart[]>,
-    private request: typeof fetch = fetch) {}
+    private reply: (agentId: string, thread: string, text: string, signal: AbortSignal, provider?: IMProvider, media?: IMMedia[], receiptId?: string) => Promise<IMReplyPart[]>,
+    private request: typeof fetch = fetch,
+    private received?: (agentId: string, thread: string, text: string, provider: IMProvider, messageId: string) => string,
+    private diagnostic?: (event: string, detail: string) => void) {}
   private file(): string { return join(this.directory, createHash('sha256').update(this.owner).digest('hex') + '.json') }
   private save(): void {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 })
@@ -178,7 +181,7 @@ export class IMChannelManager {
     return !worker.abort.signal.aborted && this.owner === r.owner && this.currentOwner() === r.owner && this.hasAgent(r.agentId) && this.workers.get(r.id) === worker
   }
   private start(r: RecordData): void {
-    const worker: Worker = { abort: new AbortController(), status: 'connecting', queue: Promise.resolve() }
+    const worker: Worker = { abort: new AbortController(), status: 'connecting', active: 0, pending: [], accepted: new Set(), delivery: Promise.resolve(), typingCount: 0 }
     this.workers.set(r.id, worker)
     if (r.provider === 'feishu') {
       const client = new lark.Client({ appId: r.appId!, appSecret: r.token, logger: quietLogger })
@@ -189,54 +192,151 @@ export class IMChannelManager {
         onError: () => { if (this.live(r, worker)) { worker.status = 'error'; worker.error = '飞书连接失败，请检查凭证和长连接订阅配置' } }
       })
       worker.close = () => ws.close({ force: true })
+      for (const entry of r.inbox ?? []) this.acceptFeishu(r, worker, client, entry.raw)
       void ws.start({ eventDispatcher: new lark.EventDispatcher({}).register({
         'im.message.receive_v1': async data => {
-          const m = data.message
-          if (m.chat_type !== 'p2p' || data.sender.sender_type !== 'user') return
-          let content: { text?: string; image_key?: string; file_key?: string; file_name?: string } = {}
-          try { content = JSON.parse(m.content) } catch { return }
-          let reactionId: string | undefined
-          this.enqueue(r, worker, { id: m.message_id, peer: m.chat_id, text: m.message_type === 'text' ? content.text ?? '' : '',
-            ...(['image', 'file'].includes(m.message_type) ? { media: async () => {
-              // Fetch through our bounded, cancellable downloader rather than an unbounded SDK buffer.
-              const signal = AbortSignal.any([worker.abort.signal, AbortSignal.timeout(45000)])
-              const auth = await this.json('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', { app_id: r.appId, app_secret: r.token }, undefined, signal)
-              const key = m.message_type === 'image' ? content.image_key : content.file_key
-              if (!key) throw new IMMediaError('附件信息不完整，请重新发送。')
-              const url = `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(m.message_id)}/resources/${encodeURIComponent(key)}?type=${m.message_type}`
-              const data = await downloadMedia(this.request, url, signal, { Authorization: `Bearer ${auth.tenant_access_token}` })
-              return [{ name: content.file_name || 'image', data, image: m.message_type === 'image' }]
-            } } : {}) }, async (text, formatted) => {
-            const rich = Boolean(formatted?.entities.length)
-            const result = await client.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: m.chat_id, msg_type: rich ? 'post' : 'text', content: JSON.stringify(rich ? formatted!.post : { text }) } })
-            if (result.code) throw new Error('飞书发送失败，请检查 im:message:send_as_bot 权限')
-          }, () => startIMTyping(worker.abort.signal, async () => {
-            const result = await client.im.messageReaction.create({ path: { message_id: m.message_id }, data: { reaction_type: { emoji_type: 'Typing' } } })
-            if (!result.code) reactionId = result.data?.reaction_id
-          }, async () => {
-            if (reactionId) await client.im.messageReaction.delete({ path: { message_id: m.message_id, reaction_id: reactionId } })
-          }, 0))
+          this.acceptFeishu(r, worker, client, data)
         }
       }) }).then(() => { if (!this.live(r, worker)) ws.close({ force: true }) }).catch(() => { worker.status = 'error'; worker.error = '飞书连接失败，请检查网络和长连接订阅配置' })
-    } else void this.poll(r, worker)
+    } else {
+      for (const entry of r.inbox ?? []) {
+        if (r.provider === 'telegram') this.acceptTelegram(r, worker, entry.raw)
+        else this.acceptWechat(r, worker, entry.raw)
+      }
+      void this.poll(r, worker)
+    }
   }
-  private enqueue(r: RecordData, worker: Worker, message: Inbound, send: (text: string, formatted?: IMFormattedMessage) => Promise<void>, typing?: () => () => Promise<void>): void {
-    worker.queue = worker.queue.then(async () => {
-      if (!this.live(r, worker) || !message.id || !message.peer || r.seen.includes(message.id)) return
-      // Persist before running tools: a provider redelivery must not execute a task twice.
-      r.seen = [...r.seen.slice(-499), message.id]; this.save()
+  private acceptFeishu(r: RecordData, worker: Worker, client: lark.Client, data: any): void {
+    const m = data.message
+    if (m.chat_type !== 'p2p' || data.sender.sender_type !== 'user') return
+    let content: { text?: string; image_key?: string; file_key?: string; file_name?: string } = {}
+    try { content = JSON.parse(m.content) } catch { return }
+    let reactionId: string | undefined
+    this.enqueue(r, worker, { id: m.message_id, peer: m.chat_id, text: m.message_type === 'text' ? content.text ?? '' : '',
+      ...(['image', 'file'].includes(m.message_type) ? { media: async () => {
+        // Fetch through our bounded, cancellable downloader rather than an unbounded SDK buffer.
+        const signal = AbortSignal.any([worker.abort.signal, AbortSignal.timeout(45000)])
+        const auth = await this.json('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', { app_id: r.appId, app_secret: r.token }, undefined, signal)
+        const key = m.message_type === 'image' ? content.image_key : content.file_key
+        if (!key) throw new IMMediaError('附件信息不完整，请重新发送。')
+        const url = `https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(m.message_id)}/resources/${encodeURIComponent(key)}?type=${m.message_type}`
+        const data = await downloadMedia(this.request, url, signal, { Authorization: `Bearer ${auth.tenant_access_token}` })
+        return [{ name: content.file_name || 'image', data, image: m.message_type === 'image' }]
+      } } : {}) }, async (text, formatted) => {
+      const rich = Boolean(formatted?.entities.length)
+      const result = await client.im.message.create({ params: { receive_id_type: 'chat_id' }, data: { receive_id: m.chat_id, msg_type: rich ? 'post' : 'text', content: JSON.stringify(rich ? formatted!.post : { text }) } })
+      if (result.code) throw new Error('飞书发送失败，请检查 im:message:send_as_bot 权限')
+    }, () => startIMTyping(worker.abort.signal, async () => {
+      const result = await client.im.messageReaction.create({ path: { message_id: m.message_id }, data: { reaction_type: { emoji_type: 'Typing' } } })
+      if (!result.code) reactionId = result.data?.reaction_id
+    }, async () => {
+      if (reactionId) await client.im.messageReaction.delete({ path: { message_id: m.message_id, reaction_id: reactionId } })
+    }, 0), data)
+  }
+  private acceptTelegram(r: RecordData, worker: Worker, update: any): void {
+    const signal = worker.abort.signal
+    const m = update.message
+    if (m && m.chat?.type === 'private' && !m.from?.is_bot) this.enqueue(r, worker,
+      { id: String(update.update_id), peer: String(m.chat.id), text: m.text ?? m.caption ?? '',
+        ...(m.photo?.length || m.document ? { media: async () => {
+          const file = m.document ?? m.photo[m.photo.length - 1]
+          if (file.file_size > MAX_IM_FILE_BYTES) throw new IMMediaError('附件超过 20 MB，请压缩或拆分后重发。')
+          const timed = AbortSignal.any([signal, AbortSignal.timeout(45000)])
+          const result = await this.telegram(r, 'getFile', { file_id: file.file_id }, timed)
+          if (typeof result.file_path !== 'string' || !/^[\w/.-]+$/.test(result.file_path) || result.file_path.split('/').includes('..')) throw new IMMediaError('附件地址无效，请重新发送。')
+          const data = await downloadMedia(this.request, `https://api.telegram.org/file/bot${r.token}/${result.file_path}`, timed)
+          return [{ name: file.file_name || 'image.jpg', data, image: !m.document }]
+        } } : {}) },
+      (text, formatted) => this.telegram(r, 'sendMessage', { chat_id: m.chat.id, text, ...(formatted?.entities.length ? { entities: formatted.entities } : {}) }, signal), undefined, update)
+  }
+  private acceptWechat(r: RecordData, worker: Worker, m: any): void {
+    const signal = worker.abort.signal
+    if (m.message_type !== 1 || m.message_state !== 2) return
+    const text = (m.item_list ?? []).map((item: any) => item.type === 1 ? item.text_item?.text : item.type === 3 ? item.voice_item?.text : '').filter(Boolean).join('\n')
+    this.enqueue(r, worker, { id: String(m.message_id ?? m.seq ?? ''), peer: m.from_user_id, text, context: m.context_token,
+      ...((m.item_list ?? []).some((i: any) => i.type === 2 || i.type === 4) ? { media: async () => {
+        const items = m.item_list.filter((i: any) => i.type === 2 || i.type === 4)
+        if (items.length > 4) throw new IMMediaError('一次最多发送 4 个附件，请分批发送。')
+        const files: IMMedia[] = []
+        for (const item of items) {
+          const file = item.type === 2 ? item.image_item : item.file_item
+          const media = file?.media
+          if (!media?.encrypt_query_param && !media?.full_url) throw new IMMediaError('附件信息不完整，请重新发送。')
+          const url = new URL(media.full_url || `https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=${encodeURIComponent(media.encrypt_query_param)}`)
+          if (url.protocol !== 'https:' || url.hostname !== 'novac2c.cdn.weixin.qq.com' || url.port || url.username || url.password) throw new IMMediaError('微信附件地址无效，请重新发送。')
+          const data = await downloadMedia(this.request, url.href, AbortSignal.any([signal, AbortSignal.timeout(45000)]))
+          files.push({ name: file.file_name || 'image', image: item.type === 2, data: item.type === 2 && !media.aes_key && !file.aeskey ? data : decryptWechatMedia(data, media.aes_key, file.aeskey) })
+        }
+        return files
+      } } : {}) },
+      text => this.wechat(r, 'sendmessage', { msg: { from_user_id: r.label, to_user_id: m.from_user_id, client_id: randomUUID(), message_type: 2, message_state: 2,
+        context_token: m.context_token, item_list: [{ type: 1, text_item: { text } }] } }, signal), undefined, m)
+  }
+  private drain(r: RecordData, worker: Worker): void {
+    while (this.live(r, worker) && worker.active < 4 && worker.pending.length) {
+      const task = worker.pending.shift()!
+      worker.active++
+      void task().catch(() => {
+        if (this.live(r, worker)) { worker.status = 'error'; worker.error = '消息处理或发送失败，请检查网络后重试；已执行的任务不会自动重复执行' }
+      }).finally(() => { worker.active--; this.drain(r, worker) })
+    }
+  }
+  private acquireTyping(r: RecordData, worker: Worker, message: Inbound): () => Promise<void> {
+    worker.typingCount++
+    // One indicator per chat: finishing one concurrent task must not clear another's status.
+    const start = () => {
+      if (worker.typingCount && !worker.typingStop && this.live(r, worker)) worker.typingStop = this.typing(r, worker, message)
+    }
+    if (worker.typingBarrier) void worker.typingBarrier.then(start)
+    else start()
+    let released = false
+    return () => {
+      if (released) return worker.typingBarrier ?? Promise.resolve()
+      released = true
+      if (--worker.typingCount === 0 && worker.typingStop) {
+        const barrier = worker.typingStop()
+        worker.typingBarrier = barrier
+        void barrier.finally(() => { if (worker.typingBarrier === barrier) worker.typingBarrier = undefined })
+        worker.typingStop = undefined
+      }
+      return worker.typingBarrier ?? Promise.resolve()
+    }
+  }
+  private enqueue(r: RecordData, worker: Worker, message: Inbound, send: (text: string, formatted?: IMFormattedMessage) => Promise<void>, typing: (() => () => Promise<void>) | undefined, raw: any): void {
+    if (!this.live(r, worker) || !message.id || !message.peer || worker.accepted.has(message.id)) return
+    const saved = r.inbox?.find(entry => entry.id === message.id)
+    if (!saved && r.seen.includes(message.id)) return
+    // Persist receipt before advancing the polling cursor or running any tools.
+    if (!saved) {
+      r.seen = [...r.seen.slice(-499), message.id]
       if (!r.peer) {
-        if (message.text.trim() !== `/pair ${r.pairingCode}`) {
-          const invalidCode = /^\/pair(?:\s|$)/.test(message.text.trim())
-          await send((invalidCode ? '配对指令无效。' : '还未配对，暂时无法聊天。') + '请在 Douchat 中打开对应联系人的「消息渠道」，复制配对指令并发送到当前私信，完成绑定后即可聊天。')
+        const paired = message.text.trim() === `/pair ${r.pairingCode}`
+        if (paired) { r.peer = message.peer; r.pairingCode = '' }
+        this.save()
+        void send(paired ? '配对成功，可以开始给这个联系人发消息了。' :
+          (/^\/pair(?:\s|$)/.test(message.text.trim()) ? '配对指令无效。' : '还未配对，暂时无法聊天。') + '请在 Douchat 中打开对应联系人的「消息渠道」，复制配对指令并发送到当前私信，完成绑定后即可聊天。').catch(() => {})
+        return
+      }
+      if (message.peer !== r.peer) { this.save(); return }
+    }
+    if (message.peer !== r.peer) return
+    const entry = saved ?? { id: message.id, raw, state: 'queued' as const, receiptId: undefined as string | undefined, receivedAt: Date.now() }
+    if (!saved) { (r.inbox ??= []).push(entry); this.save() }
+    // Receipt IDs are deterministic, so recovery between these writes cannot duplicate the desktop message.
+    entry.receiptId ??= this.received?.(r.agentId, r.id, message.text, r.provider, message.id)
+    this.save()
+    worker.accepted.add(message.id)
+    this.diagnostic?.('im.received', JSON.stringify({ provider: r.provider, channel: r.id, message: message.id, pending: worker.pending.length, active: worker.active }))
+    const stopTyping = (message.text.trim() || message.media) ? (typing ? typing() : this.acquireTyping(r, worker, message)) : undefined
+    const interrupted = entry.state === 'running'
+    worker.pending.push(async () => {
+      if (!this.live(r, worker)) return
+      try {
+        if (interrupted) {
+          await send('上一条任务的回复未完成回传，操作可能已执行。请在 Douchat 检查结果后再决定是否重发。')
           return
         }
-        r.peer = message.peer; r.pairingCode = ''; this.save()
-        await send('配对成功，可以开始给这个联系人发消息了。'); return
-      }
-      if (message.peer !== r.peer) return
-      const stopTyping = (message.text.trim() || message.media) ? (typing ? typing() : this.typing(r, worker, message)) : undefined
-      try {
+
         let bubbles: IMReplyPart[] = ['支持文字、图片和文件，请使用这些消息类型发送。']
         if (message.text.trim() || message.media) {
           try {
@@ -247,35 +347,49 @@ export class IMChannelManager {
               throw new IMMediaError('附件下载失败，请检查渠道权限或网络后重新发送。')
             }
             if (!this.live(r, worker)) return
-            bubbles = await this.reply(r.agentId, r.id, message.text, worker.abort.signal, r.provider, media)
+            entry.state = 'running'; this.save()
+            this.diagnostic?.('im.processing', JSON.stringify({ provider: r.provider, channel: r.id, message: message.id, waitMs: Date.now() - (entry.receivedAt ?? Date.now()) }))
+            bubbles = await this.reply(r.agentId, r.id, message.text, worker.abort.signal, r.provider, media, entry.receiptId)
           }
           catch (error) { bubbles = error instanceof IMMediaError ? [error.message] : ['联系人暂时无法回复，请在 Douchat 检查模型配置、运行状态或权限请求后重试。'] }
         }
         // Stop refreshing before delivery, so Telegram cannot re-show typing after a reply.
-        const cleanup = stopTyping?.()
-        if (r.provider !== 'feishu') await cleanup
-        const nonempty = bubbles.filter(part => typeof part !== 'string' || part.trim())
-        for (const bubble of nonempty.length ? nonempty : ['任务已完成。']) {
-          if (!this.live(r, worker)) return
-          if (typeof bubble !== 'string') {
-            try { await this.sendImage(r, worker, message, bubble.image) }
-            catch {
-              if (!this.live(r, worker)) return
-              await send('图片已生成，但发送失败。请在 Douchat 查看图片，并检查渠道权限或网络。')
-              worker.error = '图片发送失败，已保留桌面会话中的图片'; worker.status = 'error'
-              return
-            }
-          } else for (const part of formatIMMessages(bubble, 3500, r.provider === 'wechat')) {
+        void stopTyping?.()
+        // Deliver each completed answer as a group of bubbles; model work and polling stay concurrent.
+        const delivery = worker.delivery.catch(() => {}).then(async () => {
+          const nonempty = bubbles.filter(part => typeof part !== 'string' || part.trim())
+          for (const bubble of nonempty.length ? nonempty : ['任务已完成。']) {
             if (!this.live(r, worker)) return
-            await send(part.text, part)
+            if (typeof bubble !== 'string') {
+              try { await this.sendImage(r, worker, message, bubble.image) }
+              catch {
+                if (!this.live(r, worker)) return
+                await send('图片已生成，但发送失败。请在 Douchat 查看图片，并检查渠道权限或网络。')
+                worker.error = '图片发送失败，已保留桌面会话中的图片'; worker.status = 'error'
+                return
+              }
+            } else for (const part of formatIMMessages(bubble, 3500, r.provider === 'wechat')) {
+              if (!this.live(r, worker)) return
+              await send(part.text, part)
+            }
           }
-        }
+        })
+        worker.delivery = delivery.catch(() => {})
+        await delivery
+        // Sending a reply can clear the platform indicator even when other work remains.
+        if (worker.typingCount) worker.typingStop?.refresh()
       } finally {
         // Feishu reactions belong to this message; late cleanup cannot affect the next one.
         void stopTyping?.()
+        if (this.live(r, worker)) {
+          this.diagnostic?.('im.finished', JSON.stringify({ provider: r.provider, channel: r.id, message: message.id, elapsedMs: Date.now() - (entry.receivedAt ?? Date.now()) }))
+          worker.accepted.delete(message.id)
+          r.inbox = (r.inbox ?? []).filter(item => item !== entry)
+          this.save()
+        }
       }
-      worker.error = undefined; worker.status = 'connected'
-    }).catch(() => { if (this.live(r, worker)) { worker.status = 'error'; worker.error = '消息处理或发送失败，请检查网络后重试；已执行的任务不会自动重复执行' } })
+    })
+    this.drain(r, worker)
   }
   private async sendImage(r: RecordData, worker: Worker, message: Inbound, image: { name: string; mimeType: string; data: Uint8Array }): Promise<void> {
     const signal = AbortSignal.any([worker.abort.signal, AbortSignal.timeout(60000)])
@@ -328,7 +442,7 @@ export class IMChannelManager {
           aes_key: Buffer.from(key.toString('hex')).toString('base64'), encrypt_type: 1 }, mid_size: encrypted.length } }] } }, signal)
     }
   }
-  private typing(r: RecordData, worker: Worker, message: Inbound): () => Promise<void> {
+  private typing(r: RecordData, worker: Worker, message: Inbound): ReturnType<typeof startIMTyping> {
     let ticket: string | undefined
     const signal = () => AbortSignal.any([worker.abort.signal, AbortSignal.timeout(3000)])
     return startIMTyping(worker.abort.signal, async () => {
@@ -352,24 +466,13 @@ export class IMChannelManager {
     const signal = worker.abort.signal
     while (this.live(r, worker)) {
       try {
+        let received = false
         if (r.provider === 'telegram') {
           const updates = await this.telegram(r, 'getUpdates', { offset: Number(r.cursor || 0), timeout: 30, allowed_updates: ['message'] }, signal)
           if (!this.live(r, worker)) return
+          received = updates.length > 0
           for (const update of updates) {
-            const m = update.message
-            if (m && m.chat?.type === 'private' && !m.from?.is_bot) this.enqueue(r, worker,
-              { id: String(update.update_id), peer: String(m.chat.id), text: m.text ?? m.caption ?? '',
-                ...(m.photo?.length || m.document ? { media: async () => {
-                  const file = m.document ?? m.photo[m.photo.length - 1]
-                  if (file.file_size > MAX_IM_FILE_BYTES) throw new IMMediaError('附件超过 20 MB，请压缩或拆分后重发。')
-                  const timed = AbortSignal.any([signal, AbortSignal.timeout(45000)])
-                  const result = await this.telegram(r, 'getFile', { file_id: file.file_id }, timed)
-                  if (typeof result.file_path !== 'string' || !/^[\w/.-]+$/.test(result.file_path) || result.file_path.split('/').includes('..')) throw new IMMediaError('附件地址无效，请重新发送。')
-                  const data = await downloadMedia(this.request, `https://api.telegram.org/file/bot${r.token}/${result.file_path}`, timed)
-                  return [{ name: file.file_name || 'image.jpg', data, image: !m.document }]
-                } } : {}) },
-              (text, formatted) => this.telegram(r, 'sendMessage', { chat_id: m.chat.id, text, ...(formatted?.entities.length ? { entities: formatted.entities } : {}) }, signal))
-            await worker.queue
+            this.acceptTelegram(r, worker, update)
             if (!this.live(r, worker)) return
             r.cursor = String(update.update_id + 1); this.save()
           }
@@ -382,34 +485,15 @@ export class IMChannelManager {
             throw new Error('微信会话正在恢复')
           }
           expired = 0
+          received = Boolean(data.msgs?.length)
           for (const m of data.msgs ?? []) {
-            if (m.message_type !== 1 || m.message_state !== 2) continue
-            const text = (m.item_list ?? []).map((item: any) => item.type === 1 ? item.text_item?.text : item.type === 3 ? item.voice_item?.text : '').filter(Boolean).join('\n')
-            this.enqueue(r, worker, { id: String(m.message_id ?? m.seq ?? ''), peer: m.from_user_id, text, context: m.context_token,
-              ...((m.item_list ?? []).some((i: any) => i.type === 2 || i.type === 4) ? { media: async () => {
-                const items = m.item_list.filter((i: any) => i.type === 2 || i.type === 4)
-                if (items.length > 4) throw new IMMediaError('一次最多发送 4 个附件，请分批发送。')
-                const files: IMMedia[] = []
-                for (const item of items) {
-                  const file = item.type === 2 ? item.image_item : item.file_item
-                  const media = file?.media
-                  if (!media?.encrypt_query_param && !media?.full_url) throw new IMMediaError('附件信息不完整，请重新发送。')
-                  const url = new URL(media.full_url || `https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=${encodeURIComponent(media.encrypt_query_param)}`)
-                  if (url.protocol !== 'https:' || url.hostname !== 'novac2c.cdn.weixin.qq.com' || url.port || url.username || url.password) throw new IMMediaError('微信附件地址无效，请重新发送。')
-                  const data = await downloadMedia(this.request, url.href, AbortSignal.any([signal, AbortSignal.timeout(45000)]))
-                  files.push({ name: file.file_name || 'image', image: item.type === 2, data: item.type === 2 && !media.aes_key && !file.aeskey ? data : decryptWechatMedia(data, media.aes_key, file.aeskey) })
-                }
-                return files
-              } } : {}) },
-              text => this.wechat(r, 'sendmessage', { msg: { from_user_id: r.label, to_user_id: m.from_user_id, client_id: randomUUID(), message_type: 2, message_state: 2,
-                context_token: m.context_token, item_list: [{ type: 1, text_item: { text } }] } }, signal))
-            await worker.queue
+            this.acceptWechat(r, worker, m)
           }
           if (!this.live(r, worker)) return
           if (data.get_updates_buf) { r.cursor = data.get_updates_buf; this.save() }
         }
         failures = 0; worker.status = worker.error ? 'error' : 'connected'
-        await delay(200, undefined, { signal })
+        if (!received) await delay(200, undefined, { signal })
       } catch {
         if (!this.live(r, worker)) return
         worker.status = 'error'; worker.error = '连接暂时中断，正在自动重试；请检查网络和凭证'

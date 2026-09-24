@@ -111,6 +111,7 @@ function MessageAttachments({ attachments }: { attachments?: MessageAttachment[]
 }
 
 export function messageActionLabel(action: MessageAction): string {
+  if (action.tool === 'update_user_memory') return t({ running: 'Updating user memory', succeeded: 'Updated user memory', failed: 'Could not update user memory' }[action.status])
   const target = action.target || t('the selected item')
   const labels: Record<MessageAction['status'], string> = action.tool === 'computer_open_file'
     ? {
@@ -252,7 +253,8 @@ function activityDetailLabel(activity: ConversationActivityState): string {
     if (progress.phase === 'ready') return t('Task received; getting started')
     const elapsed = `${Math.floor(progress.elapsedSeconds / 60)}:${String(progress.elapsedSeconds % 60).padStart(2, '0')}`
     const state = progress.silentSeconds >= 60 ? t('Waiting for new progress from local agent') : t('Local agent is running')
-    return `${state} · ${elapsed}${progress.detail ? `\n${t(progress.detail)}` : ''}`
+    const detail = progress.detail ? t(progress.detail).trim() : ''
+    return `${state} · ${elapsed}${detail && detail !== state ? `\n${detail}` : ''}`
   }
   if (activity.action?.status === 'running') return messageActionLabel(activity.action)
   if (activity.action?.status === 'failed') return t('Trying another approach')
@@ -284,8 +286,10 @@ export function ChatActivity({
   if (!activeAgents.length && activity.phase === 'planning') return (
     <div className="system-message" role="status" aria-live="polite">
       {activity.serviceName && <>{activity.serviceName} · </>}
-      <span className="typing-activity-text" key={detail}>{detail}</span>
-      <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+      <span className="activity-status-line">
+        <span className="typing-activity-text" key={detail}>{detail}</span>
+        <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+      </span>
     </div>
   )
 
@@ -295,8 +299,10 @@ export function ChatActivity({
       <div className="typing-content" role="status" aria-live="polite">
         <span className="typing-label">{agent ? agentDisplayName(agent) : activity.serviceName || t(activity.label)}</span>
         <span className={`typing-bubble typing-activity${activity.localProgress ? ' is-local-progress' : ''}`}>
-          <span className="typing-activity-text" key={detail}>{detail}</span>
-          <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+          <span className="activity-status-line">
+            <span className="typing-activity-text" key={detail}>{detail}</span>
+            <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
+          </span>
         </span>
       </div>
     </div>
@@ -1131,6 +1137,7 @@ export function ChatPane({
   const [voiceError, setVoiceError] = useState('')
   const [voiceNeedsSettings, setVoiceNeedsSettings] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const voiceAttemptRef = useRef(0)
@@ -1183,7 +1190,8 @@ export function ChatPane({
     }
   }, [messages, activity?.phase, activity?.label, queuedMessages, pendingImages, quotedMessage])
 
-  // Composer/queue growth changes the visible timeline even without a new message.
+  // Both viewport changes and deferred message layout can move the bottom.
+  // ResizeObserver runs before paint, so correct the position in the same frame.
   useLayoutEffect(() => {
     const node = scrollRef.current
     if (!node || typeof ResizeObserver === 'undefined') return
@@ -1191,6 +1199,7 @@ export function ChatPane({
       if (nearBottom.current && !prependPosition.current) node.scrollTop = node.scrollHeight
     })
     observer.observe(node)
+    if (canvasRef.current) observer.observe(canvasRef.current)
     return () => observer.disconnect()
   }, [conversation?.id, topic?.id])
 
@@ -1488,7 +1497,7 @@ export function ChatPane({
         nearBottom.current = node.scrollHeight - node.clientHeight - node.scrollTop < 64
         if (node.scrollTop < 80 && !initialScroll.current && !historyError) void loadOlder()
       }}>
-        <div className="message-canvas">
+        <div className="message-canvas" ref={canvasRef}>
           {hasMore && <button className="history-load" disabled={loadingHistory} onClick={() => void loadOlder()}>{t(loadingHistory ? 'Loading…' : historyError ? 'Retry loading earlier messages' : 'Load earlier messages')}</button>}
           {timelineGroups.map((messageGroup, index) => {
             const message = messageGroup[0]

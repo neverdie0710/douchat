@@ -15,7 +15,7 @@ export interface DecisionSettings {
 }
 
 export const DEFAULT_DECISION_SETTINGS: DecisionSettings = {
-  mode: 'leader', providerId: '', model: ''
+  mode: 'model', providerId: CLOUD_DECISION_PROVIDER_ID, model: ''
 }
 
 export function validateDecisionSettings(value: DecisionSettings): DecisionSettings {

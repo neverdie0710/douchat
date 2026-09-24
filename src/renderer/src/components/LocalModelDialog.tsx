@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useContext, useEffect, useRef, useState, type ReactElement } from 'react'
 import { X } from 'lucide-react'
 import type { AgentConfig, ModelOption } from '../../../shared/types'
 import { CustomModelSelection } from './CustomModelSelection'
 import { configurableLocalAgents, localModelId, type LocalModelList } from '../../../shared/localModels'
 import type { CustomModelConfig } from '../../../shared/customModels'
 import { t } from '../preferences'
-import { NativeDialog } from './NativeDialog'
+import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { localAgentDisplayName } from './common'
 
 export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onCreditsSettings, onClose, onSave }: {
   agent: AgentConfig; cloudModels?: ModelOption[]; onModelSettings?: () => void; onCreditsSettings?: () => void; onClose: () => void; onSave: (model: string, provider?: string) => Promise<void>
 }): ReactElement {
+  const embedded = useContext(EmbeddedAgentSettings)
   const [model, setModel] = useState(agent.systemRole === 'admin' && !agent.userOverrides?.modelBinding ? 'douchat-default' : agent.model && agent.model !== 'default' ? agent.model : agent.localAgentId ? '' : 'douchat-default')
   const [manualModel, setManualModel] = useState(false)
   const [list, setList] = useState<LocalModelList>()
@@ -85,7 +86,7 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
       {!custom && !supported && <p className="local-model-note">{t('This tool does not support a per-conversation model override.')}</p>}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}
       </div>
-      <footer className="edit-contact-footer"><button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button><button className="primary-button" disabled={saving || (!custom && !supported && Boolean(model)) || (custom && (loading || !validSelection))}>{t(saving ? 'Saving…' : 'Done')}</button></footer>
+      <footer className="edit-contact-footer"><button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button><button className="primary-button" disabled={saving || (!custom && !supported && Boolean(model)) || (custom && (loading || !validSelection))}>{t(saving ? 'Saving…' : embedded ? 'Save' : 'Done')}</button></footer>
     </form>
   </NativeDialog>
 }

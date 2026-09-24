@@ -1,13 +1,28 @@
 import { groupText } from '../shared/groupText'
 import type { InterfaceLanguage } from '../shared/language'
 
+export const GROUP_PLANNING_ATTEMPT_MS = 60_000
+export const GROUP_PLANNING_BUDGET_MS = 180_000
+
+/** Use bounded categories in chat; provider details stay in diagnostic events. */
+export function planningFailureReason(error: unknown, language: InterfaceLanguage): string {
+  const detail = error instanceof Error ? error.message : ''
+  const key = /timeout|timed out|within \d+ seconds|秒内|超时/i.test(detail) ? 'Planning response timed out'
+    : /no .*?(content|response)|without a text response|empty|没有返回|未返回/i.test(detail) ? 'The model returned an empty planning response'
+    : /json|invalid|schema|格式|无效/i.test(detail) ? 'The model returned an invalid plan format'
+    : /401|403|auth|credentials/i.test(detail) ? 'The planning model could not authenticate'
+    : /429|rate limit/i.test(detail) ? 'The planning service is rate limited'
+    : 'The planning request failed'
+  return groupText(language, key)
+}
+
 /** Ask candidates in order. An attempt is cancelled before the next starts;
  * late responses never become a second plan or dispatch duplicate work. */
 export async function firstGroupPlan<T>(
   candidates: { run: (signal: AbortSignal) => Promise<T> }[],
   signal: AbortSignal,
-  budgetMs = 120_000,
-  attemptMs = 20_000,
+  budgetMs = GROUP_PLANNING_BUDGET_MS,
+  attemptMs = GROUP_PLANNING_ATTEMPT_MS,
   language: InterfaceLanguage = 'en'
 ): Promise<T> {
   signal.throwIfAborted()

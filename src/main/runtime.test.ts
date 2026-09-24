@@ -21,6 +21,8 @@ const idleComputer: ComputerProvider = {
 }
 
 interface ReplyOptions {
+  sessionKey?: string
+  toolsDisabled?: boolean
   config: { id: string; name: string }
   context: 'direct' | 'group' | 'controller'
   prompt: string
@@ -159,9 +161,9 @@ describe('DouchatRuntime', () => {
     store.close()
   })
 
-  it('queues simultaneous channel and desktop messages and returns only each channel answer', async () => {
+  it('handles simultaneous channel and desktop messages and returns only each channel answer', async () => {
     const { store, runtime } = createRuntime()
-    vi.spyOn(runtime as any, 'runReply').mockResolvedValueOnce({ text: 'Answer ONE' }).mockResolvedValueOnce({ text: 'Answer TWO' }).mockResolvedValueOnce({ text: 'Answer THREE' })
+    vi.spyOn(runtime as any, 'runReply').mockImplementation(async (options: any) => ({ text: `Answer ${options.routineRequest}` }))
     const first = replyToIM(store, runtime, 'dobi', 'tg', 'ONE', new AbortController().signal)
     const desktop = runtime.sendMessage('direct-dobi', 'TWO')
     const second = replyToIM(store, runtime, 'dobi', 'wx', 'THREE', new AbortController().signal)
@@ -170,7 +172,7 @@ describe('DouchatRuntime', () => {
     expect(one).not.toContain('THREE')
     expect(three).toEqual(['Answer THREE'])
     const users = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi')).filter(m => m.authorId === 'user').map(m => m.text)
-    expect(users.slice(-3)).toEqual(['ONE', 'TWO', 'THREE'])
+    expect(users.slice(-3)).toEqual(expect.arrayContaining(['ONE', 'TWO', 'THREE']))
     store.close()
   })
 
@@ -1074,15 +1076,82 @@ describe('DouchatRuntime', () => {
     const { store, runtime } = createRuntime()
     const bytes = Buffer.from('89504e470d0a1a0a', 'hex')
     const attachment = await store.saveImageAttachment({ name: 'wolf.png', mimeType: 'image/png', data: bytes })
-    vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<object> }, 'runReply').mockImplementation(async ({ config }) => config.id === 'dobi'
+    vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<object> }, 'runReply').mockImplementation(async ({ config, sessionKey }) => sessionKey?.startsWith('handoff-summary:') ? { text: 'Lin drew your wolf.' } : config.id === 'dobi'
       ? { text: 'Delegating.\n[[a2a:lin]]Draw a wolf[[/a2a]]' }
       : { text: 'Here is your wolf.', attachments: [attachment] })
     const result = await replyToIM(store, runtime, 'dobi', 'wx', 'Ask Lin to draw', new AbortController().signal, 'wechat')
-    expect(result).toEqual(['Delegating.', 'Here is your wolf.', { image: { name: 'wolf.png', mimeType: 'image/png', data: bytes } }])
+    expect(result).toEqual(['Delegating.', 'Lin drew your wolf.', { image: { name: 'wolf.png', mimeType: 'image/png', data: bytes } }])
     const history = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
     expect(history.filter(m => m.attachments?.length)).toHaveLength(1)
-    expect(history.find(m => m.attachments?.length)).toMatchObject({ authorId: 'dobi', source: { id: 'lin' }, attachments: [attachment] })
+    expect(history.find(m => m.attachments?.length)).toMatchObject({ authorId: 'dobi', text: 'Lin drew your wolf.', attachments: [attachment] })
     expect(history.find(m => m.deliveries?.length)?.deliveries?.[0].replies?.[0].attachments).toEqual([attachment])
+  })
+
+  it('summarizes delegated text for the requesting chat and IM while retaining raw receipts', async () => {
+    const { store, runtime } = createRuntime()
+    vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<object> }, 'runReply').mockImplementation(async ({ config, sessionKey, prompt, toolsDisabled }) => {
+      if (sessionKey?.startsWith('handoff-summary:')) {
+        expect(toolsDisabled).toBe(true)
+        expect(prompt).toContain('They are Alex.')
+        expect(prompt).toContain('Ask Lin who I am')
+        return { text: 'Lin says they know you as Alex.' }
+      }
+      return config.id === 'dobi'
+      ? { text: 'Asking Lin.\n[[a2a:lin]]Do you know the human?[[/a2a]]' }
+      : { text: 'Yes.\n<!-- message_break -->\nThey are Alex.' }
+    })
+    const result = await replyToIM(store, runtime, 'dobi', 'wx', 'Ask Lin who I am', new AbortController().signal, 'wechat')
+    expect(result).toEqual(['Asking Lin.', 'Lin says they know you as Alex.'])
+    const history = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    expect(history.filter(m => m.source?.id === 'lin')).toHaveLength(0)
+    expect(history.at(-1)).toMatchObject({ authorId: 'dobi', text: 'Lin says they know you as Alex.' })
+    expect(history.find(m => m.deliveries?.length)?.deliveries?.[0].replies).toHaveLength(2)
+  })
+
+  it.each(['failure', 'stop'] as const)('does not publish raw text when delegation synthesis ends in %s', async outcome => {
+    const { store, runtime } = createRuntime()
+    vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<object> }, 'runReply').mockImplementation(async ({ config, sessionKey }) => {
+      if (sessionKey?.startsWith('handoff-summary:')) {
+        if (outcome === 'stop') runtime.stopConversation('direct-dobi')
+        return { text: '', error: 'Summary unavailable' }
+      }
+      return config.id === 'dobi'
+        ? { text: 'Asking Lin.\n[[a2a:lin]]Who is the human?[[/a2a]]' }
+        : { text: 'RAW_RECIPIENT_REPLY' }
+    })
+    await runtime.sendMessage('direct-dobi', 'Ask Lin who I am')
+    const history = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    expect(history.some(message => message.text.includes('RAW_RECIPIENT_REPLY'))).toBe(false)
+    expect(history.find(message => message.deliveries?.length)?.deliveries?.[0].replies?.[0].content).toBe('RAW_RECIPIENT_REPLY')
+    if (outcome === 'failure') expect(history.some(message => message.error)).toBe(true)
+    else expect(history.some(message => message.text.includes('Summary unavailable'))).toBe(false)
+  })
+
+  it('includes tool-delegated text in the originating IM turn and clears reply capture', async () => {
+    const { store, runtime } = createRuntime()
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>; activeTopic: Map<string, string>
+      handoffReplies: Map<string, unknown[]>
+      messageAgentTool: (config: unknown, sessionKey: string) => MessageAgentToolLike
+      runReply: (options: ReplyOptions & { sessionKey: string; conversationId: string; topicId: string }) => Promise<object>
+    }
+    vi.spyOn(internals, 'runReply').mockImplementation(async ({ config, sessionKey, conversationId, topicId }) => {
+      if (config.id === 'lin') return { text: 'Yes, I know Alex.' }
+      internals.activeConversation.set(sessionKey, conversationId)
+      internals.activeTopic.set(sessionKey, topicId)
+      try {
+        const result = await internals.messageAgentTool(store.agent('dobi')!, sessionKey).execute('ask', { agent: 'lin', message: 'Do you know the human?' })
+        expect(result.content[0].text).toContain('Yes, I know Alex.')
+        expect(result.content[0].text).toContain('in your own voice')
+      } finally {
+        internals.activeConversation.delete(sessionKey)
+        internals.activeTopic.delete(sessionKey)
+      }
+      return { text: 'Lin knows you as Alex.' }
+    })
+    const result = await replyToIM(store, runtime, 'dobi', 'tg', 'Ask Lin who I am', new AbortController().signal, 'telegram')
+    expect(result).toEqual(['Lin knows you as Alex.'])
+    expect(internals.handoffReplies.size).toBe(0)
   })
 
   it('returns an image-only model reply without a no-reply error', async () => {
@@ -1192,7 +1261,7 @@ describe('DouchatRuntime', () => {
     expect(store.topicMessages('direct-dobi', topicId)).toEqual(before)
   })
 
-  it('delivers a tool-requested greeting in the recipient private chat by default', async () => {
+  it('returns tool reply as synthesis context without copying it into the requesting chat', async () => {
     const { store, runtime } = createRuntime()
     const internals = runtime as unknown as {
       activeConversation: Map<string, string>; activeTopic: Map<string, string>
@@ -1515,4 +1584,77 @@ it.each([false, true])('keeps custom model routing when cloud reconnects and nev
   runtime.configureCustomModels([])
   expect(() => runtime.customAgentModel('mine', 'private-model')).toThrow('unavailable')
   await expect(internals.canRunLive(agent)).rejects.toThrow('unavailable')
+})
+
+it('starts isolated IM model turns concurrently, preserves receipt order and returns only their own out-of-order answers', async () => {
+  const { store, runtime } = createRuntime()
+  const internal = runtime as any
+  internal.runReply = (DouchatRuntime.prototype as any).runReply
+  const pending = new Map<string, { options: any; finish: (value: { text: string }) => void }>()
+  vi.spyOn(internal, 'performReply').mockImplementation((options: any) => new Promise(resolve => {
+    pending.set(options.routineRequest, { options, finish: resolve })
+  }))
+  const firstReceipt = runtime.receiveIMMessage('dobi', 'tg', 'FIRST_ONLY', 'telegram', '1')
+  expect(runtime.receiveIMMessage('dobi', 'tg', 'FIRST_ONLY', 'telegram', '1')).toBe(firstReceipt)
+  const first = replyToIM(store, runtime, 'dobi', 'tg', 'FIRST_ONLY', new AbortController().signal, 'telegram', undefined, firstReceipt)
+  await vi.waitFor(() => expect(pending.has('FIRST_ONLY')).toBe(true))
+  const secondReceipt = runtime.receiveIMMessage('dobi', 'tg', 'SECOND_ONLY', 'telegram', '2')
+  const second = replyToIM(store, runtime, 'dobi', 'tg', 'SECOND_ONLY', new AbortController().signal, 'telegram', undefined, secondReceipt)
+  await vi.waitFor(() => expect(pending.has('SECOND_ONLY')).toBe(true))
+  const one = pending.get('FIRST_ONLY')!, two = pending.get('SECOND_ONLY')!
+  expect(one.options.sessionKey).not.toBe(two.options.sessionKey)
+  expect(one.options.prompt).not.toContain('SECOND_ONLY')
+  expect(two.options.prompt).toContain('FIRST_ONLY')
+  two.finish({ text: 'second result' })
+  expect(await second).toEqual(['second result'])
+  expect(internal.activity.has('direct-dobi')).toBe(true)
+  one.finish({ text: 'first result' })
+  expect(await first).toEqual(['first result'])
+  expect(store.messages.filter(message => message.id === firstReceipt)).toHaveLength(1)
+  expect(store.messages.filter(message => message.id === secondReceipt)).toHaveLength(1)
+  expect(internal.activity.has('direct-dobi')).toBe(false)
+  expect(internal.imTurns.size).toBe(0)
+  store.close()
+})
+
+it('cancels one parallel IM request without aborting its sibling and stops all on desktop stop', async () => {
+  const { store, runtime } = createRuntime()
+  const internal = runtime as any
+  internal.runReply = (DouchatRuntime.prototype as any).runReply
+  const pending = new Map<string, { signal: AbortSignal; finish: (value: { text: string }) => void }>()
+  vi.spyOn(internal, 'performReply').mockImplementation((options: any) => new Promise(resolve => {
+    pending.set(options.routineRequest, { signal: options.signal, finish: resolve })
+    options.signal.addEventListener('abort', () => resolve({ text: '' }), { once: true })
+  }))
+  const controller = new AbortController()
+  const first = replyToIM(store, runtime, 'dobi', 'tg', 'ONE', controller.signal)
+  const second = replyToIM(store, runtime, 'dobi', 'wx', 'TWO', new AbortController().signal)
+  const firstFailure = expect(first).rejects.toThrow('disconnected')
+  const secondFailure = expect(second).rejects.toThrow('disconnected')
+  await vi.waitFor(() => expect(pending.size).toBe(2))
+  controller.abort()
+  await firstFailure
+  expect(pending.get('TWO')!.signal.aborted).toBe(false)
+  runtime.stopConversation('direct-dobi')
+  await secondFailure
+  expect(pending.get('TWO')!.signal.aborted).toBe(true)
+  expect(internal.imTurns.size).toBe(0)
+  store.close()
+})
+
+it('updates an attachment receipt in its original topic without duplicating it after the active topic changes', async () => {
+  const { store, runtime } = createRuntime()
+  const receiptId = runtime.receiveIMMessage('dobi', 'tg', '', 'telegram', 'photo')
+  const original = store.messages.find(message => message.id === receiptId)!
+  expect(original.text).toBe('📎')
+  const nextTopic = store.createTopic('direct-dobi')!
+  expect(nextTopic.id).not.toBe(original.topicId)
+  const reply = await replyToIM(store, runtime, 'dobi', 'tg', 'Describe', new AbortController().signal, 'telegram',
+    [{ name: 'photo.png', image: true, data: Buffer.from('89504e470d0a1a0a', 'hex') }], receiptId)
+  expect(reply.length).toBeGreaterThan(0)
+  const messages = store.messages.filter(message => message.id === receiptId)
+  expect(messages).toHaveLength(1)
+  expect(messages[0]).toMatchObject({ text: 'Describe', topicId: original.topicId, createdAt: original.createdAt })
+  expect(messages[0].attachments).toHaveLength(1)
+  store.close()
 })

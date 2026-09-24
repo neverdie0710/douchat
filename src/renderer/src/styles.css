@@ -3353,7 +3353,9 @@ html[data-platform='win32'] .messenger .app-rail {
 /* An informational line stays neutral; only a failure wears the warm tint,
    and it stays one line tall until someone asks for the raw text. */
 .messenger .system-message {
-  max-width: 560px;
+  min-width: 0;
+  max-width: min(560px, 100%);
+  overflow-wrap: anywhere;
   margin: 14px auto 18px;
   padding: 8px 12px;
   border: 0;
@@ -3377,6 +3379,7 @@ html[data-platform='win32'] .messenger .app-rail {
 
 .messenger .system-summary {
   min-width: 0;
+  overflow-wrap: anywhere;
   flex: 1;
   display: grid;
   gap: 2px;
@@ -3463,6 +3466,8 @@ html[data-platform='win32'] .messenger .app-rail {
 }
 
 .messenger .system-detail {
+  min-width: 0;
+  max-width: 100%;
   margin-top: 9px;
   padding-top: 9px;
   border-top: 1px solid rgba(138, 99, 80, 0.16);
@@ -5374,7 +5379,9 @@ html[data-platform='win32'] .messenger .app-rail {
 .messenger .conversation-item.active::after { background: transparent; }
 .messenger .conversation-item.active .conversation-loading { background: var(--bubble-user); color: var(--ink); }
 
-.messenger .typing-bubble.typing-activity { width: auto; height: auto; min-height: 32px; padding: 7px 12px; gap: 2px; color: var(--muted); font-size: calc(13px * var(--font-scale, .92)); }
+.messenger .typing-bubble.typing-activity { width: auto; max-width: 100%; height: auto; min-height: 32px; padding: 7px 12px; gap: 2px; color: var(--muted); font-size: calc(13px * var(--font-scale, .92)); }
+.messenger .activity-status-line { display: inline-flex; align-items: baseline; max-width: 100%; min-width: 0; vertical-align: bottom; }
+.messenger .activity-status-line > .reply-status-dots { flex-shrink: 0; }
 .messenger .typing-activity .reply-status-dots i { width: auto; height: auto; border-radius: 0; background: none; animation: reply-dot 1.2s infinite; }
 .messenger .typing-activity .reply-status-dots i:nth-child(2) { animation-delay: .2s; }
 .messenger .typing-activity .reply-status-dots i:nth-child(3) { animation-delay: .4s; }
@@ -5416,7 +5423,7 @@ html[data-platform='win32'] .messenger .app-rail {
 .contact-profile-header { display: flex; align-items: flex-start; gap: 18px; padding-bottom: 24px; border-bottom: 1px solid color-mix(in srgb, var(--ink) 6%, transparent); }
 .contact-profile-identity { min-width: 0; flex: 1; padding-top: 3px; }
 .contact-profile-name { display: flex; align-items: center; gap: 8px; }
-.contact-profile-name h1 { margin: 0; font-size: calc(20px * var(--font-scale, .92)); line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
+.contact-profile-name h1 { margin: 0; font-size: calc(17px * var(--font-scale, .92)); line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
 .contact-profile-identity p { margin: 5px 0 0; color: var(--muted); font-size: calc(13px * var(--font-scale, .92)); line-height: 1.5; overflow-wrap: anywhere; }
 .profile-star, .profile-edit { display: grid; place-items: center; border: 0; padding: 4px; background: none; color: var(--muted); cursor: pointer; }
 .profile-star.is-starred { color: #e8ac12; }
@@ -5428,8 +5435,10 @@ html[data-platform='win32'] .messenger .app-rail {
 .contact-profile-sheet .contact-field { display: grid; grid-template-columns: 86px minmax(0, 1fr); align-items: baseline; gap: 12px; padding: 7px 0; border: 0; }
 .contact-profile-sheet .contact-field > span { margin: 0; color: var(--muted); font-size: calc(14px * var(--font-scale, .92)); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .contact-profile-sheet .contact-field p { color: var(--ink); font-size: calc(14px * var(--font-scale, .92)); overflow-wrap: anywhere; white-space: pre-wrap; }
-.contact-profile-actions { display: flex; justify-content: center; padding: 28px 0; }
-.contact-profile-actions button { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 8px 24px; border: 0; background: none; color: var(--accent-600); font: inherit; font-size: calc(14px * var(--font-scale, .92)); cursor: pointer; border-radius: 8px; }
+.contact-profile-actions { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 28px 0; }
+.contact-profile-actions button { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; flex: 0 0 104px; box-sizing: border-box; gap: 8px; padding: 8px; border: 0; background: none; color: var(--accent-600); font: inherit; font-size: calc(12px * var(--font-scale, .92)); text-align: center; cursor: pointer; border-radius: 8px; }
+.contact-profile-actions button > span { white-space: nowrap; line-height: 1.5; }
+.contact-profile-actions button > svg { width: 20px; height: 20px; flex-shrink: 0; }
 .contact-profile-actions button:hover { background: var(--accent-100); }
 
 /* Contact selection: a searchable directory and a persistent selection tray. */
@@ -5491,7 +5500,7 @@ html[data-platform='win32'] .messenger .app-rail {
 .group-member-results strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-results mark { color: var(--accent-600); background: transparent; }
 
-.messenger .agent-modal.member-profile-modal { position: relative; width: min(360px, calc(100vw - 48px)); padding: 0; overflow: hidden; }
+.messenger .agent-modal.member-profile-modal { position: relative; width: min(320px, calc(100vw - 48px)); padding: 0; overflow: hidden; }
 .member-profile-modal .member-profile-close { position: absolute; top: 10px; right: 10px; z-index: 1; color: var(--muted); }
 .member-profile-modal .contact-profile-pane { min-width: 0; }
 .member-profile-modal .contact-profile-scroll { max-height: calc(100vh - 64px); padding: 36px 24px 8px; }
@@ -6650,7 +6659,22 @@ html.native-dialog-window,
 .messenger :is(.custom-model-form, .custom-model-delete) .secondary-button { border: 1px solid var(--line); background: var(--canvas); color: var(--ink); }
 .messenger :is(.custom-model-form, .custom-model-delete) .secondary-button:hover:not(:disabled) { background: var(--surface); border-color: var(--muted); }
 .messenger :is(.custom-model-form, .custom-model-delete) button:disabled { opacity: .45; cursor: default; }
-.custom-model-form button:focus-visible, .custom-model-delete button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.custom-model-form .provider-auth-button:focus-visible, .custom-model-form button:focus-visible, .custom-model-delete button:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.custom-model-form .provider-auth-card { display: grid; gap: 12px; padding: 14px; margin-top: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }
+.custom-model-form .provider-auth-heading { display: flex; align-items: center; gap: 10px; }
+.custom-model-form .provider-auth-icon { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 10px; color: var(--brand); background: var(--accent-050); }
+.custom-model-form .provider-auth-copy { min-width: 0; }
+.custom-model-form .provider-auth-copy .settings-note { font-size: 12px; }
+.custom-model-form .provider-auth-status { display: flex; align-items: center; gap: 6px; color: var(--brand); font-size: 12px; font-weight: 500; line-height: 1.5; }
+.custom-model-form .provider-auth-status:empty { display: none; }
+.custom-model-form .provider-auth-status svg { flex-shrink: 0; }
+.custom-model-form .provider-auth-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.messenger .custom-model-form .provider-auth-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 1 auto; gap: 7px; width: auto; min-height: 36px; margin: 0; padding: 8px 12px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 500; line-height: 1.4; cursor: pointer; box-shadow: none; text-decoration: none; }
+.messenger .custom-model-form .provider-auth-button.primary-button { border: 1px solid var(--brand); background: var(--brand); color: var(--canvas); }
+.messenger .custom-model-form .provider-auth-button.primary-button:hover:not(:disabled) { background: var(--accent-700); border-color: var(--accent-700); }
+.custom-model-form .provider-auth-spinner { animation: provider-auth-spin 1s linear infinite; }
+@keyframes provider-auth-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .custom-model-form .provider-auth-spinner { animation: none; } }
 .native-dialog-window .custom-model-form { --dialog-preferred-width: 560; }
 @media (max-width: 440px) {
   .custom-model-fields { grid-template-columns: 1fr; gap: 0; }
@@ -6764,9 +6788,9 @@ html.native-dialog-window,
 .im-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; align-items: stretch; }
 .im-card { border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 164px; background: var(--search-focus-surface); }
 .im-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.im-card-title img { width: 22px; height: 22px; object-fit: contain; flex-shrink: 0; }
+.im-card-title img { width: 18px; height: 18px; object-fit: contain; flex-shrink: 0; }
 .im-card h3, .im-card p { margin: 0; }
-.im-card h3 { font-size: 16px; font-weight: 500; line-height: 24px; }
+.im-card h3 { font-size: 13px; font-weight: 500; line-height: 1.6; }
 .im-status { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; }
 .im-status.connected, .im-paired { color: #159764; }
 .im-status.error { color: #d76b3d; }
@@ -6799,7 +6823,8 @@ html.native-dialog-window,
 .im-qr .secondary-button { display: inline-flex; align-items: center; gap: 8px; }
 .im-remove { margin-top: auto; font-size: 12px; line-height: 1.6; }
 .im-remove button { margin: 8px 6px 0 0; }
-.im-modal button:focus-visible, .im-modal input:focus-visible { outline: 2px solid #6597e8; outline-offset: 3px; }
+.im-modal button:focus-visible { outline: 2px solid #6597e8; outline-offset: 3px; }
+.im-modal input:focus-visible { outline: none; box-shadow: none; }
 @media (max-width: 480px) { .im-grid { grid-template-columns: 1fr; } .im-heading { padding: 16px; } .im-body { padding: 16px; } }
 /* Shared button sizing keeps cards, QR actions and credential forms consistent. */
 .im-modal :is(.secondary-button, .primary-button) {

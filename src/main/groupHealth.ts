@@ -4,7 +4,10 @@ export interface MemberHealth {
   fingerprint: string
   status: 'healthy' | 'unavailable' | 'unknown'
   checkedAt: number
+  /** Transport probe latency only; never mix with task duration. */
   latencyMs?: number
+  planningLatencyMs?: number
+  executionLatencyMs?: number
   failures: number
 }
 export type GroupHealth = Record<string, MemberHealth>
@@ -23,8 +26,9 @@ export async function refreshGroupHealth(
   const result: GroupHealth = {}
   const pending = members.filter(member => {
     const old = previous[member.id]
-    result[member.id] = old?.fingerprint === member.fingerprint ? { ...old } : { fingerprint: member.fingerprint, status: old?.status === 'unavailable' ? 'unavailable' : 'unknown', checkedAt: 0, failures: 0 }
+    result[member.id] = old?.fingerprint === member.fingerprint ? { ...old } : { fingerprint: member.fingerprint, status: 'unknown', checkedAt: 0, failures: 0 }
     const entry = result[member.id]
+    if (entry.status === 'unavailable') { entry.status = 'unknown'; return true }
     return now - entry.checkedAt >= (entry.status === 'unknown' ? Math.min(intervalMs, 30_000) : intervalMs) || !entry.checkedAt
   })
   const deadline = now + budgetMs
@@ -48,10 +52,10 @@ export async function refreshGroupHealth(
           })
         ])
         if (signal.aborted) break
-        result[member.id] = { ...result[member.id], checkedAt: Date.now(), status: ok === undefined ? (result[member.id].status === 'unavailable' ? 'unavailable' : 'unknown') : ok ? 'healthy' : 'unavailable',
+        result[member.id] = { ...result[member.id], checkedAt: Date.now(), status: ok === undefined ? 'unknown' : ok ? 'healthy' : 'unavailable',
           ...(ok ? { latencyMs: Date.now() - start, failures: 0 } : { failures: result[member.id].failures + Number(ok === false) }) }
       } catch {
-        if (!signal.aborted) result[member.id] = { ...result[member.id], status: abort.signal.aborted && result[member.id].status !== 'unavailable' ? 'unknown' : 'unavailable', checkedAt: Date.now(), failures: result[member.id].failures + 1,
+        if (!signal.aborted) result[member.id] = { ...result[member.id], status: 'unknown', checkedAt: Date.now(), failures: result[member.id].failures + 1,
           ...(abort.signal.aborted ? { latencyMs: budgetMs } : {}) }
       } finally {
         clearTimeout(timer)
@@ -71,10 +75,10 @@ export function rankGroupMembers(members: GroupMember[], health: GroupHealth, ta
   const tokens = [...new Set([...segmenter.segment(normalize(task))].filter(part => part.isWordLike).map(part => part.segment))]
   const score = (member: GroupMember) => {
     const record = health[member.id]
-    const profile = normalize(`${member.name} ${member.description ?? ''}`)
+    const profile = normalize(`${member.name} ${member.description ?? ''} ${JSON.stringify(member.routing?.declared ?? [])} ${JSON.stringify(member.routing?.skills ?? [])}`)
     const fit = Math.min(60, tokens.filter(token => profile.includes(token)).length * 15)
     return (record?.status === 'unavailable' ? -1000 : record?.status === 'healthy' ? 1000 : 0)
-      + fit - Math.log2(1 + (record?.latencyMs ?? 10_000) / 1000) * 12 + Number(member.id === preferred) * 3
+      + fit - Math.log2(1 + (record?.planningLatencyMs ?? record?.latencyMs ?? 10_000) / 1000) * 12 + Number(member.id === preferred) * 3 - Math.min(60, (member.routing?.activeTasks ?? 0) * 15)
   }
   return [...members].sort((a, b) => score(b) - score(a))
 }

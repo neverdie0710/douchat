@@ -1,6 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { firstGroupPlan } from './groupPlanning'
+import { firstGroupPlan, planningFailureReason } from './groupPlanning'
 afterEach(() => vi.useRealTimers())
+
+it('shows distinct bounded failure reasons without leaking provider details', () => {
+  expect(planningFailureReason(new Error('The operation was aborted due to timeout'), 'zh-CN')).toBe('等待规划响应超时')
+  expect(planningFailureReason(new Error('Dr. Dou finished without a text response.'), 'zh-CN')).toBe('模型未返回规划内容')
+  expect(planningFailureReason(new Error('Invalid group decision mode'), 'zh-CN')).toBe('模型返回的计划格式不符合要求')
+  expect(planningFailureReason(new Error('HTTP 401 secret-token'), 'zh-CN')).toBe('规划模型身份验证失败')
+})
 
 it('cancels a slow planner before trying the next candidate and ignores its late success', async () => {
   vi.useFakeTimers()
@@ -8,7 +15,7 @@ it('cancels a slow planner before trying the next candidate and ignores its late
   let finishSlow!: (value: string) => void
   const next = vi.fn(async () => { expect(slowSignal.aborted).toBe(true); return 'valid backup' })
   const result = firstGroupPlan([{ run: signal => { slowSignal = signal; return new Promise<string>(resolve => { finishSlow = resolve }) } }, { run: next }], new AbortController().signal)
-  await vi.advanceTimersByTimeAsync(19_999)
+  await vi.advanceTimersByTimeAsync(59_999)
   expect(next).not.toHaveBeenCalled()
   await vi.advanceTimersByTimeAsync(1)
   expect(await result).toBe('valid backup')
@@ -32,7 +39,7 @@ it('continues beyond two failed candidates without overlapping active attempts',
     { run: async () => { expect(first.aborted).toBe(true); throw new Error('invalid JSON') } },
     { run: third }
   ], new AbortController().signal)
-  await vi.advanceTimersByTimeAsync(20_000)
+  await vi.advanceTimersByTimeAsync(60_000)
   expect(await result).toBe('third plan')
   expect(third).toHaveBeenCalledOnce()
 })
@@ -48,9 +55,9 @@ it('bounds total planning time even when every transport ignores cancellation', 
   const signals: AbortSignal[] = []
   const candidates = Array.from({ length: 10 }, () => ({ run: (signal: AbortSignal) => { signals.push(signal); return new Promise<never>(() => {}) } }))
   const result = firstGroupPlan(candidates, new AbortController().signal)
-  const assertion = expect(result).rejects.toThrow('120 seconds')
-  await vi.advanceTimersByTimeAsync(120_000); await assertion
-  expect(signals).toHaveLength(6)
+  const assertion = expect(result).rejects.toThrow('180 seconds')
+  await vi.advanceTimersByTimeAsync(180_001); await assertion
+  expect(signals).toHaveLength(3)
   expect(signals.every(signal => signal.aborted)).toBe(true)
 })
 

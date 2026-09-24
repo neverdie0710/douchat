@@ -1,6 +1,10 @@
+export type IMTypingHandle = (() => Promise<void>) & { refresh(): void }
+
 /** Best-effort status updates, serialized so a late start is always cleaned up. */
-export function startIMTyping(signal: AbortSignal, update: () => Promise<void>, clear?: () => Promise<void>, refreshMs = 4000): () => Promise<void> {
+export function startIMTyping(signal: AbortSignal, update: () => Promise<void>, clear?: () => Promise<void>, refreshMs = 4000): IMTypingHandle {
   let stopped = false
+  let updating = false
+  let refreshRequested = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let pending: Promise<void> = Promise.resolve()
   let cleanup: Promise<void> | undefined
@@ -15,12 +19,17 @@ export function startIMTyping(signal: AbortSignal, update: () => Promise<void>, 
   const onAbort = () => { void stop() }
   const tick = () => {
     if (stopped || signal.aborted) return
+    clearTimeout(timer)
+    if (updating) { refreshRequested = true; return }
+    updating = true
+    refreshRequested = false
     pending = Promise.resolve().then(() => { if (!stopped && !signal.aborted) return update() }).catch(() => {}).then(() => {
-      if (!stopped && !signal.aborted && refreshMs > 0) timer = setTimeout(tick, refreshMs)
+      updating = false
+      if (!stopped && !signal.aborted && (refreshRequested || refreshMs > 0)) timer = setTimeout(tick, refreshRequested ? 0 : refreshMs)
     })
   }
   signal.addEventListener('abort', onAbort, { once: true })
   if (signal.aborted) void stop()
   else tick()
-  return stop
+  return Object.assign(stop, { refresh: tick })
 }

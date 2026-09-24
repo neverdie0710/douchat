@@ -39,6 +39,8 @@ export interface CustomLocalAgentInput {
 }
 
 export interface AgentConfig {
+  systemFiles?: import('./agentCustomization').AgentFiles
+  skills?: import('./agentCustomization').AgentSkill[]
   followDefaultModel?: boolean
   permissions?: AgentPermissions
   /** Account ownership used for shared group execution. */
@@ -482,6 +484,8 @@ export interface CreateAgentInput {
 export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel'>
 
 export interface UpdateAgentInput {
+  systemFiles?: import('./agentCustomization').AgentFiles
+  skills?: import('./agentCustomization').AgentSkill[]
   followDefaultModel?: boolean
   customModel?: { providerId: string; model: string }
   cloudModel?: { model: string }
@@ -570,6 +574,10 @@ export interface UpdateState {
 }
 
 export interface DouchatApi {
+  getGroupMemory(conversationId: string): Promise<import('./userMemory').UserMemoryDocument>
+  saveGroupMemory(document: import('./userMemory').UserMemoryDocument, conversationId: string): Promise<import('./userMemory').UserMemoryDocument>
+  getUserMemory(agentId?: string): Promise<import('./userMemory').UserMemoryDocument>
+  saveUserMemory(document: import('./userMemory').UserMemoryDocument, agentId?: string): Promise<import('./userMemory').UserMemoryDocument>
   listIMChannels(agentId: string): Promise<import('./imChannels').IMChannel[]>
   connectIMChannel(agentId: string, input: import('./imChannels').IMConnectInput): Promise<void>
   disconnectIMChannel(agentId: string, provider: import('./imChannels').IMProvider): Promise<void>
@@ -619,6 +627,8 @@ export interface DouchatApi {
   /** Reopen a file reference saved in chat history after main-process validation. */
   openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
+  authorizeTokenDance: () => Promise<string>
+  cancelTokenDanceAuthorization: () => Promise<void>
   getCustomModels: () => Promise<CustomModelConfig>
   getDecisionSettings: () => Promise<import('./groupDecision').DecisionSettings>
   getCloudDecisionModels: () => Promise<import('./groupDecision').CloudDecisionModel[]>

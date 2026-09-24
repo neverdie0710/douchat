@@ -2,6 +2,10 @@ import { mediaName, MAX_IM_FILE_BYTES, IMMediaError } from './imMedia'
 import { pathToFileURL } from 'node:url'
 import { GameRuleError } from '../shared/gameText'
 import { agentPermissions } from '../shared/agentPermissions'
+import { validateAgentFiles, validateAgentSkills } from '../shared/agentCustomization'
+import { GroupMemoryStore } from './groupMemoryStore'
+import { UserMemoryStore } from './userMemoryStore'
+import { emptyUserMemory } from '../shared/userMemory'
 import { DEFAULT_DECISION_SETTINGS, validateDecisionSettings, type DecisionSettings } from '../shared/groupDecision'
 import type { GameState } from '../shared/groupGame'
 import type { GroupWorkflow } from '../shared/groupWorkflow'
@@ -249,6 +253,8 @@ const defaultAgents = (): AgentConfig[] => {
 }
 
 export class DouchatStore {
+  readonly userMemories: UserMemoryStore
+  readonly groupMemories: GroupMemoryStore
   private readonly db: DatabaseSync
   private readonly statements = new Map<string, StatementSync>()
   private readonly attachmentDirectory: string
@@ -269,6 +275,9 @@ export class DouchatStore {
     this.backfillSystemAdminRoles()
     this.backfillAgentAvatarSeeds()
     this.backfillAccountOwnership()
+    this.groupMemories = new GroupMemoryStore(this.db, () => this.currentAccountId, id => this.conversation(id), id => this.agent(id)?.ownerId)
+    this.userMemories = new UserMemoryStore(this.db, () => this.currentAccountId, id => this.agent(id)?.ownerId)
+    this.migrateLegacyUserMemories()
     this.migrateAccountSensitiveMeta()
     this.backfillAttachmentOwnership()
     this.backfillMessageSourceContent()
@@ -279,6 +288,26 @@ export class DouchatStore {
 
   static atUserData(userDataPath: string): DouchatStore {
     return new DouchatStore(join(userDataPath, 'douchat.db'))
+  }
+
+  private migrateLegacyUserMemories(): void {
+    this.tx(() => {
+      for (const agent of this.agents) {
+        if (!agent.ownerId || !agent.systemFiles) continue
+        const notes = ['USER.md', 'MEMORY.md'].flatMap(name => {
+          const content = agent.systemFiles?.[name as 'USER.md' | 'MEMORY.md']
+          return content?.trim() ? [`# ${name}\n${content}`] : []
+        }).join('\n\n')
+        if (!notes) continue
+        const row = this.stmt('SELECT data FROM agent_user_memories WHERE userId = ? AND agentId = ?').get(agent.ownerId, agent.id) as { data: string } | undefined
+        const current = row ? JSON.parse(row.data) : emptyUserMemory(agent.ownerId, agent.id)
+        const next = { ...current, notes: [current.notes, notes].filter(Boolean).join('\n\n'), revision: current.revision + 1, updatedAt: Date.now() }
+        this.write('INSERT INTO agent_user_memories (userId, agentId, data) VALUES (?, ?, ?) ON CONFLICT(userId, agentId) DO UPDATE SET data = excluded.data', agent.ownerId, agent.id, JSON.stringify(next))
+        delete agent.systemFiles['USER.md']
+        delete agent.systemFiles['MEMORY.md']
+        this.putAgent(agent)
+      }
+    })
   }
 
   close(): void {
@@ -1525,6 +1554,8 @@ export class DouchatStore {
       delete next.localAgentId
     }
     if (next.permissions !== undefined) next.permissions = agentPermissions(next.permissions)
+    if (next.systemFiles !== undefined) next.systemFiles = { ...agent.systemFiles, ...validateAgentFiles(next.systemFiles) }
+    if (next.skills !== undefined) next.skills = validateAgentSkills(next.skills)
     if (next.avatar !== undefined) {
       next.avatar = next.avatar.trim()
       if (!validAvatar(next.avatar)) delete next.avatar
@@ -1921,6 +1952,7 @@ export class DouchatStore {
       this.insertMessage({ id: `context-reset:${reset.id}`, conversationId, topicId,
         authorId: 'system', authorName: 'Douchat', kind: 'system', text: 'Context reset', createdAt: reset.at })
       topic.contextReset = reset
+      if (conversation.type === 'group') this.saveGroupHealth(conversationId, {})
       this.write('DELETE FROM groupGames WHERE conversationId = ? AND topicId = ?', conversationId, topicId)
       this.putConversation(conversation)
     })
@@ -1964,6 +1996,19 @@ export class DouchatStore {
       }
       return result
     })
+  }
+
+  imReceipt(id: string, conversationId: string): ChatMessage | undefined {
+    if (this.conversation(conversationId)?.ownerId !== this.currentAccountId) return undefined
+    return this.one<ChatMessage>("SELECT data FROM messages WHERE id = ? AND conversationId = ? AND json_extract(data, '$.authorId') = 'user'", id, conversationId)
+  }
+
+  completeIMReceipt(id: string, text: string, attachments: ChatMessage['attachments']): ChatMessage {
+    const message = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', id)
+    if (!message || message.authorId !== 'user' || this.conversation(message.conversationId)?.ownerId !== this.currentAccountId) throw new Error('IM receipt not found')
+    const updated = { ...message, text, ...(attachments?.length ? { attachments } : {}) }
+    this.db.prepare('UPDATE messages SET data = ? WHERE id = ?').run(JSON.stringify(updated), id)
+    return updated
   }
 
   addDeliveryReplies(deliveryId: string, replies: MessageDeliveryReply[]): void {

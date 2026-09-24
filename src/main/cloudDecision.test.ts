@@ -59,3 +59,48 @@ it.each([
   await expect(new GroupDecisionService(request).test({ mode: 'model', providerId: CLOUD_DECISION_PROVIDER_ID, model: '' }, provider, new AbortController().signal)).rejects.toThrow(message)
   expect(request).toHaveBeenCalledOnce()
 })
+
+it('caches the model catalog, shares in-flight requests, and isolates caller cancellation', async () => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const request = vi.fn<typeof fetch>(async () => { await gate; return Response.json({ code: 0, data: [model] }) })
+  const client = new CloudDecisionClient({ baseUrl: 'https://douchat.test/v1', resolveAccessToken: () => 'token' }, request)
+  const abort = new AbortController()
+  const cancelled = client.models(abort.signal)
+  const rejected = expect(cancelled).rejects.toThrow()
+  const active = client.provider()
+  abort.abort(); release()
+  await rejected
+  expect((await active).models).toEqual([model.id])
+  await client.provider()
+  expect(request).toHaveBeenCalledTimes(1)
+  client.invalidate()
+  await client.provider()
+  expect(request).toHaveBeenCalledTimes(2)
+})
+
+it('refreshes an expired catalog and does not retain a cached model across sign-out', async () => {
+  let token: string | undefined = 'token'
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1000)
+  const request = vi.fn<typeof fetch>(async () => Response.json({ code: 0, data: [model] }))
+  const client = new CloudDecisionClient({ baseUrl: 'https://douchat.test/v1', resolveAccessToken: () => token }, request)
+  try {
+    await client.models(); now.mockReturnValue(301001); await client.models()
+    expect(request).toHaveBeenCalledTimes(2)
+    token = undefined; await expect(client.models()).rejects.toThrow('Sign in')
+    token = 'token'; await client.models(); expect(request).toHaveBeenCalledTimes(3)
+  } finally { now.mockRestore() }
+})
+
+it('does not sign out the new account when an old catalog request returns 401', async () => {
+  let token = 'old'
+  let complete!: (response: Response) => void
+  const unauthorized = vi.fn()
+  const client = new CloudDecisionClient({ baseUrl: 'https://douchat.test/v1', resolveAccessToken: () => token, onUnauthorized: unauthorized },
+    async () => new Promise<Response>(resolve => { complete = resolve }))
+  const pending = client.models()
+  const rejected = expect(pending).rejects.toThrow('Unauthorized')
+  token = 'new'; complete(Response.json({ code: -1, message: 'Unauthorized' }, { status: 401 }))
+  await rejected
+  expect(unauthorized).not.toHaveBeenCalled()
+})

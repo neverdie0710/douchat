@@ -42,7 +42,7 @@ export function localAgentArgs(id: string, prompt: string, output: string, appOw
     ]
     case 'cursor': return [...(appOwnedWorkspace ? ['--trust'] : []), '--print', '--output-format', 'json', '--mode', 'ask', '--', prompt]
     case 'opencode': return ['run', '--format', 'json', '--', prompt]
-    case 'kimi': return ['--prompt', prompt, '--output-format', 'text']
+    case 'kimi': return ['--prompt', prompt, '--output-format', 'stream-json']
     case 'openclaw': return ['agent', 'exec', '--message-file', '-', '--json', '--code-mode', 'direct']
     case 'fastclaw': return ['chat', '--query', prompt]
     case 'hermes': return ['--oneshot', prompt]
@@ -62,7 +62,20 @@ export function localAgentText(id: string, stdout: string): string {
     stream.push(stdout)
     return stream.finish().text
   }
-  if (['kimi', 'fastclaw', 'hermes', 'omp'].includes(id)) return stdout.trim()
+  if (id === 'kimi') {
+    // Text mode adds terminal transcript bullets and indentation. JSONL keeps
+    // the original Markdown and separates assistant replies from tool output.
+    return stdout.split('\n').filter(line => line.trim()).flatMap(line => {
+      const message = JSON.parse(line)
+      if (message.role !== 'assistant') return []
+      if (typeof message.content === 'string') return [message.content]
+      if (Array.isArray(message.content)) return [message.content
+        .filter((part: { type?: string; text?: unknown }) => part.type === 'text' && typeof part.text === 'string')
+        .map((part: { text: string }) => part.text).join('')]
+      return []
+    }).filter(Boolean).join('\n\n').trim()
+  }
+  if (['fastclaw', 'hermes', 'omp'].includes(id)) return stdout.trim()
   if (id === 'opencode') {
     const events = stdout.split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line))
     const error = events.find((event) => event.type === 'error')

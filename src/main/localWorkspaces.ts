@@ -32,7 +32,16 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string) {
     generation: old?.generation && /^[a-f0-9-]{36}$/.test(old.generation) ? old.generation : randomUUID(), fingerprint,
     ...(old?.fingerprint === fingerprint && old.thread ? { thread: old.thread } : {}) }
   save(file, record)
-  const directory = join(root, 'files', hash(config.ownerId), hash(config.id), id, record.generation)
+  const legacyDirectory = join(root, 'files', hash(config.ownerId), hash(config.id), id, record.generation)
+  // Cursor flattens the entire workspace path into one directory name for its
+  // trust marker (NAME_MAX = 255). The session hash already isolates owner,
+  // agent and topic, so the extra owner/agent hashes are redundant here.
+  const compactDirectory = join(root, 'cursor', id, record.generation)
+  const directory = config.localAgentId === 'cursor' || existsSync(compactDirectory) ? compactDirectory : legacyDirectory
+  if (directory === compactDirectory && !existsSync(directory) && existsSync(legacyDirectory)) {
+    mkdirSync(join(root, 'cursor', id), { recursive: true, mode: 0o700 })
+    renameSync(legacyDirectory, directory)
+  }
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   return { directory, thread: record.thread, remember(thread?: string) {
     // A late completion must never restore a session invalidated by Clear chat.

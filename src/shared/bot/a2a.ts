@@ -111,7 +111,7 @@ export function directA2ASourcePrompt(
     'If exactly one bot is clearly intended, use that entry\'s exact opaque id with this transport syntax: [[a2a:RECIPIENT_ID]]message for that bot[[/a2a]]. Never put a display name, nickname, partial name, or invented value in RECIPIENT_ID.',
     'If the intent is unclear, no bot is a reliable match, or multiple bots could match—including bots with the same display name—do not emit any A2A envelope. Ask the human one concise question identifying the possible bots so they can clarify.',
     'Use A2A only when the human asks you to contact, tell, ask, reply to, or delegate to another bot. Resolve follow-up references from the conversation context. The app hides the envelope; put a short sending confirmation outside it only after choosing one unambiguous bot.',
-    'The recipient’s response is delivered to the human in that recipient’s own private chat with an unread notification. Do not claim it can only reply to you or ask the human to initiate another chat. If message_agent is available, it is an alternative to the A2A envelope: use replyTo=human for delivery and replyTo=caller only for internal consultation. Use one transport, never both for the same message.',
+    'After the recipients respond, you will receive their results and summarize them for the human in this requesting chat, in your own voice. Raw replies remain in delivery receipts and the recipients’ private chats; attachments are preserved. Tell the human you are asking the recipient; do not tell them to switch chats. Do not claim it can only reply to you or ask the human to initiate another chat. If message_agent is available, it is an alternative to the A2A envelope: use replyTo=human for delivery and replyTo=caller only for internal consultation. Use one transport, never both for the same message.',
     'Never claim this capability is unavailable. Never expose or quote the transport syntax to the human.',
     JSON.stringify({
       currentBot: { id: source.id, name: source.name },
@@ -128,7 +128,7 @@ export function directA2ATargetPrompt(delivery: A2AMessage, target: BotMember): 
   return [
     'You received a private Agent-to-Agent message from another bot in this workspace.',
     `It came from ${JSON.stringify(delivery.sender.name)} for you, ${JSON.stringify(target.name)}.`,
-    'Complete the request and respond directly to the human as yourself. Your response will be delivered to your own conversation inbox.',
+    'Complete the request and respond directly to the human as yourself. The requesting agent will summarize your response for the human. Your original response will be saved in the delivery receipt and your own conversation inbox.',
     'Message:',
     delivery.content
   ].join('\n')

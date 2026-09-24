@@ -1,3 +1,4 @@
+import { GroupMemoryDialog } from './GroupMemoryDialog'
 import { NativeDialog } from './NativeDialog'
 import { GroupInviteDialog } from './GroupInviteDialog'
 import { ContactKindBadge } from './ContactKindBadge'
@@ -47,7 +48,7 @@ export function InspectorRail({
     && Boolean(conversation.socialRoom?.members[0]?.id) && Boolean(conversation.ownerId)
     && conversation.socialRoom!.members[0].id !== conversation.ownerId
   useEffect(() => { setConfirmLeave(false) }, [conversation?.id])
-  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | null>(null)
+  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | 'memory' | null>(null)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
@@ -167,6 +168,7 @@ export function InspectorRail({
                   <span>{conversation.name}</span><Pencil size={15} />
                 </button>}
               </section>
+              <button className="detail-search-button" onClick={() => setRecordsDialog('memory')}>{t('Group memory')} <ChevronRight size={16} /></button>
               <button className="detail-search-button" onClick={() => setRecordsDialog('invite')}>{t('Invite to group')} <ChevronRight size={16} /></button>
               <div className="detail-toggles">
                 <label>{t('Save to contacts')}<button type="button" className="detail-switch" role="switch" aria-label={t('Save to contacts')} aria-checked={!!conversation.savedToContacts} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { savedToContacts: !conversation.savedToContacts }))} /></label>
@@ -206,6 +208,7 @@ export function InspectorRail({
 
       </div>
     </aside>
+    {conversation && recordsDialog === 'memory' && createPortal(<GroupMemoryDialog key={conversation.id} conversationId={conversation.id} onClose={() => setRecordsDialog(null)} />, document.body)}
     {conversation && recordsDialog === 'invite' && createPortal(<GroupInviteDialog key={conversation.id} conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} onClose={() => setRecordsDialog(null)} />, document.body)}
     {conversation && recordsDialog === 'history' && createPortal(<ChatHistoryDialog
       conversation={conversation}

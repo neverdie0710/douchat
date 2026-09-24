@@ -20,21 +20,16 @@ it('reuses healthy entries and probes only changed, added or expired members', a
   expect(probe).toHaveBeenCalledTimes(4)
 })
 
-it('keeps failed members quarantined for the configured interval and restores them after a successful probe', async () => {
+it('rechecks a cached failure on the next request instead of skipping for five minutes', async () => {
   vi.useFakeTimers(); vi.setSystemTime(1000)
   const members = [{ id: 'a', fingerprint: 'v1' }]
   const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true)
-  let health = await refreshGroupHealth({}, members, probe, signal())
-  expect(health.a.status).toBe('unavailable')
-  vi.setSystemTime(20_000)
-  await refreshGroupHealth(health, members, probe, signal())
-  expect(probe).toHaveBeenCalledTimes(1)
-  vi.setSystemTime(32_000)
-  await refreshGroupHealth(health, members, probe, signal())
-  expect(probe).toHaveBeenCalledTimes(1)
-  vi.setSystemTime(301_000)
-  health = await refreshGroupHealth(health, members, probe, signal())
-  expect(health.a).toMatchObject({ status: 'healthy', failures: 0 })
+  const first = await refreshGroupHealth({}, members, probe, signal())
+  expect(first.a.status).toBe('unavailable')
+  vi.setSystemTime(2000)
+  const next = await refreshGroupHealth(first, members, probe, signal())
+  expect(probe).toHaveBeenCalledTimes(2)
+  expect(next.a).toMatchObject({ status: 'healthy', failures: 0 })
 })
 
 it('bounds the entire batch including hung probes, aborts adapters, and discards late success', async () => {
@@ -64,12 +59,12 @@ it('cancels promptly and does not mark a cancelled probe as a member failure', a
   expect((await work).a.status).toBe('unknown')
 })
 
-it('does not revive a known failed member merely because its next probe times out', async () => {
+it('marks an inconclusive retry unknown so an explicit new task can try the member', async () => {
   vi.useFakeTimers(); vi.setSystemTime(400_000)
   const previous: GroupHealth = { a: { fingerprint: 'v1', status: 'unavailable', checkedAt: 1, failures: 1 } }
   const work = refreshGroupHealth(previous, [{ id: 'a', fingerprint: 'v1' }], async () => new Promise(() => {}), signal())
   await vi.advanceTimersByTimeAsync(6000)
-  expect((await work).a.status).toBe('unavailable')
+  expect((await work).a.status).toBe('unknown')
 })
 
 it('ranks capability, speed and health, while preserving caller roster order', () => {
@@ -82,22 +77,31 @@ it('ranks capability, speed and health, while preserving caller roster order', (
 })
 
 
-it('does not restore a failed member when a probe has no positive availability result', async () => {
+it('does not claim a deferred probe proves unavailability', async () => {
   const previous: GroupHealth = { a: { fingerprint: 'v1', status: 'unavailable', checkedAt: 1, failures: 1 } }
   const result = await refreshGroupHealth(previous, [{ id: 'a', fingerprint: 'v1' }], async () => undefined, signal())
-  expect(result.a.status).toBe('unavailable')
+  expect(result.a.status).toBe('unknown')
 })
 
-it('requires a positive probe to restore a failed member even after its configuration changes', async () => {
+it('invalidates negative health when configuration changes', async () => {
   const previous: GroupHealth = { a: { fingerprint: 'v1', status: 'unavailable', checkedAt: Date.now(), failures: 1 } }
   const probe = vi.fn(async () => undefined)
   const result = await refreshGroupHealth(previous, [{ id: 'a', fingerprint: 'v2' }], probe, signal())
   expect(probe).toHaveBeenCalledTimes(1)
-  expect(result.a).toMatchObject({ fingerprint: 'v2', status: 'unavailable' })
+  expect(result.a).toMatchObject({ fingerprint: 'v2', status: 'unknown' })
 })
 
 it.each(['diseñar autenticación', '認証 設計', 'تصميم المصادقة'])('uses Unicode capability hints for %s without a fixed profession vocabulary', task => {
   const members = [{ id: 'other', name: 'Other', description: 'unrelated' }, { id: 'fit', name: 'Specialist', description: task }]
   const health: GroupHealth = Object.fromEntries(members.map(member => [member.id, { fingerprint: '', checkedAt: 1, status: 'healthy', latencyMs: 100, failures: 0 }]))
   expect(rankGroupMembers(members, health, task)[0].id).toBe('fit')
+})
+
+it('ranks coordinator speed separately from long worker execution time', () => {
+  const members = [{ id: 'fast-planner', name: 'One' }, { id: 'slow-planner', name: 'Two' }]
+  const health: GroupHealth = {
+    'fast-planner': { status: 'healthy', fingerprint: '', checkedAt: 1, failures: 0, latencyMs: 100, planningLatencyMs: 200, executionLatencyMs: 120000 },
+    'slow-planner': { status: 'healthy', fingerprint: '', checkedAt: 1, failures: 0, latencyMs: 100, planningLatencyMs: 2000, executionLatencyMs: 500 }
+  }
+  expect(rankGroupMembers(members, health, '')[0].id).toBe('fast-planner')
 })

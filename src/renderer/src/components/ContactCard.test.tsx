@@ -60,29 +60,27 @@ describe('group contact profile', () => {
     container.remove()
   })
 
-  it('places message channel configuration directly below agent permissions for a cloud contact', async () => {
+  it('has only one edit-agent entry for all contact settings', async () => {
     const configure = vi.fn()
     await act(async () => root.render(<ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: agents[0].id }}
-      onConfigureIM={configure} onConfigureModel={vi.fn()} onEditPermissions={vi.fn()}
-      onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
-    await act(async () => (container.querySelector('[aria-label="Agent menu"]') as HTMLButtonElement).click())
-    const items = [...container.querySelectorAll('[role="menuitem"]')] as HTMLButtonElement[]
-    const index = items.findIndex(item => item.textContent === 'Agent permissions')
-    expect(items[index + 1].textContent).toBe('Configure message channels')
-    await act(async () => items[index + 1].click())
+      onConfigureIM={vi.fn()} onConfigureModel={vi.fn()} onEditPermissions={vi.fn()}
+      onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={configure} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+    expect(container.querySelector('[aria-label="Agent menu"]')).toBeNull()
+    const items = [...container.querySelectorAll('.contact-profile-actions button')].filter(button => button.textContent === 'Edit agent') as HTMLButtonElement[]
+    expect(items.map(item => item.textContent)).toEqual(['Edit agent'])
+    await act(async () => items[0].click())
     expect(configure).toHaveBeenCalledWith(agents[0])
   })
 
-  it('shows a local model and opens its configuration from the profile menu', async () => {
+  it('shows a local model and opens the unified editor from the profile actions', async () => {
     Object.defineProperty(window, 'douchat', { configurable: true, value: { listLocalAgentModels: vi.fn().mockResolvedValue({ models: [{ id: 'provider/test', name: 'Test Model' }] }) } })
     const configure = vi.fn()
     const local = { ...agents[0], localAgentId: 'opencode', model: 'provider/test' }
     await act(async () => root.render(<ContactCard snapshot={{ ...snapshot, agents: [local] }} selection={{ kind: 'bot', id: local.id }}
-      onConfigureModel={configure} onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+      onConfigureModel={vi.fn()} onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={configure} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
     expect(container.textContent).toContain('Test Model')
     expect(container.textContent).not.toContain('provider/test')
-    await act(async () => (container.querySelector('[aria-label="Agent menu"]') as HTMLButtonElement).click())
-    const item = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Configure model')!
+    const item = Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Edit agent')!
     await act(async () => item.click())
     expect(configure).toHaveBeenCalledWith(local)
   })
@@ -93,6 +91,7 @@ describe('group contact profile', () => {
     expect(container.textContent).toContain('Owned byAlice')
     expect(container.querySelector('[aria-label="Agent menu"]')).toBeNull()
     expect(container.textContent).not.toContain('Send message')
+    expect(container.textContent).not.toContain('Edit agent')
   })
 
   it('shows a human group member even without a friendship', async () => {
@@ -162,7 +161,6 @@ describe('group contact profile', () => {
       />
     ))
 
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Agent menu"]')!.click())
     expect(container.textContent).toContain('Edit agent')
     expect(container.textContent).not.toContain('Delete agent')
     expect(container.querySelector('.contact-profile-identity p')?.textContent).toBe('Built-in')

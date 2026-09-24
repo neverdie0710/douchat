@@ -1,32 +1,50 @@
-import { t, tr } from '../preferences'
+import { t, tr, usePreferences, resolveInterfaceLanguage } from '../preferences'
 import { useEffect, useRef, useState } from 'react'
-import { Plus, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, ShieldCheck, Check, ExternalLink, LoaderCircle, KeyRound } from 'lucide-react'
 import { CUSTOM_MODEL_PRESETS, customEndpoint, type CustomModelConfig, type CustomProviderInput, type CustomProviderView } from '../../../shared/customModels'
 import { NativeDialog } from './NativeDialog'
 import { messageSendError } from '../messageQueue'
 
 type Draft = CustomProviderInput & { preset: string; hasKey: boolean }
 export function CustomModelSettings() {
+  const preferences = usePreferences()
+  const presets = CUSTOM_MODEL_PRESETS.filter(p => p.id !== 'tokendance' || resolveInterfaceLanguage(preferences.language) === 'zh-CN')
   const [config, setConfig] = useState<CustomModelConfig>({ providers: [], defaultModel: '' })
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const selectedPreset = presets.find(p => p.id === draft?.preset)
+  const [authMode, setAuthMode] = useState<'oauth' | 'apikey'>('oauth')
+  const [authorizing, setAuthorizing] = useState(false)
+  const [authorized, setAuthorized] = useState(false)
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<{ ok: boolean; error?: string } | null>(null)
   const generation = useRef(0)
+  const authRequest = useRef(0)
   useEffect(() => {
     let active = true
     window.douchat.getCustomModels().then(value => { if (active) setConfig(value) }).catch(e => { if (active) setError(messageSendError(e)) }).finally(() => { if (active) setLoading(false) })
-    return () => { active = false; generation.current++ }
+    return () => { active = false; generation.current++; void window.douchat.cancelTokenDanceAuthorization?.() }
   }, [])
   function edit(p?: CustomProviderView) {
-    generation.current++; setError(''); setResult(null)
-    const preset = CUSTOM_MODEL_PRESETS[0]
-    setDraft(p ? { ...p, preset: CUSTOM_MODEL_PRESETS.find(x => x.apiBase === p.apiBase)?.id ?? 'custom', apiKey: '' }
+    generation.current++; setError(''); setResult(null); setAuthMode('oauth'); setAuthorized(false)
+    const preset = presets[0]
+    setDraft(p ? { ...p, preset: presets.find(x => x.apiBase === p.apiBase)?.id ?? 'custom', apiKey: '' }
       : { ...preset, preset: preset.id, id: preset.id, apiKey: '', hasKey: false, modelLabels: {} })
   }
-  function change(patch: Partial<Draft>) { generation.current++; setResult(null); setDraft(previous => previous && { ...previous, ...patch }) }
+  function close() { generation.current++; authRequest.current++; void window.douchat.cancelTokenDanceAuthorization(); setAuthorizing(false); setDraft(null) }
+  async function authorize() {
+    const authId = ++authRequest.current
+    const request = ++generation.current
+    setAuthorizing(true); setError(''); setResult(null)
+    try {
+      const apiKey = await window.douchat.authorizeTokenDance()
+      if (request === generation.current) { setDraft(previous => previous && { ...previous, apiKey }); setAuthorized(true) }
+    } catch (e) { if (request === generation.current) setError(messageSendError(e)) }
+    finally { if (authRequest.current === authId) setAuthorizing(false) }
+  }
+  function change(patch: Partial<Draft>) { generation.current++; setResult(null); if (authorizing) void window.douchat.cancelTokenDanceAuthorization(); setDraft(previous => previous && { ...previous, ...patch }) }
   function input(): CustomProviderInput {
     const d = draft!
     const models = [...new Set(d.models.map(m => m.trim()).filter(Boolean))]
@@ -60,14 +78,47 @@ export function CustomModelSettings() {
       {!config.providers.length ? <div className="custom-model-empty"><strong>{t("No providers yet")}</strong><p>{t("Add a provider to create agents with your own models.")}</p><span>{t("Supports OpenAI Chat Completions and Anthropic Messages")}</span></div> : <div className="custom-model-table"><table><thead><tr><th>{t("Provider")}</th><th>{t("API URL")}</th><th>{t("Models")}</th><th>{t("Actions")}</th></tr></thead><tbody>{config.providers.map(p => <tr key={p.id}><td><strong>{p.name}</strong><small>{p.kind === 'anthropic' ? 'Anthropic Messages' : 'OpenAI Chat Completions'}</small></td><td><code>{p.apiBase}</code></td><td>{p.models.length}</td><td><div className="custom-model-actions"><button className="icon-button" aria-label={tr('Edit {name}', { name: p.name })} onClick={() => edit(p)}><Pencil size={16} /></button><button className="icon-button" aria-label={tr('Delete {name}', { name: p.name })} disabled={busy} onClick={() => { if (window.confirm(tr('Remove {name}? Agents using these models will be unable to chat until reconfigured. Chat history will be kept.', { name: p.name }))) void persist(config.providers.filter(provider => provider.id !== p.id), config.defaultModel) }}><Trash2 size={16} /></button></div></td></tr>)}</tbody></table></div>}
     </>}
     {error && !draft && <p className="settings-error" role="alert">{t(error)}</p>}
-    {draft && <NativeDialog className="modal-backdrop" onClose={() => { if (!busy && !testing) setDraft(null) }} width={600} height={730}>
-      <form className="agent-modal custom-model-form" role="dialog" aria-modal="true" aria-labelledby="custom-model-title" onSubmit={e => { e.preventDefault(); const p = input(); void persist(config.providers.some(x => x.id === p.id) ? config.providers.map(x => x.id === p.id ? p : x) : [...config.providers, p], config.defaultModel || `${p.id}/${p.models[0]}`) }}>
+    {draft && <NativeDialog className="modal-backdrop" onClose={() => { if (!busy && !testing) close() }} width={600} height={730}>
+      <form className="agent-modal custom-model-form" role="dialog" aria-modal="true" aria-labelledby="custom-model-title" onSubmit={e => { e.preventDefault(); if (busy || testing || authorizing || (!draft.hasKey && !draft.apiKey?.trim())) return; const p = input(); void persist(config.providers.some(x => x.id === p.id) ? config.providers.map(x => x.id === p.id ? p : x) : [...config.providers, p], config.defaultModel || `${p.id}/${p.models[0]}`) }}>
         <h2 id="custom-model-title">{draft.hasKey ? t("Edit provider") : t("Add provider")}</h2>
-        <div className="custom-model-fields"><label className="field-row"><span>{t("Provider preset")}</span><select value={draft.preset} disabled={busy} onChange={e => { const p = CUSTOM_MODEL_PRESETS.find(x => x.id === e.target.value); change(p ? { preset: p.id, id: p.id, name: p.name, kind: p.kind, apiBase: p.apiBase, models: [...p.models], modelLabels: {} } : { preset: 'custom', id: '', name: '', apiBase: '', apiKey: '', models: [''], modelLabels: {} }) }}>{CUSTOM_MODEL_PRESETS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}<option value="custom">{t("Other / Custom")}</option></select></label>
+        <div className="custom-model-fields"><label className="field-row"><span>{t("Provider preset")}</span><select value={selectedPreset?.id ?? 'custom'} disabled={busy} onChange={e => { const p = presets.find(x => x.id === e.target.value); setAuthMode('oauth'); setAuthorized(false); change(p ? { apiKey: '', hasKey: false, preset: p.id, id: p.id, name: p.name, kind: p.kind, apiBase: p.apiBase, models: [...p.models], modelLabels: {} } : { preset: 'custom', hasKey: false, id: '', name: '', apiBase: '', apiKey: '', models: [''], modelLabels: {} }) }}>{presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}<option value="custom">{t("Other / Custom")}</option></select></label>
         <label className="field-row"><span>{t("API type")}</span><select value={draft.kind} onChange={e => change({ kind: e.target.value as Draft['kind'] })}><option value="openai">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></label></div>
         <div className="custom-model-fields"><label className="field-row"><span>{t("Identifier")}</span><input required pattern="[a-zA-Z0-9-]{1,80}" value={draft.id} onChange={e => change({ id: e.target.value })} placeholder={t("e.g. openrouter")} /></label><label className="field-row"><span>{t("Display name")}</span><input required value={draft.name} onChange={e => change({ name: e.target.value })} placeholder={t("e.g. OpenRouter")} /></label></div>
-        <label className="field-row"><span>{t("API URL")}</span><input required type="url" value={draft.apiBase} onChange={e => change({ apiBase: e.target.value })} placeholder="https://api.example.com/v1" /></label>
-        <label className="field-row"><span>{t("API key")}</span><input type="password" autoComplete="new-password" required={!draft.hasKey} value={draft.apiKey} onChange={e => change({ apiKey: e.target.value })} placeholder={draft.hasKey ? t("Leave empty to keep the saved key") : t("Enter API key")} /></label>
+        <label className="field-row"><span>{t("API URL")}</span><input required type="url" value={draft.apiBase} onChange={e => { setAuthorized(false); change({ apiBase: e.target.value, apiKey: '' }) }} placeholder="https://api.example.com/v1" /></label>
+        {selectedPreset?.id === 'tokendance' && <div className="field-row">
+          <label htmlFor="tokendance-auth-mode">{t('Authentication method')}</label>
+          <select id="tokendance-auth-mode" value={authMode} onChange={e => { change({}); setError(''); setAuthMode(e.target.value as 'oauth' | 'apikey') }}>
+            <option value="oauth">{t('OAuth (recommended)')}</option><option value="apikey">{t('Enter API key manually')}</option>
+          </select>
+          {authMode === 'oauth' && <div className="provider-auth-card" data-state={authorizing ? 'pending' : authorized ? 'authorized' : draft.hasKey ? 'saved' : 'idle'}>
+            <div className="provider-auth-heading">
+              <span className="provider-auth-icon" aria-hidden="true"><ShieldCheck size={19} /></span>
+              <div className="provider-auth-copy">
+                <p className="settings-note">{t(authorized ? 'Save this provider to keep the new credential on this device.' : draft.hasKey ? 'Your saved credential is ready to use. Authorize again only to replace it.' : 'Continue in your browser. No API key to copy.')}</p>
+              </div>
+            </div>
+            <div className="provider-auth-status" role="status" aria-live="polite">
+              {authorizing ? <><LoaderCircle size={14} className="provider-auth-spinner" aria-hidden="true" />{t('Waiting for browser authorization…')}</> : (authorized || draft.hasKey) ? <><Check size={14} aria-hidden="true" />{authorized ? t('Authorization successful. Save to finish.') : t('Credential saved')}</> : null}
+            </div>
+            <div className="provider-auth-actions">
+              <button className={`provider-auth-button ${authorized || draft.hasKey ? 'secondary-button' : 'primary-button'}`} type="button" disabled={busy || testing || authorizing || draft.apiBase.replace(/\/+$/, '') !== 'https://tokendance.space/gateway/v1'} onClick={() => void authorize()}><ExternalLink size={14} aria-hidden="true" />{(authorized || draft.hasKey) ? t('Authorize again') : t('Authorize TokenDance')}</button>
+              {authorizing && <button className="provider-auth-button secondary-button" type="button" onClick={() => { generation.current++; void window.douchat.cancelTokenDanceAuthorization() }}>{t('Cancel authorization')}</button>}
+            </div>
+          </div>}
+        </div>}
+        {(selectedPreset?.id !== 'tokendance' || authMode === 'apikey') && <div className="field-row">
+          <label htmlFor="provider-api-key">{t("API key")}</label>
+          <input id="provider-api-key" type="password" autoComplete="new-password" required={!draft.hasKey} value={draft.apiKey} onChange={e => change({ apiKey: e.target.value })} placeholder={draft.hasKey ? t("Leave empty to keep the saved key") : t("Enter API key")} />
+          {selectedPreset?.apiKeyUrl && <div className="provider-auth-card">
+            <div className="provider-auth-heading">
+              <span className="provider-auth-icon" aria-hidden="true"><KeyRound size={19} /></span>
+              <div className="provider-auth-copy"><p className="settings-note">{t('Create an API key on the provider website, then paste it above.')}</p></div>
+            </div>
+            <div className="provider-auth-actions">
+              <a className="provider-auth-button primary-button" href={selectedPreset.apiKeyUrl} target="_blank" rel="noopener noreferrer" onClick={event => { event.preventDefault(); window.open(event.currentTarget.href, '_blank', 'noopener,noreferrer') }}><ExternalLink size={14} aria-hidden="true" />{t('Create an API key')}</a>
+            </div>
+          </div>}
+        </div>}
         <div className="field-row custom-model-list">
           <span id="custom-model-list-label">{t("Models (ID / display name)")}</span>
           <div className="custom-model-inputs" role="group" aria-labelledby="custom-model-list-label">
@@ -82,7 +133,7 @@ export function CustomModelSettings() {
         <div className="custom-model-test-note"><p className="settings-note">{t("The connection test sends a short message to the first model and may incur a small charge.")}</p><p className="settings-note custom-model-endpoint">{t("Test endpoint: ")}{customEndpoint(draft.apiBase, draft.kind)}</p></div>
         {result && <p role="status" className={result.ok ? 'custom-model-success' : 'settings-error'}>{result.ok ? t("Connection successful") : result.error}</p>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
-        <div className="modal-footer"><button className="secondary-button" type="button" disabled={busy || testing || !draft.models.some(model => model.trim())} onClick={() => void test()}>{testing ? t("Testing…") : t("Test connection")}</button><div className="custom-model-footer-actions"><button className="secondary-button" type="button" disabled={busy || testing} onClick={() => setDraft(null)}>{t("Cancel")}</button><button className="primary-button" disabled={busy || testing || !draft.models.some(model => model.trim())}>{busy ? t("Saving…") : t("Save")}</button></div></div>
+        <div className="modal-footer"><button className="secondary-button" type="button" disabled={busy || testing || authorizing || (!draft.hasKey && !draft.apiKey?.trim()) || !draft.models.some(model => model.trim())} onClick={() => void test()}>{testing ? t("Testing…") : t("Test connection")}</button><div className="custom-model-footer-actions"><button className="secondary-button" type="button" disabled={busy || testing} onClick={close}>{t("Cancel")}</button><button className="primary-button" disabled={busy || testing || authorizing || (!draft.hasKey && !draft.apiKey?.trim()) || !draft.models.some(model => model.trim())}>{busy ? t("Saving…") : t("Save")}</button></div></div>
       </form>
     </NativeDialog>}
   </>

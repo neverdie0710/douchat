@@ -1,5 +1,5 @@
-import { NativeDialog } from './NativeDialog'
-import { useState, type ReactElement } from 'react'
+import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
+import { useContext, useState, type ReactElement } from 'react'
 import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
 import type { AgentConfig } from '../../../shared/types'
 import { t } from '../preferences'
@@ -9,6 +9,7 @@ import { UserAvatar } from './common'
 export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   agent: AgentConfig; onClose: () => void; onSave: (permissions: AgentPermissions) => Promise<void>
 }): ReactElement {
+  const embedded = useContext(EmbeddedAgentSettings)
   const [value, setValue] = useState(() => agentPermissions(agent.permissions))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -29,7 +30,7 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   return <NativeDialog className="modal-backdrop" onClick={() => !saving && onClose()} onClose={onClose}>
     <form className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Agent permissions')}
       onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { if (e.key === 'Escape' && !saving) { e.stopPropagation(); onClose() } }}
-      onSubmit={async (e) => { e.preventDefault(); setSaving(true); setError(''); try { await onSave(value); onClose() } catch { setError(t('Could not save changes')); setSaving(false) } }}>
+      onSubmit={async (e) => { e.preventDefault(); setSaving(true); setError(''); try { await onSave(value); onClose() } catch { setError(t('Could not save changes')) } finally { setSaving(false) } }}>
       <header className="edit-contact-heading"><h2>{t('Agent permissions')}</h2></header><div className="permission-body"><p className="permission-agent-name">{agent.name}</p>
       <h3>{t('Who can send it requests?')}</h3>
       {row('groupHumans', value.groupHumans, (v) => setValue({ ...value, groupHumans: v }))}
@@ -41,7 +42,7 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
         {row('localExecution', value.sensitive.localExecution, (v) => setValue({ ...value, sensitive: { ...value.sensitive, localExecution: v } }))}
       </> : sensitiveCapabilities.filter((key) => key !== 'localExecution').map((key) => row(key, value.sensitive[key], (v) => setValue({ ...value, sensitive: { ...value.sensitive, [key]: v } })))}
       {error && <p role="alert">{t(error)}</p>}
-      </div><footer className="edit-contact-footer"><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={saving}>{t('Done')}</button></footer>
+      </div><footer className="edit-contact-footer"><button type="button" className="secondary-button" disabled={saving} onClick={onClose}>{t('Cancel')}</button><button type="submit" className="primary-button" disabled={saving}>{t(embedded ? 'Save' : 'Done')}</button></footer>
     </form>
   </NativeDialog>
 }

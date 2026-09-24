@@ -26,3 +26,31 @@ it('never retries an interrupted tool-bearing step, while retrying an interrupte
   expect(work).not.toHaveBeenCalled()
   expect(await journal.call('route', 'decision', async () => 'route')).toBe('route')
 })
+
+it('records executor heartbeat separately from progress and stops the pulse on completion', async () => {
+  vi.useFakeTimers()
+  try {
+    const state = initial()
+    const save = vi.fn()
+    const journal = new GroupWorkflowJournal(state, save)
+    let finish!: () => void
+    const call = journal.call('task:a', 'reply', () => new Promise<void>(resolve => { finish = resolve }))
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(state.calls['task:a'].heartbeatAt).toBeGreaterThan(state.calls['task:a'].startedAt!)
+    expect(state.calls['task:a'].lastProgressAt).toBeUndefined()
+    journal.progress('task:a')
+    expect(state.calls['task:a'].lastProgressAt).toBe(Date.now())
+    finish(); await call
+    const saves = save.mock.calls.length
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(save).toHaveBeenCalledTimes(saves)
+  } finally { vi.useRealTimers() }
+})
+
+it('uses stable recovery slots even if parallel failures arrive in a different order', async () => {
+  const { decisionSlot } = await import('../shared/groupWorkflow')
+  const recovery = { slotId: 'draft', taskId: 'draft', failedMemberId: 'a', participationOnly: false, triggerMessageIds: ['u'] }
+  const context = { recovery, messages: [], privateDeliveries: [], completedTurns: [], unavailableMemberIds: ['a', 'b'] }
+  expect(decisionSlot(context)).toBe(decisionSlot({ ...context, unavailableMemberIds: ['b', 'a'] }))
+  expect(decisionSlot(context)).not.toBe(decisionSlot({ ...context, recovery: { ...recovery, slotId: 'review' } }))
+})

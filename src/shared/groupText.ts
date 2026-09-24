@@ -2,6 +2,23 @@ import type { InterfaceLanguage } from './language'
 
 /** Only application-authored copy belongs here; never translate agent replies. */
 export const groupTranslations: Record<string, string> = {
+  'Scheduling: {member} is not configured to run. Skipping this round.': '调度通知：{member} 当前运行配置不可用，本轮已跳过。',
+  'Scheduling: {member} did not complete this reply. Deciding what happens next.': '调度通知：{member} 本次回复未完成，正在安排后续处理。',
+  'Round complete: {count} replied; {absent} did not reply this round ({members}).': '本轮已结束：{count} 人已回复，{absent} 人本轮未回复（{members}）。',
+  '{member}: {reason}. Trying another coordinator.': '{member}：{reason}，正在自动切换下一位协调成员。',
+  'Planning response timed out': '等待规划响应超时',
+  'The model returned an empty planning response': '模型未返回规划内容',
+  'The model returned an invalid plan format': '模型返回的计划格式不符合要求',
+  'The planning model could not authenticate': '规划模型身份验证失败',
+  'The planning service is rate limited': '规划服务请求受限',
+  'The planning request failed': '规划请求失败',
+  'A dependency attachment could not be loaded. The task is paused.': '无法加载前置任务的附件，任务已暂停。',
+  'A task returned no deliverable. Execution is paused to avoid repeating possible external actions.': '任务没有返回交付物，已暂停执行，以免重复可能已经完成的外部操作。',
+  'A member returned an incomplete result after an execution error. Review the partial output before retrying; external actions will not be repeated automatically.': '成员执行出错并返回了部分结果，任务已暂停。请核对已有结果后重试，系统不会自动重复外部操作。',
+  'The task graph is blocked by an incomplete dependency.': '前置任务未完成，后续任务已暂停。',
+  'The replacement lacks a required task permission.': '替补成员缺少任务所需权限，任务已暂停。',
+  'The no-reply decision requires review.': '无需回复的判断存在不确定性，正在进一步复核。',
+  'The single worker selection requires review.': '执行成员的选择需要进一步复核。',
   'Scheduled routine started · {name}': '定时任务已开始 · {name}',
   'Manual routine started · {name}': '手动任务已开始 · {name}',
   "The model did not return valid decision JSON.": "模型未返回有效决策 JSON。",

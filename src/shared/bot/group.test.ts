@@ -10,6 +10,15 @@ const user: GroupMessage = { id: 'u', role: 'user', content: 'Work together' }
 const message = (id: string, content = 'Done'): GroupMessage => ({ id: `${id}-reply`, role: 'assistant', sender: { id, name: id }, content })
 const signal = () => new AbortController().signal
 
+it.each([
+  [{ mode: 'ordered', memberIds: ['a'] }, 'mode must be'],
+  [{ mode: 'single', memberIds: { a: true } }, 'expected an array'],
+  [{ mode: 'single', memberIds: [{ id: 'a' }] }, 'each entry must be an ID string']
+])('identifies the exact invalid planning field %#', (fields, reason) => {
+  expect(() => validateGroupDecision({ ...fields, triggerMessageIds: ['u'] }, group,
+    { messages: [user], privateDeliveries: [], completedTurns: [] })).toThrow(reason)
+})
+
 it('accepts unused null decision fields without discarding valid assignments', () => {
   const context = { messages: [user], privateDeliveries: [], completedTurns: [] }
   const raw = { mode: 'single', memberIds: ['b'], triggerMessageIds: ['u'], participantScope: null,

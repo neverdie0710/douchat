@@ -3,7 +3,7 @@ import { CheckCircle2, Plus, Radio, Trash2, X, ArrowLeft, Copy, RefreshCw } from
 import { QRCodeSVG } from 'qrcode.react'
 import type { AgentConfig } from '../../../shared/types'
 import type { IMChannel, IMLogin, IMProvider } from '../../../shared/imChannels'
-import { NativeDialog } from './NativeDialog'
+import { AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { resolveInterfaceLanguage, usePreferences } from '../preferences'
 
 const providers: { id: IMProvider; name: string; icon: string; description: [string, string] }[] = [
