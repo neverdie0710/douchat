@@ -32,7 +32,7 @@ appear in the existing Group chats folder.
 - The owner's desktop executes both local CLI agents and Cloud agents. Pending tasks
   wait for a device that has that agent. Messages refresh every two seconds while the
   conversation is open; people, rooms and requests refresh every three seconds.
-- Human direct messages support text and up to four pasted images (8 MB each, 20 MB total). Shared groups currently support text and text agent replies. Other shared file uploads,
+- Human direct messages and shared groups support text and up to four pasted images (8 MB each, 20 MB total). Images attached to a group task are passed to the explicitly addressed agent; generated reply images synchronize to group members. Deploy the matching service update before updating desktops. Other shared file uploads,
   presence, read receipts, group moderation and adding people after group creation
   are outside this first version.
 

@@ -1,0 +1,80 @@
+# 联系人消息渠道
+
+入口：联系人资料 → 右上角「…」→「配置消息渠道」（位于「智能体权限」下方）。内置、云端、自定义模型和本地智能体共用此入口；他人的只读联系人不开放配置。
+
+## 接入与验收
+
+| 渠道 | 接入方式 | 操作 |
+| --- | --- | --- |
+| 微信 | iLink 扫码 + 长轮询 | 点连接，用微信扫码并确认；在机器人私信中发送卡片上的 `/pair …` 指令。二维码过期可刷新。 |
+| 飞书 | 企业自建应用 + 长连接 | 开启机器人，填入 App ID / App Secret；在事件与回调选择长连接，订阅 `im.message.receive_v1`，开通 `im:message.p2p_msg:readonly`、`im:message:send_as_bot`、`im:message.reactions:write_only`（输入中状态），发布并确保账号在可用范围内；私信机器人发送配对指令。 |
+| Telegram | Bot Token + 长轮询 | 用 @BotFather 创建机器人，填入 Bot Token；打开机器人私信并发送配对指令。已有 Webhook 的机器人需要先在原服务解除。 |
+
+建议验收顺序：
+
+1. 分别为联系人接入渠道，确认卡片从连接中变为已连接，配对后显示「可以开始私信聊天」。
+2. 私信「记住我的代号是松鼠」，收到回复后再问「我的代号是什么」，确认渠道上下文连续。
+3. 在微信、Telegram、飞书和桌面之间切换，确认同一联系人只有一个会话入口，记录与上下文连续；其他联系人的历史保持隔离。回复只发回本次消息的来源渠道；按桌面子消息逐条发送，单条超长时再分片，保留消息内的段落。
+4. 重启 Douchat、登录原账号，再次私信，确认凭证、配对和聊天历史恢复。
+5. 断开后发送消息，确认不再执行任务；重新连接会产生新的配对码，继续使用同一联系人的会话。
+6. 切换账号、退出登录或删除联系人，确认旧渠道停止工作。
+
+支持私信文字收发，以及从微信、飞书、Telegram 向联系人发送图片和文件；微信服务返回的语音转写文本也可作为文字处理。群聊和主动推送不在本轮范围内。Douchat 必须运行并登录，电脑需要联网。一个渠道机器人只能绑定当前账号的一个联系人，一个联系人可以同时接入三个渠道。
+
+配对前不会执行模型任务；配对后只有对应私信会话可调用联系人。配对代表将该 IM 账号视为联系人的所有者，后续沿用该联系人的模型和工具权限。
+
+## 实现
+
+- `src/main/imChannels.ts`：三个渠道的凭证校验、扫码、传输、配对、重复过滤、状态与生命周期。
+- `src/main/imReply.ts`：通过 `DouchatRuntime.sendIMMessage` 使用联系人的统一直接会话。渠道与桌面发送共用会话队列，每次只向来源渠道返回本次任务的回复；排队中的取消不会停止其他渠道的任务。
+- `src/main/store.ts`：所有渠道复用普通联系人直接会话；启动时在事务内合并旧 `im-*` 会话，保留消息 ID、顺序、附件、历史话题、私信和任务引用，迁移可重复执行。
+- `src/renderer/src/components/IMChannelsDialog.tsx`：原生配置窗口，支持主题、二维码刷新、连接错误、配对指令复制和断开确认。
+- 主进程通过系统钥匙串加密配置、配对状态、轮询游标和最近 500 个消息 ID，按登录账号分文件存储。机器人密钥不会返回 renderer。
+- Telegram / 微信 HTTP 使用 Electron `net.fetch`，沿用 Chromium 网络栈；飞书使用官方 Node SDK 的 WebSocket 自动重连和连接生命周期回调。
+- 消息在调用模型前记录处理 ID，防止服务重投导致工具重复执行。发送失败会展示错误，不自动重跑已经执行过的任务；没有实现保证送达的持久化发件箱。
+
+## 验证记录（2026-09-24）
+
+- `npm run typecheck`：通过。
+- `npm test`：86 个测试文件通过、1 个跳过；770 个测试通过、4 个跳过。
+- `npm run build`：通过，三个渠道图标已进入生产输出。
+- 新增 17 项测试覆盖：协议收发、配对拒绝、重复过滤、长回复分片、账号隔离、凭证恢复、Webhook 冲突、扫码取消、连接状态、运行取消、渠道历史隔离、入口位置和配置交互。
+- 使用 Electron 渲染实际 React 组件，检查深色、浅色渠道列表和飞书配置表单；预览使用模拟 IPC 和容器，未登录真实服务。
+- **待实机验收**：没有使用用户的微信扫码授权、飞书凭证或 Telegram Token，因此三个平台的真实账号端到端收发尚未验证。自动化协议测试使用模拟平台响应，运行链路测试使用模拟模型。
+
+## 来源
+
+按 `~/code/fastclaw` 的联系人渠道卡片、微信扫码流程、Telegram 长轮询和飞书长连接设计迁移，后端改写为 Electron / TypeScript。平台图标复制自其 `web/public/channels`，原许可见 [FastClaw LICENSE](third-party/fastclaw-LICENSE.txt)。
+
+协议参考：[Telegram Bot API](https://core.telegram.org/bots/api)、[飞书官方 Node SDK](https://github.com/larksuite/node-sdk)。微信 iLink 协议参考本机 fastclaw 的 `internal/channels/wechat.go` 和 `internal/setup/handlers_agent_channels.go`。
+
+## 输入中状态
+
+- 微信：通过 `getconfig` 获取当前会话的 typing ticket，处理期间每 4 秒发送 `sendtyping(status=1)`，结束或取消时发送 `status=2`。
+- Telegram：处理期间每 4 秒发送 `sendChatAction(typing)`；回复前停止刷新。平台在收到回复时清除状态，取消但未发送回复时最多约 5 秒自动消失。
+- 飞书：在原消息上添加 `Typing` 表情回复，处理结束、失败或取消后移除。需要 `im:message.reactions:write_only` 权限，修改权限后需发布应用版本。
+- 仅已配对用户的有效文字请求触发状态；配对提示、陌生用户和重复消息不会触发。状态接口失败不阻止模型任务或正常回复。
+- 协议和生命周期已通过模拟接口测试；平台客户端实际显示仍需实机验收。
+
+参考：[微信官方协议](https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol.md)、[Telegram sendChatAction](https://core.telegram.org/bots/api#sendchataction)、[飞书表情回复](https://open.feishu.cn/document/server-docs/im-v1/message-reaction/create)。
+
+## 渠道显示格式
+
+发送时解析 Markdown：Telegram 使用文本实体显示加粗、斜体、删除线、代码和网页链接；飞书使用富文本 post；微信使用保留段落和列表的纯文本。桌面文件链接转换为文件图标和文件名，保留桌面原始记录与本地打开功能，不上传文件或发送无法在其他客户端打开的桌面 URI。格式转换后按消息长度分片，保持子消息顺序与 Unicode 完整性。
+
+## 接收图片和文件
+
+- 图片进入现有视觉模型输入和桌面图片预览；支持 PNG、JPEG、WebP、GIF，单张最多 8 MB。Telegram 图片保留 caption，并下载最大尺寸版本。作为文档发送的图片按文件保存。
+- 文件最多 20 MB，保存到 Douchat 附件目录，以可打开的本地文件链接加入统一会话；模型可按联系人已有工具权限处理文件。一次最多 4 个附件，总大小最多 20 MB。
+- 三个平台均在配对、发送者验证和去重之后下载，超限、格式不支持或下载失败会在原渠道提示；断开连接后不继续触发模型。微信媒体按官方 iLink 协议解密。
+- 飞书使用[消息资源下载接口](https://open.feishu.cn/document/server-docs/im-v1/message/get-2)，机器人需在消息所属会话中；下载失败时检查应用权限并发布更新。
+- 支持 **IM → 联系人** 的图片/文件输入，以及 **联系人 → IM** 的图片回复。生成图片和受委托智能体返回的图片按顺序上传回本次来源渠道；普通本地文件链接不会自动上传。未使用真实账号做端到端发送验证。
+- 自动化覆盖三个渠道配对前拒绝下载、图片和文档接收、图片说明、微信 AES 解密、流式大小限制，以及模型视觉输入和桌面附件持久化。
+
+微信媒体协议参考：[腾讯官方类型定义](https://github.com/Tencent/openclaw-weixin/blob/main/src/api/types.ts)、[媒体下载实现](https://github.com/Tencent/openclaw-weixin/blob/main/src/media/media-download.ts)。
+
+## 委托画图结果回传
+
+委托智能体返回的图片同时保留在私信详情，并以请求方联系人的回复展示在当前直接会话中。文字回复保持原有行为。消息渠道按当前任务的新回复提取图片（按附件 ID 去重），通过 Telegram multipart、飞书图片上传后发送 image 消息、微信 iLink AES 加密上传后发送图片消息回传。仅发送 Douchat 已保存、当前账号可读取的图片附件，不根据模型给出的任意路径或 URL 上传。失败会通知原渠道，并保留桌面图片，不重新执行画图任务。断开、切换账号后停止后续上传/发送。
+
+协议测试使用模拟请求覆盖三个平台图片上传、微信解密校验、图片-only 回复、两种委托方式回传、上传失败和断开连接；真实账号发送需实测。

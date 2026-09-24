@@ -3,6 +3,8 @@ import { useState, type ReactElement } from 'react'
 import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
 import type { AgentConfig } from '../../../shared/types'
 import { t } from '../preferences'
+import type { SocialSnapshot } from '../../../shared/social'
+import { UserAvatar } from './common'
 
 export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   agent: AgentConfig; onClose: () => void; onSave: (permissions: AgentPermissions) => Promise<void>
@@ -44,7 +46,11 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   </NativeDialog>
 }
 
-export function AgentPermissionPrompt({ request, onResolve }: { request: PermissionRequest; onResolve: (allow: boolean) => Promise<void> }): ReactElement {
+export function AgentPermissionPrompt({ request, social, onResolve }: { request: PermissionRequest; social?: SocialSnapshot; onResolve: (allow: boolean) => Promise<void> }): ReactElement {
+  const people = social?.userId === request.ownerId && request.requesterKind !== 'agent' ? social : undefined
+  const person = people?.rooms.flatMap(room => room.members).find(member => member.id === request.requesterId)
+    ?? people?.friendships.find(friend => friend.person.id === request.requesterId)?.person
+  const requesterName = person?.name || request.requester
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const resolve = async (allow: boolean) => { setBusy(true); try { await onResolve(allow) } catch { setError(t('Could not save changes')); setBusy(false) } }
@@ -52,8 +58,11 @@ export function AgentPermissionPrompt({ request, onResolve }: { request: Permiss
     <section className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Permission required')} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) void resolve(false) } }}>
       <header className="edit-contact-heading"><h2>{t('Permission required')}</h2></header><div className="permission-body">
       <p><strong>{request.agentName}</strong> · {t(permissionLabels[request.capability])}</p>
-      <p className="muted">{t('Requested by')}: {request.requester} · {request.roomName}</p>
-      {request.requesterId && <p className="muted permission-requester-id">{t(request.requesterKind === 'agent' ? 'Agent' : 'Human member')} · {request.requesterId}</p>}
+      <p className="muted">{t('Requested by')}: {requesterName} · {request.roomName}</p>
+      {request.requesterKind !== 'agent' ? <div className="permission-requester">
+        <UserAvatar src={person?.image || ''} name={requesterName} size={32} />
+        <span className="permission-requester-copy"><strong>{requesterName}</strong><small className="muted">{t('Human member')}</small></span>
+      </div> : request.requesterId && <p className="muted permission-requester-id">{t('Agent')} · {request.requesterId}</p>}
       <p>{request.operation}</p><pre className="permission-details">{request.details}</pre>
       {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
       {request.context !== 'direct' && <p className="muted">{t('Results may be visible to everyone in this group.')}</p>}

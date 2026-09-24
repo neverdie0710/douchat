@@ -60,6 +60,19 @@ describe('group contact profile', () => {
     container.remove()
   })
 
+  it('places message channel configuration directly below agent permissions for a cloud contact', async () => {
+    const configure = vi.fn()
+    await act(async () => root.render(<ContactCard snapshot={snapshot} selection={{ kind: 'bot', id: agents[0].id }}
+      onConfigureIM={configure} onConfigureModel={vi.fn()} onEditPermissions={vi.fn()}
+      onMessage={vi.fn()} onStartDirect={vi.fn()} onEditBot={vi.fn()} onDeleteBot={vi.fn()} onTogglePin={vi.fn()} />))
+    await act(async () => (container.querySelector('[aria-label="Agent menu"]') as HTMLButtonElement).click())
+    const items = [...container.querySelectorAll('[role="menuitem"]')] as HTMLButtonElement[]
+    const index = items.findIndex(item => item.textContent === 'Agent permissions')
+    expect(items[index + 1].textContent).toBe('Configure message channels')
+    await act(async () => items[index + 1].click())
+    expect(configure).toHaveBeenCalledWith(agents[0])
+  })
+
   it('shows a local model and opens its configuration from the profile menu', async () => {
     Object.defineProperty(window, 'douchat', { configurable: true, value: { listLocalAgentModels: vi.fn().mockResolvedValue({ models: [{ id: 'provider/test', name: 'Test Model' }] }) } })
     const configure = vi.fn()

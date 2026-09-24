@@ -29,6 +29,7 @@ export function ContactCard({
   onEditBot,
   onEditPermissions,
   onConfigureModel,
+  onConfigureIM,
   onDeleteBot,
   onDeleteConversation,
   onRemoveFromContacts,
@@ -43,6 +44,7 @@ export function ContactCard({
   selection?: ContactSelection
   onMessage: (conversationId: string) => void
   onStartDirect: (agentId: string) => void
+  onConfigureIM?: (agent: AgentConfig) => void
   onConfigureModel?: (agent: AgentConfig) => void
   onEditPermissions?: (agent: AgentConfig) => void
   onEditBot: (agent: AgentConfig) => void
@@ -154,7 +156,7 @@ export function ContactCard({
       : configuredProvider?.modelLabels?.[agent.model] || builtInModel?.label || modelId || t('Cloud default')
     const modelLabel = agent.followDefaultModel ? `${t('Follow default model')} · ${resolvedModelLabel}` : resolvedModelLabel
     const direct = snapshot.conversations.find(
-      (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agent.id
+      (conversation) => conversation.type === 'direct' && !conversation.id.startsWith('im-') && conversation.agentIds[0] === agent.id
     )
     const sharedGroupCount = snapshot.conversations.filter(
       (conversation) => conversation.type === 'group' && conversation.agentIds.includes(agent.id)
@@ -177,6 +179,7 @@ export function ContactCard({
                   <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditBot(agent) }}>{t('Edit agent')}</button>
                   {onConfigureModel && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onConfigureModel(agent) }}>{t('Configure model')}</button>}
                   {onEditPermissions && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onEditPermissions(agent) }}>{t('Agent permissions')}</button>}
+                  {onConfigureIM && <button role="menuitem" onClick={() => { setProfileMenuOpen(false); onConfigureIM(agent) }}>{t('Configure message channels')}</button>}
                   {agent.systemRole !== 'admin' && <>
                     <div className="dropdown-separator" />
                     <button role="menuitem" className="danger" onClick={() => { setProfileMenuOpen(false); onDeleteBot(agent) }}>{t('Delete agent')}</button>

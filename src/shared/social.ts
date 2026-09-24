@@ -6,7 +6,7 @@ export interface SocialRoom { revision?: string; id: string; name: string; kind:
 export interface SocialFriendship { id: string; senderId: string; recipientId: string; status: 'pending' | 'accepted' | 'declined'; person: SocialPerson }
 export interface SocialSnapshot { permissionsVersion?: number; syncVersion?: number; userId: string; friendships: SocialFriendship[]; rooms: SocialRoom[] }
 export interface SocialMessage { parentMessageId?: string; id: string; roomId: string; authorId: string; authorName: string; content: string; images?: SocialImage[]; agentId?: string; agentName?: string; status: 'sent' | 'pending' | 'running' | 'succeeded' | 'failed'; reply?: string; replyImages?: SocialImage[]; createdAt: string }
-export interface GroupInvite { roomId: string; name: string; token: string; expiresAt: string; url: string }
+export interface GroupInvite { roomId: string; name: string; token: string; expiresAt: string | null; url: string }
 export type SocialAction =
   | { action: 'leave-room'; roomId: string }
   | { action: 'group-invite'; conversationId: string; regenerate?: boolean }

@@ -41,3 +41,20 @@ vi.mock('./NativeDialog', async () => {
   const { createElement } = await import('react')
   return { NativeDialog: ({ children, onClose, width, height, ...props }: any) => createElement('div', props, children) }
 })
+
+it('shows a human requester’s profile photo and nickname instead of their UUID', async () => {
+  const request = { id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Agent', requester: 'Old name', requesterId: 'person-uuid', requesterKind: 'person' as const, roomName: 'Game', capability: 'filesRead' as const, operation: 'Read', details: '', createdAt: 0 }
+  await act(async () => root.render(<AgentPermissionPrompt request={request} social={{ userId: 'owner', friendships: [], rooms: [{ id: 'room', name: 'Game', kind: 'group', createdAt: '', agents: [], members: [{ id: 'person-uuid', name: 'Deniffer Yoho', email: '', image: 'https://example.com/avatar.png' }] }] }} onResolve={vi.fn()} />))
+  expect(node.querySelector('.permission-requester')?.textContent).toContain('Deniffer Yoho')
+  expect(node.querySelector('.permission-requester img')?.getAttribute('src')).toBe('https://example.com/avatar.png')
+  expect(node.textContent).not.toContain('person-uuid')
+  expect(node.textContent).not.toContain('Old name')
+})
+
+it('falls back to the request name and default avatar when no member profile is available', async () => {
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Agent', requester: 'Friend', requesterId: 'person-uuid', requesterKind: 'person', roomName: 'Game', capability: 'filesRead', operation: 'Read', details: '', createdAt: 0 }} onResolve={vi.fn()} />))
+  expect(node.querySelector('.permission-requester')?.textContent).toContain('Friend')
+  expect(node.querySelector('.permission-requester .user-avatar')).not.toBeNull()
+  expect(node.querySelector('.permission-requester img')).toBeNull()
+  expect(node.textContent).not.toContain('person-uuid')
+})

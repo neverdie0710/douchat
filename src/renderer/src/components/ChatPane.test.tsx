@@ -131,6 +131,25 @@ describe('private delivery disclosure', () => {
     expect(container.querySelector('.social-task-status')).toBeNull()
   })
 
+  it('renders received IM file links through the file-chip renderer', async () => {
+    const message: ChatMessage = { ...outbound, authorId: 'user', sourceChannel: 'telegram', text: '[report.txt](<douchat-file:///tmp/report.txt>)' }
+    await act(async () => { root.render(<MessageRow messages={[message]} agents={[]} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />) })
+    expect(container.querySelector('.user-bubble [data-testid="private-message-content"]')?.textContent).toBe(message.text)
+  })
+
+  it.each(['wechat', 'feishu', 'telegram', undefined] as const)('shows message provenance for %s without changing bubble text', async sourceChannel => {
+    const message: ChatMessage = { ...outbound, authorId: 'user', text: 'hello', sourceChannel }
+    await act(async () => root.render(<MessageRow messages={[message]} agents={[]} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
+    const badge = container.querySelector('.message-channel-badge')
+    if (sourceChannel) {
+      const names = { wechat: 'WeChat', feishu: 'Feishu', telegram: 'Telegram' }
+      expect(badge?.getAttribute('title')).toBe(`Sent via ${names[sourceChannel]}`)
+      expect(badge?.getAttribute('aria-label')).toBe(`Sent via ${names[sourceChannel]}`)
+      expect(badge?.querySelector('img')?.getAttribute('src')).toContain(sourceChannel)
+    } else expect(badge).toBeNull()
+    expect(container.querySelector('.user-bubble')?.textContent).toBe('hello')
+  })
+
   it('folds external group invitations into the sender reply without hiding public replies', async () => {
     const conversation: Conversation = { ...directConversation, id: 'friend-room', type: 'group',
       socialRoom: { id: 'room', name: 'Group', kind: 'group', members: [], agents: [], createdAt: '' } }

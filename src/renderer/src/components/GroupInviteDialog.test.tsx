@@ -44,3 +44,29 @@ it('shows errors and retries without offering an unusable invitation', async () 
   expect(Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Copy link')?.disabled).toBe(true)
   await click('Retry'); expect(container.querySelector('input')?.value).toBe(invite.url)
 })
+
+it('keeps permanent invitations copyable without an expiry timer', async () => {
+  vi.useFakeTimers()
+  try {
+    socialAction.mockResolvedValue({ invite: { ...invite, expiresAt: null } })
+    await render()
+    expect(container.textContent).toContain('Never expires')
+    expect(container.textContent).not.toContain('Invalid Date')
+    await act(async () => { await vi.advanceTimersByTimeAsync(30 * 86400000) })
+    expect(container.textContent).not.toContain('Invitation expired')
+    await click('Copy link')
+    expect(copyText).toHaveBeenCalledWith(invite.url)
+  } finally { vi.useRealTimers() }
+})
+it('expires timed invitations only at their deadline, including long durations', async () => {
+  vi.useFakeTimers()
+  try {
+    socialAction.mockResolvedValue({ invite: { ...invite, expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() } })
+    await render()
+    await act(async () => { await vi.advanceTimersByTimeAsync(29 * 86400000) })
+    expect(container.textContent).not.toContain('Invitation expired')
+    await act(async () => { await vi.advanceTimersByTimeAsync(86400000) })
+    expect(container.textContent).toContain('Invitation expired')
+    expect(Array.from(container.querySelectorAll('button')).find(button => button.textContent === 'Copy link')?.disabled).toBe(true)
+  } finally { vi.useRealTimers() }
+})

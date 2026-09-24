@@ -72,16 +72,17 @@ describe('social IPC and task execution', () => {
   })
   it('passes an authenticated external requester to the runtime permission boundary', async () => {
     const { client, runtime } = setup()
+    const images = [{ name: 'photo.png', mimeType: 'image/png', base64: 'iVBORw0KGgo=' }]
     vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
       if (!options?.body) return new Response(JSON.stringify({ data: { userId: 'alice', rooms: [], friendships: [] } }))
       const body = JSON.parse(options.body)
-      const data = body.action === 'tasks' ? { tasks: [{ id: 'task', localId: 'local' }] } : body.action === 'claim' ? { task: { id: 'task', claim: 'secret', ownerId: 'alice', authorId: 'bob', agent: { localId: 'local', ownerId: 'alice' }, content: 'run' } } : {}
+      const data = body.action === 'tasks' ? { tasks: [{ id: 'task', localId: 'local' }] } : body.action === 'claim' ? { task: { id: 'task', claim: 'secret', ownerId: 'alice', authorId: 'bob', agent: { localId: 'local', ownerId: 'alice' }, content: 'run', images } } : {}
       return new Response(JSON.stringify({ data }))
     }))
     client.start()
     await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(5))
     client.stop()
-    expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }))
+    expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }), images)
     const completed = JSON.parse(vi.mocked(fetch).mock.calls.find((call) => call[1]?.body && JSON.parse(call[1].body as string).action === 'complete')![1]!.body as string)
     expect(completed.failed).toBe(false)
   })

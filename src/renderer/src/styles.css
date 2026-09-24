@@ -6334,6 +6334,11 @@ html[data-platform='win32'] .messenger .app-rail {
 .permission-approval-backdrop { z-index: 1200; }
 
 .permission-requester-id { overflow-wrap: anywhere; font-size: 12px; }
+.permission-requester { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
+.permission-requester .user-avatar { flex-shrink: 0; }
+.permission-requester-copy { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.permission-requester-copy strong { font-size: 14px; font-weight: 500; }
+.permission-requester-copy small { font-size: 12px; }
 
 .message-quote { display: flex; align-items: center; gap: 14px; min-width: 0; margin: 0 0 10px; padding: 1px 0 1px 11px; font: inherit; letter-spacing: inherit; }
 .user-bubble :is(.message-quote, .message-markdown blockquote) { color: color-mix(in srgb, var(--ink) 50%, var(--muted)); border-left-color: color-mix(in srgb, var(--muted) 35%, transparent); }
@@ -6746,3 +6751,113 @@ html.native-dialog-window,
 .local-agent-editor .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: calc(12px * var(--font-scale, .92)); white-space: nowrap; cursor: pointer; }
 .messenger .local-agent-editor .secondary-button:hover:not(:disabled) { background: var(--surface); border-color: var(--muted); }
 .local-agent-editor .secondary-button:disabled { opacity: .55; cursor: default; }
+
+/* Per-contact IM channels reuse the native dialog palette. */
+.messenger .agent-modal.im-modal { width: 100%; padding: 0; }
+.im-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; }
+.im-heading h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 17px; font-weight: 600; }
+.im-heading .icon-button { display: inline-flex; flex-shrink: 0; width: 30px; height: 30px; color: var(--muted); border-radius: 8px; }
+.im-heading .icon-button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+.im-body { padding: 20px 24px 24px; }
+.im-body > .settings-note { margin: 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.im-intro { margin: 0 0 6px; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.im-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 20px; align-items: stretch; }
+.im-card { border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 164px; background: var(--search-focus-surface); }
+.im-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.im-card-title img { width: 22px; height: 22px; object-fit: contain; flex-shrink: 0; }
+.im-card h3, .im-card p { margin: 0; }
+.im-card h3 { font-size: 16px; font-weight: 500; line-height: 24px; }
+.im-status { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; }
+.im-status.connected, .im-paired { color: #159764; }
+.im-status.error { color: #d76b3d; }
+.im-description { min-height: 42px; overflow-wrap: anywhere; color: var(--muted); line-height: 1.6; font-size: 13px; }
+.im-action { margin-top: auto; width: 100%; }
+.im-pair { font-size: 12px; line-height: 1.65; }
+.im-code { margin-top: 8px; padding: 8px; width: 100%; display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; text-align: left; }
+.im-code code { overflow-wrap: anywhere; min-width: 0; font-size: 11px; }
+.im-code svg { flex-shrink: 0; }
+.im-paired { font-size: 12px; }
+.im-setup { margin-top: 0; }
+.im-setup-heading { display: flex; align-items: center; gap: 10px; margin: 20px 0 16px; }
+.im-setup-heading img { width: 28px; height: 28px; object-fit: contain; }
+.im-setup-heading h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.im-setup form { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }
+.im-setup form > .settings-note { margin: 16px 0; font-size: 12px; line-height: 1.6; }
+.im-setup form > .im-connect { display: flex; width: auto; min-width: 88px; margin-left: auto; }
+.im-back { background: transparent; border: 0; border-radius: 8px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; margin-left: -10px; font-size: 12px; }
+.im-back:hover:not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.im-help { margin: 0 0 20px; padding-left: 20px; font-size: 12px; line-height: 1.75; color: var(--muted); overflow-wrap: anywhere; }
+.im-help li + li { margin-top: 8px; }
+.im-field { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; font-size: 13px; }
+.im-field input { padding: 10px 12px; border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 8px; }
+.im-qr { display: flex; flex-direction: column; align-items: center; padding: 20px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); text-align: center; font-size: 13px; }
+.im-qr > p:first-child { margin: 0; color: var(--muted); line-height: 1.7; }
+.im-qr > p[role='status'] { margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+.im-qr-image svg { display: block; max-width: 100%; height: auto; }
+.im-qr-image { padding: 12px; background: white; width: 232px; max-width: 100%; margin: 16px auto; border-radius: 10px; }
+.im-qr-placeholder { display: grid; place-items: center; width: 232px; max-width: 100%; height: 232px; margin: 16px auto; padding: 16px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); }
+.im-qr .secondary-button { display: inline-flex; align-items: center; gap: 8px; }
+.im-remove { margin-top: auto; font-size: 12px; line-height: 1.6; }
+.im-remove button { margin: 8px 6px 0 0; }
+.im-modal button:focus-visible, .im-modal input:focus-visible { outline: 2px solid #6597e8; outline-offset: 3px; }
+@media (max-width: 480px) { .im-grid { grid-template-columns: 1fr; } .im-heading { padding: 16px; } .im-body { padding: 16px; } }
+/* Shared button sizing keeps cards, QR actions and credential forms consistent. */
+.im-modal :is(.secondary-button, .primary-button) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 34px; padding: 7px 14px; border: 1px solid var(--line);
+  border-radius: 7px; font-size: 12px; font-weight: 600; line-height: 18px;
+  cursor: pointer; user-select: none;
+}
+.im-modal button svg { flex-shrink: 0; }
+.im-modal .secondary-button {
+  background: var(--canvas); color: var(--ink);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+}
+.im-modal .secondary-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 4%, var(--canvas));
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+}
+.messenger .im-modal .primary-button {
+  min-width: 88px; background: var(--brand); border: 1px solid transparent;
+  color: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+}
+.messenger .im-modal .primary-button:hover:not(:disabled) {
+  background: var(--brand-ink); border-color: transparent;
+}
+.im-modal .secondary-button.im-connect,
+.im-modal .secondary-button.im-action {
+  min-height: 32px; padding: 5px 12px; gap: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  border-radius: 9px; background: transparent; color: var(--ink);
+  font-size: 13px; font-weight: 600; line-height: 20px; box-shadow: none;
+}
+.im-modal .secondary-button.im-connect:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 3%, var(--search-focus-surface));
+  border-color: color-mix(in srgb, var(--ink) 20%, var(--line));
+}
+.im-modal .secondary-button.danger {
+  color: #e34d59; background: transparent; border-color: color-mix(in srgb, var(--line) 75%, transparent); box-shadow: none;
+}
+.im-modal .secondary-button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, #e34d59 6%, transparent); border-color: color-mix(in srgb, #e34d59 30%, var(--line));
+}
+.im-modal .im-remove .secondary-button.danger {
+  background: #c83240; color: #fff; border-color: transparent;
+}
+.im-modal .im-remove .secondary-button.danger:hover:not(:disabled) { background: #b12634; }
+.im-modal .im-qr .secondary-button { padding-inline: 16px; font-weight: 500; }
+.im-modal button:active:not(:disabled) { transform: translateY(1px); }
+.messenger .im-modal :is(.secondary-button, .primary-button):disabled {
+  opacity: .45; cursor: default; box-shadow: none;
+}
+.im-modal .im-back { min-height: 30px; padding: 5px 8px; margin-left: -8px; border-radius: 6px; font-weight: 500; }
+.im-modal .im-code { padding: 10px 12px; justify-content: space-between; background: var(--canvas); border-radius: 7px; }
+.im-modal .im-code:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 4%, var(--canvas)); }
+.im-back, .im-code { cursor: pointer; }
+@media (prefers-reduced-motion: no-preference) {
+  .im-modal button { transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease; }
+}
+
+/* Transport provenance stays outside the bubble and out of copied message text. */
+.message-channel-badge { display: inline-flex; align-items: center; justify-content: center; align-self: center; flex: 0 0 24px; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 50%; background: var(--search-focus-surface); }
+.message-channel-badge img { display: block; width: 16px; height: 16px; object-fit: contain; }

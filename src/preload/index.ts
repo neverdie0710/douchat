@@ -19,6 +19,12 @@ import type {
 } from '../shared/types'
 
 const api: DouchatApi = {
+  listIMChannels: agent => ipcRenderer.invoke('douchat:im-list', agent),
+  connectIMChannel: (agent, input) => ipcRenderer.invoke('douchat:im-connect', agent, input),
+  disconnectIMChannel: (agent, provider) => ipcRenderer.invoke('douchat:im-disconnect', agent, provider),
+  startIMLogin: agent => ipcRenderer.invoke('douchat:im-login', agent),
+  cancelIMLogin: (agent, session) => ipcRenderer.invoke('douchat:im-cancel-login', agent, session),
+  pollIMLogin: (agent, session) => ipcRenderer.invoke('douchat:im-status', agent, session),
   resizeDialog: (name, width, height) => ipcRenderer.invoke('douchat:resize-dialog', name, width, height),
   reportDiagnostic: (event, detail) => ipcRenderer.send('douchat:diagnostic', event, detail),
   openDiagnosticLogs: () => ipcRenderer.invoke('douchat:open-diagnostic-logs'),

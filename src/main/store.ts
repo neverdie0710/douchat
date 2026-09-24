@@ -1,3 +1,5 @@
+import { mediaName, MAX_IM_FILE_BYTES, IMMediaError } from './imMedia'
+import { pathToFileURL } from 'node:url'
 import { GameRuleError } from '../shared/gameText'
 import { agentPermissions } from '../shared/agentPermissions'
 import { DEFAULT_DECISION_SETTINGS, validateDecisionSettings, type DecisionSettings } from '../shared/groupDecision'
@@ -272,6 +274,7 @@ export class DouchatStore {
     this.backfillMessageSourceContent()
     this.backfillDeliveryReplies()
     this.recoverInterruptedRuns()
+    this.mergeLegacyIMConversations()
   }
 
   static atUserData(userDataPath: string): DouchatStore {
@@ -372,6 +375,21 @@ export class DouchatStore {
         this.setRoutineEnabled(routine.id, true, now + 60_000)
       }
     }
+  }
+
+  /** Received documents remain local files, exposed by the same file chips as tool results. */
+  async saveIMFile(input: { name: string; data: Uint8Array }, expectedOwnerId: string): Promise<string> {
+    if (!expectedOwnerId || expectedOwnerId !== this.currentAccountId) throw new Error('Account changed')
+    if (!input.data.byteLength || input.data.byteLength > MAX_IM_FILE_BYTES) throw new IMMediaError('文件须为 1 字节至 20 MB，请调整后重发。')
+    const name = mediaName(input.name)
+    const path = join(this.attachmentDirectory, `${randomUUID()}-${name}`)
+    await writeFile(path, input.data, { flag: 'wx', mode: 0o600 })
+    if (expectedOwnerId !== this.currentAccountId) {
+      await unlink(path).catch(() => undefined)
+      throw new Error('Account changed')
+    }
+    const label = name.replace(/[\\[\]`]/g, character => '\\' + character)
+    return `[${label}](<${pathToFileURL(path).href.replace(/^file:/, 'douchat-file:')}>)`
   }
 
   async saveImageAttachment(input: {
@@ -1537,7 +1555,7 @@ export class DouchatStore {
       this.putAgent(agent)
       for (const conversation of this.conversations) {
         if (conversation.type === 'direct' && conversation.agentIds[0] === agentId) {
-          conversation.name = agent.name
+          conversation.name = conversation.id.startsWith('im-') ? `${agent.name} · ${conversation.name.split(' · ').at(-1) || 'IM'}` : agent.name
           this.putConversation(conversation)
         } else if (conversation.type === 'group' && !conversation.description) {
           conversation.name = this.groupName(conversation)
@@ -1588,7 +1606,7 @@ export class DouchatStore {
     const agent = this.agent(agentId)
     if (!agent) throw new Error('Contact not found')
     const existing = this.conversations.find(
-      (conversation) => conversation.type === 'direct' && conversation.agentIds[0] === agentId
+      (conversation) => conversation.type === 'direct' && !conversation.id.startsWith('im-') && conversation.agentIds[0] === agentId
     )
     if (existing) {
       existing.hidden = undefined
@@ -1612,6 +1630,70 @@ export class DouchatStore {
     }
     this.putConversation(conversation)
     return { conversation, created: true }
+  }
+
+  /** Channels are transports for the contact's existing direct conversation. */
+  ensureIMConversation(agentId: string, _channelId?: string, _provider?: string): Conversation {
+    if (!this.accountAgents.some(item => item.id === agentId)) throw new Error('Contact not found')
+    return this.ensureDirectConversation(agentId).conversation
+  }
+
+  /** Move legacy channel transcripts in place, preserving message ids, order and attachments. */
+  private mergeLegacyIMConversations(): void {
+    const legacy = this.conversations.filter(item => item.type === 'direct' && item.id.startsWith('im-'))
+    if (!legacy.length) return
+    this.tx(() => {
+      for (const source of legacy) {
+        const agent = this.agent(source.agentIds[0])
+        if (!agent || agent.ownerId !== source.ownerId) continue
+        let target = this.conversations.find(item => item.type === 'direct' && !item.id.startsWith('im-')
+          && item.ownerId === source.ownerId && item.agentIds[0] === agent.id)
+        if (!target) {
+          const topic = newTopic('', source.createdAt)
+          target = { id: `direct-${agent.id}`, ownerId: source.ownerId, type: 'direct', name: agent.name,
+            agentIds: [agent.id], topics: [topic], activeTopicId: topic.id, unread: 0, readAt: source.readAt,
+            createdAt: source.createdAt, updatedAt: source.updatedAt }
+        }
+        if (!target.topics.length) {
+          const topic = newTopic('', target.createdAt)
+          target.topics.push(topic); target.activeTopicId = topic.id
+        }
+        const active = target.topics.find(topic => topic.id === target!.activeTopicId) ?? target.topics[0]
+        this.putConversation(target)
+        const provider = source.name.split(' · ').at(-1)?.toLowerCase()
+        if (provider && ['wechat', 'feishu', 'telegram'].includes(provider)) {
+          this.write("UPDATE messages SET data = json_set(data, '$.sourceChannel', ?) WHERE conversationId = ? AND json_extract(data, '$.authorId') = 'user' AND json_extract(data, '$.sourceChannel') IS NULL", provider, source.id)
+        }
+        // Keep archived topics (and their reset boundaries); merge the current transcript.
+        const topicIds = new Set([...source.topics.map(topic => topic.id),
+          ...['messages', 'privateMessages', 'groupGames', 'groupWorkflows'].flatMap(table =>
+            this.all<{ topicId: string }>(`SELECT data FROM ${table} WHERE conversationId = ?`, source.id).map(item => item.topicId))])
+        for (const topicId of topicIds) {
+          const oldTopic = source.topics.find(topic => topic.id === topicId)
+          let nextTopicId = active.id
+          if (topicId !== source.activeTopicId) {
+            nextTopicId = target.topics.some(topic => topic.id === topicId) ? randomUUID() : topicId
+            target.topics.push({ ...(oldTopic ?? newTopic('', source.createdAt)), id: nextTopicId })
+          } else {
+            active.updatedAt = Math.max(active.updatedAt, oldTopic?.updatedAt ?? source.updatedAt)
+          }
+          this.putConversation(target)
+          for (const table of ['messages', 'privateMessages', 'groupGames', 'groupWorkflows']) {
+            this.write(`UPDATE ${table} SET conversationId = ?, topicId = ?,
+              data = json_set(data, '$.conversationId', ?, '$.topicId', ?)
+              WHERE conversationId = ? AND topicId = ?`, target.id, nextTopicId, target.id, nextTopicId, source.id, topicId)
+          }
+        }
+        this.write("UPDATE routines SET conversationId = ?, data = json_set(data, '$.conversationId', ?) WHERE conversationId = ?", target.id, target.id, source.id)
+        this.write("UPDATE runs SET data = json_set(data, '$.conversationId', ?) WHERE json_extract(data, '$.conversationId') = ?", target.id, source.id)
+        target.unread += source.unread
+        target.updatedAt = Math.max(target.updatedAt, source.updatedAt)
+        if (source.pinned) target.pinned = true
+        if (!source.hidden) target.hidden = undefined
+        this.putConversation(target)
+        this.write('DELETE FROM conversations WHERE id = ?', source.id)
+      }
+    })
   }
 
   createGroup(input: CreateGroupInput): Conversation {

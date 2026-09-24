@@ -250,7 +250,6 @@ export class SocialClient {
     // or a new group message changes the current follow-up context.
     const agentIds = pending?.signature === signature ? pending.agentIds : explicitIds.length ? explicitIds : followUp ? [followUp.id] : []
     checkHumanAgentTargets(agentIds, room?.agents ?? [], identity.id)
-    if (conversation.socialRoom && images.length) throw new Error("Images are not yet supported in shared group chats.")
     const agentId = agentIds[0]
     if (pending?.signature !== signature) {
       pending = { content, signature, id: randomUUID(), agentIds }
@@ -457,7 +456,7 @@ export class SocialClient {
               const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
                 roomId: task.roomId, requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',
                 delegate: async (agentId, content) => { await this.request({ action: 'delegate', taskId: task.id, claim: task.claim, agentId, content }, identity, signal) }
-              })
+              }, task.images)
               reply = output.text
               images = output.images
             } catch (error) { failed = true; reply = error instanceof Error ? error.message : '任务执行失败。' }

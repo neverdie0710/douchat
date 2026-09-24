@@ -1,0 +1,48 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { startIMTyping } from './imTyping'
+afterEach(() => vi.useRealTimers())
+describe('IM typing lifecycle', () => {
+  it('refreshes until stopped and cleans up exactly once', async () => {
+    vi.useFakeTimers()
+    const update = vi.fn().mockResolvedValue(undefined)
+    const clear = vi.fn().mockResolvedValue(undefined)
+    const stop = startIMTyping(new AbortController().signal, update, clear)
+    await vi.advanceTimersByTimeAsync(12000)
+    expect(update).toHaveBeenCalledTimes(4)
+    await stop(); await stop()
+    await vi.advanceTimersByTimeAsync(12000)
+    expect(update).toHaveBeenCalledTimes(4)
+    expect(clear).toHaveBeenCalledTimes(1)
+  })
+  it('cleans up a late start after disconnect without refreshing again', async () => {
+    vi.useFakeTimers()
+    const controller = new AbortController()
+    let complete!: () => void
+    const update = vi.fn(() => new Promise<void>(resolve => { complete = resolve }))
+    const clear = vi.fn().mockResolvedValue(undefined)
+    const stop = startIMTyping(controller.signal, update, clear)
+    await vi.advanceTimersByTimeAsync(0)
+    controller.abort()
+    expect(clear).not.toHaveBeenCalled()
+    complete(); await stop()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(clear).toHaveBeenCalledTimes(1)
+  })
+  it('contains start and cleanup failures', async () => {
+    vi.useFakeTimers()
+    const update = vi.fn().mockRejectedValue(new Error('network failure'))
+    const clear = vi.fn().mockRejectedValue(new Error('cleanup failure'))
+    const stop = startIMTyping(new AbortController().signal, update, clear)
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(update).toHaveBeenCalledTimes(2)
+    await expect(stop()).resolves.toBeUndefined()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('does not start for an aborted request', async () => {
+    const update = vi.fn()
+    const stop = startIMTyping(AbortSignal.abort(), update)
+    await stop()
+    expect(update).not.toHaveBeenCalled()
+  })
+})

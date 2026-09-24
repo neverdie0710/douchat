@@ -241,6 +241,8 @@ export interface EmailConnectionTestResult {
 }
 
 export interface ChatMessage {
+  /** Incoming transport; absent for desktop and older messages without provenance. */
+  sourceChannel?: import('./imChannels').IMProvider
   contextVersion?: string
   /** Localizable application notice; user and agent text never carry this. */
   localization?: import('./groupText').GroupNotice
@@ -568,6 +570,13 @@ export interface UpdateState {
 }
 
 export interface DouchatApi {
+  listIMChannels(agentId: string): Promise<import('./imChannels').IMChannel[]>
+  connectIMChannel(agentId: string, input: import('./imChannels').IMConnectInput): Promise<void>
+  disconnectIMChannel(agentId: string, provider: import('./imChannels').IMProvider): Promise<void>
+  startIMLogin(agentId: string): Promise<import('./imChannels').IMLogin>
+  cancelIMLogin(agentId: string, sessionId: string): Promise<void>
+  pollIMLogin(agentId: string, sessionId: string): Promise<import('./imChannels').IMLoginStatus>
+
   resizeDialog: (name: string, width: number, height: number) => Promise<boolean>
   reportDiagnostic: (event: string, detail: string) => void
   openDiagnosticLogs: () => Promise<void>

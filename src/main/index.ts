@@ -1,3 +1,5 @@
+import { replyToIM } from './imReply'
+import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
@@ -14,7 +16,7 @@ import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, session, shell, safeStorage, systemPreferences } from 'electron'
+import { app, BrowserWindow, clipboard, crashReporter, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, session, shell, safeStorage, systemPreferences } from 'electron'
 import electronUpdater from 'electron-updater'
 import type {
   AppSnapshot,
@@ -180,6 +182,7 @@ ipcMain.handle('douchat:open-diagnostic-logs', async (event) => {
 
 let mainWindow: BrowserWindow | null = null
 let store: DouchatStore
+let imChannels: IMChannelManager | undefined
 let runtime: DouchatRuntime
 let computer: LocalComputerProvider
 let scheduler: RoutineScheduler
@@ -302,6 +305,7 @@ function broadcastAuth(state: DesktopAuthState): void {
     codeArtifacts.clear()
     store.setCurrentAccountId(nextSocialAccount)
     reloadCustomModels()
+    try { imChannels?.activate() } catch { console.warn("[douchat] IM credentials could not be loaded") }
     scheduler?.accountChanged()
     // Models and credentials are account state. Force the connection catalog
     // to be rebuilt even when both the old and new account are signed in.
@@ -330,7 +334,9 @@ function broadcastAuth(state: DesktopAuthState): void {
           runtime.defaultCloudAgentModel(),
           manifest
         )
-        if (synced.agent) runtime.disposeAgent(synced.agent.id)
+        // Window focus refreshes the profile too. Refresh cached sessions only
+        // after active replies finish; disposeAgent would cancel their requests.
+        if (synced.agent) runtime.refreshAgent(synced.agent.id)
         broadcast(runtime.snapshot())
         return synced.conversation?.id ?? store.defaultConversationId
       })
@@ -575,6 +581,24 @@ app.whenReady().then(() => {
         .toDataURL()
     }
   }, emailConnectors)
+  imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
+    encrypt: value => {
+      if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error('系统钥匙串不可用，请启用后重试')
+      return safeStorage.encryptString(value).toString('base64')
+    },
+    decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64'))
+  }, () => store.currentAccountId, id => store.accountAgents.some(agent => agent.id === id),
+  async (agent, thread, text, signal, provider, media) => {
+    const answer = await replyToIM(store, runtime, agent, thread, text, signal, provider, media)
+    broadcast(runtime.snapshot())
+    return answer
+  }, (input, init) => net.fetch(String(input), init))
+  ipcMain.handle('douchat:im-list', (_event, agent) => imChannels!.list(agent))
+  ipcMain.handle('douchat:im-connect', (_event, agent, input) => imChannels!.connect(agent, input))
+  ipcMain.handle('douchat:im-disconnect', (_event, agent, provider) => imChannels!.disconnect(agent, provider))
+  ipcMain.handle('douchat:im-login', (_event, agent) => imChannels!.login(agent))
+  ipcMain.handle('douchat:im-cancel-login', (_event, agent, session) => imChannels!.cancelLogin(agent, session))
+  ipcMain.handle('douchat:im-status', (_event, agent, session) => imChannels!.loginStatus(agent, session))
   runtime.setInterfaceLanguage(app.getLocale())
   scheduler = new RoutineScheduler(
     store,
@@ -836,6 +860,7 @@ app.whenReady().then(() => {
       throw new Error('The system administrator cannot be deleted')
     }
     runtime.disposeAgent(agentId)
+    for (const provider of ['wechat', 'feishu', 'telegram'] as const) imChannels?.disconnect(agentId, provider)
     store.deleteAgent(agentId)
     return push()
   })
@@ -1060,6 +1085,7 @@ app.on('before-quit', () => {
   quitting = true
   cancelLocalModelQueries()
   social?.stop()
+  imChannels?.stop()
   if (localWorkBlocker !== undefined) { powerSaveBlocker.stop(localWorkBlocker); localWorkBlocker = undefined }
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)
   scheduler?.dispose()

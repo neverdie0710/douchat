@@ -1,6 +1,6 @@
 {
   "name": "douchat",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "author": "ThinkAny",
   "repository": {
@@ -27,12 +27,17 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.84.2",
     "@earendil-works/pi-ai": "^0.84.2",
+    "@larksuiteoapi/node-sdk": "^1.74.0",
     "@sinclair/typebox": "^0.34.41",
     "dotenv": "^17.2.1",
     "electron-updater": "^6.8.9",
     "imapflow": "^2.0.5",
     "mailparser": "^3.9.28",
-    "nodemailer": "^10.0.10"
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "nodemailer": "^10.0.10",
+    "qrcode.react": "^4.2.0"
   },
   "devDependencies": {
     "@streamdown/cjk": "^1.0.3",

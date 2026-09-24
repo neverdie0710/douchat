@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { replyToIM } from './imReply'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -112,6 +113,79 @@ afterEach(() => {
 })
 
 describe('DouchatRuntime', () => {
+  it('persists IM images and files in the shared conversation and supplies vision input', async () => {
+    const { store, runtime } = createRuntime()
+    const run = vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }, 'runReply').mockResolvedValue({ text: 'Received' })
+    const signal = new AbortController().signal
+    await replyToIM(store, runtime, 'dobi', 'tg', 'Describe', signal, 'telegram', [{ name: 'photo.png', image: true, data: Buffer.from('89504e470d0a1a0a', 'hex') }])
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ images: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }] }))
+    const topic = store.activeTopicId('direct-dobi')
+    const image = store.topicMessages('direct-dobi', topic).find(m => m.text === 'Describe')!
+    expect(image.sourceChannel).toBe('telegram')
+    expect(await store.attachmentDataUrl(image.attachments![0].id)).toBe('data:image/png;base64,iVBORw0KGgo=')
+    await replyToIM(store, runtime, 'dobi', 'wx', '', signal, 'wechat', [{ name: '../../report (1).txt', image: false, data: Buffer.from('document body') }])
+    const file = store.topicMessages('direct-dobi', topic).filter(m => m.authorId === 'user').at(-1)!
+    expect(file.sourceChannel).toBe('wechat')
+    expect(file.text).toContain('[report (1).txt](<douchat-file:')
+    const url = new URL(file.text.match(/<(douchat-file:[^>]+)>/)![1]); url.protocol = 'file:'
+    expect(readFileSync(decodeURIComponent(url.pathname), 'utf8')).toBe('document body')
+    expect(run.mock.calls.at(-1)![0].prompt).toContain('report (1).txt')
+  })
+
+  it('routes all IM transports through the existing contact conversation and shared context', async () => {
+    const { store, runtime } = createRuntime()
+    const agent = store.agent('dobi')!
+    const signal = new AbortController().signal
+    const reply = await replyToIM(store, runtime, agent.id, 'telegram-binding', 'TG_PRIVATE_SENTINEL', signal, 'telegram')
+    expect(reply).toEqual([`${agent.name} here.`, 'On it.'])
+    const telegram = store.ensureIMConversation(agent.id, 'telegram-binding')
+    expect(store.topicMessages(telegram.id, telegram.activeTopicId).some(m => m.text === 'TG_PRIVATE_SENTINEL')).toBe(true)
+    expect(store.ensureDirectConversation(agent.id).conversation.id).toBe('direct-dobi')
+    const model = vi.spyOn(runtime as any, 'runReply')
+    await replyToIM(store, runtime, agent.id, 'wechat-binding', 'WX_PRIVATE_SENTINEL', signal, 'wechat')
+    expect(model.mock.calls.some(([options]) => (options as ReplyOptions).prompt.includes('TG_PRIVATE_SENTINEL'))).toBe(true)
+    expect(store.ensureIMConversation(agent.id, 'wechat-binding').id).toBe(telegram.id)
+    expect(telegram.id).toBe('direct-dobi')
+    expect(store.messages.find(m => m.text === 'TG_PRIVATE_SENTINEL')?.sourceChannel).toBe('telegram')
+    expect(store.messages.find(m => m.text === 'WX_PRIVATE_SENTINEL')?.sourceChannel).toBe('wechat')
+    expect(store.accountConversations.filter(c => c.type === 'direct' && c.agentIds[0] === agent.id)).toHaveLength(1)
+    model.mockClear()
+    await replyToIM(store, runtime, agent.id, 'telegram-binding', 'Continue', signal)
+    expect(model.mock.calls.some(([options]) => (options as ReplyOptions).prompt.includes('TG_PRIVATE_SENTINEL'))).toBe(true)
+    const aborted = new AbortController(); aborted.abort()
+    await expect(replyToIM(store, runtime, agent.id, 'telegram-binding', 'cancelled', aborted.signal)).rejects.toThrow('disconnected')
+    store.setCurrentAccountId('another-owner')
+    await expect(replyToIM(store, runtime, agent.id, 'telegram-binding', 'wrong owner', signal)).rejects.toThrow('Contact not found')
+    store.close()
+  })
+
+  it('queues simultaneous channel and desktop messages and returns only each channel answer', async () => {
+    const { store, runtime } = createRuntime()
+    vi.spyOn(runtime as any, 'runReply').mockResolvedValueOnce({ text: 'Answer ONE' }).mockResolvedValueOnce({ text: 'Answer TWO' }).mockResolvedValueOnce({ text: 'Answer THREE' })
+    const first = replyToIM(store, runtime, 'dobi', 'tg', 'ONE', new AbortController().signal)
+    const desktop = runtime.sendMessage('direct-dobi', 'TWO')
+    const second = replyToIM(store, runtime, 'dobi', 'wx', 'THREE', new AbortController().signal)
+    const [one, , three] = await Promise.all([first, desktop, second])
+    expect(one).toEqual(['Answer ONE'])
+    expect(one).not.toContain('THREE')
+    expect(three).toEqual(['Answer THREE'])
+    const users = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi')).filter(m => m.authorId === 'user').map(m => m.text)
+    expect(users.slice(-3)).toEqual(['ONE', 'TWO', 'THREE'])
+    store.close()
+  })
+
+  it('cancels a queued channel request without stopping another channel turn', async () => {
+    const { store, runtime } = createRuntime()
+    const controller = new AbortController()
+    const first = replyToIM(store, runtime, 'dobi', 'tg', 'FIRST', new AbortController().signal)
+    const queued = replyToIM(store, runtime, 'dobi', 'wx', 'CANCELLED', controller.signal)
+    controller.abort()
+    await expect(queued).rejects.toThrow()
+    expect(await first).toContain('Dobi here.')
+    expect(store.messages.some(m => m.text === 'CANCELLED')).toBe(false)
+    store.close()
+  })
+
   it.each(['direct-dobi', 'crew'])('starts new model context while keeping the visible transcript in %s', async (conversationId) => {
     const { store, runtime } = createRuntime()
     const topicId = store.activeTopicId(conversationId)
@@ -182,6 +256,19 @@ describe('DouchatRuntime', () => {
     const abort = new AbortController()
     abort.abort()
     await expect(runtime.executeSocialTask('local-demo-account', agent.id, 'task', 'Do work', abort.signal)).rejects.toThrow('cancelled')
+  })
+
+  it('passes shared task images to the agent as multimodal input', async () => {
+    const { store, runtime } = createRuntime()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    const internal = runtime as unknown as { canRunLive: () => Promise<boolean>; runReply: (options: unknown) => Promise<object> }
+    vi.spyOn(internal, 'canRunLive').mockResolvedValue(true)
+    const reply = vi.spyOn(internal, 'runReply').mockResolvedValue({ text: 'A picture' })
+    await runtime.executeSocialTask('alice', admin.id, 'image-input', 'Describe this', new AbortController().signal, '', undefined,
+      [{ name: 'photo.png', mimeType: 'image/png', base64: 'iVBORw0KGgo=' }])
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({
+      images: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]
+    }))
   })
 
   it('returns generated image bytes with a shared task reply', async () => {
@@ -738,6 +825,52 @@ describe('DouchatRuntime', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('defers a background agent refresh until the active reply completes', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-refresh-'))
+    directories.push(directory)
+    const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
+    const runtime = new DouchatRuntime(store, idleComputer, () => undefined)
+    const config = store.agent('dobi')!
+    let finish!: () => void
+    const session = {
+      state: { messages: [] as Array<Record<string, unknown>> },
+      prompt: vi.fn(() => new Promise<void>(resolve => { finish = () => {
+        session.state.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Here are your files.' }] })
+        resolve()
+      } })),
+      abort: vi.fn()
+    }
+    const internals = runtime as any
+    internals.sessions.set('refresh-session', { agentId: config.id, agent: session })
+    const pending = internals.runReply({ config, sessionKey: 'refresh-session', context: 'direct', prompt: 'List files',
+      conversationId: 'direct-dobi', topicId: store.activeTopicId('direct-dobi') })
+    await vi.waitFor(() => expect(session.prompt).toHaveBeenCalledOnce())
+    runtime.refreshAgent(config.id)
+    runtime.refreshAgent(config.id)
+    expect(session.abort).not.toHaveBeenCalled()
+    expect(internals.sessions.has('refresh-session')).toBe(true)
+    finish()
+    await expect(pending).resolves.toMatchObject({ text: 'Here are your files.', error: undefined })
+    expect(internals.sessions.has('refresh-session')).toBe(false)
+    expect(internals.pendingSessionRefresh.has(config.id)).toBe(false)
+    expect(session.abort).toHaveBeenCalledOnce()
+    store.close()
+  })
+
+  it('refreshes idle cached sessions without stopping the agent computer', () => {
+    const { store, runtime } = createRuntime()
+    const abort = vi.fn()
+    const stop = vi.spyOn(idleComputer, 'stop')
+    const internals = runtime as any
+    internals.sessions.set('idle-refresh', { agentId: 'dobi', agent: { abort } })
+    runtime.refreshAgent('dobi')
+    expect(abort).toHaveBeenCalledOnce()
+    expect(internals.sessions.has('idle-refresh')).toBe(false)
+    expect(stop).not.toHaveBeenCalled()
+    stop.mockRestore()
+    store.close()
+  })
+
   it.each(['signal', 'conversation'])('cancels a stalled model through %s even when the provider ignores abort', async (method) => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-cancel-'))
     directories.push(directory)
@@ -937,6 +1070,30 @@ describe('DouchatRuntime', () => {
     await running
   })
 
+  it('returns delegated images visibly in the caller conversation and the IM response', async () => {
+    const { store, runtime } = createRuntime()
+    const bytes = Buffer.from('89504e470d0a1a0a', 'hex')
+    const attachment = await store.saveImageAttachment({ name: 'wolf.png', mimeType: 'image/png', data: bytes })
+    vi.spyOn(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<object> }, 'runReply').mockImplementation(async ({ config }) => config.id === 'dobi'
+      ? { text: 'Delegating.\n[[a2a:lin]]Draw a wolf[[/a2a]]' }
+      : { text: 'Here is your wolf.', attachments: [attachment] })
+    const result = await replyToIM(store, runtime, 'dobi', 'wx', 'Ask Lin to draw', new AbortController().signal, 'wechat')
+    expect(result).toEqual(['Delegating.', 'Here is your wolf.', { image: { name: 'wolf.png', mimeType: 'image/png', data: bytes } }])
+    const history = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    expect(history.filter(m => m.attachments?.length)).toHaveLength(1)
+    expect(history.find(m => m.attachments?.length)).toMatchObject({ authorId: 'dobi', source: { id: 'lin' }, attachments: [attachment] })
+    expect(history.find(m => m.deliveries?.length)?.deliveries?.[0].replies?.[0].attachments).toEqual([attachment])
+  })
+
+  it('returns an image-only model reply without a no-reply error', async () => {
+    const { store, runtime } = createRuntime()
+    const attachment = await store.saveImageAttachment({ name: 'wolf.png', mimeType: 'image/png', data: Buffer.from('89504e470d0a1a0a', 'hex') })
+    vi.spyOn(runtime as unknown as { runReply: () => Promise<object> }, 'runReply').mockResolvedValue({ text: '', attachments: [attachment] })
+    const answer = await replyToIM(store, runtime, 'dobi', 'tg', 'Draw a wolf', new AbortController().signal, 'telegram')
+    expect(answer).toHaveLength(1)
+    expect(answer[0]).toMatchObject({ image: { name: 'wolf.png' } })
+  })
+
   it('keeps the incoming private content with the reply source', async () => {
     const { store, runtime } = createRuntime()
     ;(runtime as unknown as { runReply: (options: ReplyOptions) => Promise<{ text: string }> }).runReply = async ({ config }) => (
@@ -994,6 +1151,21 @@ describe('DouchatRuntime', () => {
     expect(internals.activity.has('direct-lin')).toBe(false)
     expect(internals.aborts.has('direct-lin')).toBe(false)
     expect(parent.signal.aborted).toBe(false)
+  })
+
+  it.each(['caller', 'human'] as const)('preserves generated images from tool delegation to %s in the requesting conversation', async replyTo => {
+    const { store, runtime } = createRuntime()
+    const attachment = await store.saveImageAttachment({ name: 'wolf.png', mimeType: 'image/png', data: Buffer.from('89504e470d0a1a0a', 'hex') })
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>; activeTopic: Map<string, string>
+      messageAgentTool: (config: { id: string; name: string }) => MessageAgentToolLike
+      runReply: (options: ReplyOptions) => Promise<object>
+    }
+    const topic = store.activeTopicId('direct-dobi')
+    internals.activeConversation.set('dobi', 'direct-dobi'); internals.activeTopic.set('dobi', topic)
+    internals.runReply = async () => ({ text: 'Drawn.', attachments: [attachment] })
+    await internals.messageAgentTool(store.agent('dobi')!).execute('draw', { agent: 'lin', message: 'Draw a wolf', replyTo })
+    expect(store.topicMessages('direct-dobi', topic).at(-1)).toMatchObject({ authorId: 'dobi', attachments: [attachment], source: { id: 'lin' } })
   })
 
   it('keeps inline agent handoffs out of the direct-chat transcript', async () => {

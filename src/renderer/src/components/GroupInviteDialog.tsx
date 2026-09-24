@@ -26,7 +26,7 @@ export function GroupInviteDialog({ conversation, agents, userName, userAvatar, 
       const result = await window.douchat.socialAction({ action: 'group-invite', conversationId: conversation.id, regenerate })
       if (!result.invite) throw new Error(t('Could not create invitation'))
       if (attempt !== generation.current) return
-      setInvite(result.invite); setExpired(Date.parse(result.invite.expiresAt) <= Date.now())
+      setInvite(result.invite); setExpired(result.invite.expiresAt !== null && Date.parse(result.invite.expiresAt) <= Date.now())
       if (regenerate) setStatus(t('Invitation link updated'))
     } catch (cause) {
       if (attempt === generation.current) setError(cause instanceof Error ? cause.message : t('Could not create invitation'))
@@ -39,8 +39,15 @@ export function GroupInviteDialog({ conversation, agents, userName, userAvatar, 
     return () => { generation.current++; previous?.focus() }
   }, [conversation.id])
   useEffect(() => {
-    if (!invite) return
-    const timer = window.setTimeout(() => setExpired(true), Math.max(0, Date.parse(invite.expiresAt) - Date.now()))
+    if (!invite?.expiresAt) return
+    const expiresAt = Date.parse(invite.expiresAt)
+    let timer: number | undefined
+    const checkExpiry = () => {
+      const remaining = expiresAt - Date.now()
+      if (remaining <= 0) setExpired(true)
+      else timer = window.setTimeout(checkExpiry, Math.min(remaining, 2_147_483_647))
+    }
+    checkExpiry()
     return () => window.clearTimeout(timer)
   }, [invite])
   return <NativeDialog width={460} height={540} className="modal-backdrop group-invite-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }} onKeyDown={(event) => {
@@ -69,7 +76,7 @@ export function GroupInviteDialog({ conversation, agents, userName, userAvatar, 
           else void load()
         }}><RefreshCw size={14} />{t(confirmReset ? 'Confirm regeneration' : invite ? 'Regenerate invitation' : 'Retry')}</button>
       </div>
-      {invite && <p className="group-invite-expiry">{tr('Valid until {date}', { date: new Date(invite.expiresAt).toLocaleString() })}</p>}
+      {invite && <p className="group-invite-expiry">{invite.expiresAt === null ? t('Never expires') : tr('Valid until {date}', { date: new Date(invite.expiresAt).toLocaleString() })}</p>}
       <div className="group-invite-feedback" aria-live="polite">
         {confirmReset && <p>{t('The old invitation link will stop working.')}</p>}
         {error && <p className="group-invite-error" role="alert">{t(error)}</p>}

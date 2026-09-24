@@ -886,10 +886,20 @@ export function MessageRow({
   if (message.kind === 'system') return <SystemMessage message={message} onOpenCredits={onOpenCredits} />
   if (message.authorId === 'user') {
     const hasAttachments = Boolean(message.attachments?.length)
+    const channel = message.sourceChannel && {
+      wechat: { name: t('WeChat'), icon: 'wechat.svg' },
+      feishu: { name: t('Feishu'), icon: 'feishu.png' },
+      telegram: { name: 'Telegram', icon: 'telegram.svg' }
+    }[message.sourceChannel]
     return (
       <div className="message-row user-message-row">
+        {channel && <span className="message-channel-badge" role="img" aria-label={tr('Sent via {channel}', { channel: channel.name })} title={tr('Sent via {channel}', { channel: channel.name })}>
+          <img src={`./channels/${channel.icon}`} alt="" />
+        </span>}
         <div className={`message-bubble user-bubble ${hasAttachments ? 'has-attachments' : ''} ${!message.text && hasAttachments ? 'image-only' : ''}`}>
-          {message.text && <UserMessageText text={message.text} />}
+          {message.text && (message.sourceChannel && /\]\(<douchat-file:/.test(message.text)
+            ? <MessageMarkdown text={message.text} />
+            : <UserMessageText text={message.text} />)}
           {message.socialTasks && <SocialTaskStatus tasks={message.socialTasks} agents={socialAgents ?? []} />}
           {message.deliveryState && <small className="message-delivery-state" role="status">{message.deliveryState === 'sending' ? '发送中…' : message.deliveryState === 'confirming' ? '已发送，正在同步接单状态…' : '发送未确认，请在队列中重试'}</small>}
           <MessageAttachments attachments={message.attachments} />

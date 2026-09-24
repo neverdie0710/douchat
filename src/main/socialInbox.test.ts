@@ -541,3 +541,22 @@ it('sends a requester-scoped context reset without deleting shared messages', as
   alice.store.setCurrentAccountId('bob')
   await expect(alice.client.resetConversationContext(chat.id)).rejects.toThrow('Chat not found')
 })
+
+
+it('delivers image-only shared group messages to another account without invoking agents', async () => {
+  const remote = server([], { ...room, kind: 'group', name: 'Team' })
+  const alice = account('alice'), bob = account('bob')
+  await alice.client.syncInbox(); await bob.client.syncInbox()
+  const aliceId = alice.store.accountConversations[0].id, bobId = bob.store.accountConversations[0].id
+  const data = Buffer.from('iVBORw0KGgo=', 'base64')
+  await alice.runtime.sendMessage(aliceId, '', [{ name: 'group.png', mimeType: 'image/png', data }])
+  await bob.client.syncInbox()
+  expect(remote.messages).toHaveLength(1)
+  const sent = remote.fetcher.mock.calls.find(([, options]) => options?.body && JSON.parse(String(options.body)).action === 'send')!
+  expect(JSON.parse(String(sent[1]!.body)).agentIds).toEqual([])
+  const received = bob.store.topicMessages(bobId, 'main').at(-1)!
+  expect(received.text).toBe('')
+  expect(received.attachments).toHaveLength(1)
+  expect(await bob.store.attachmentDataUrl(received.attachments![0].id)).toBe('data:image/png;base64,iVBORw0KGgo=')
+  alice.store.close(); bob.store.close()
+})
