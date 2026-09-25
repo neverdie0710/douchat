@@ -14,18 +14,31 @@ export class GroupMemoryStore {
     if (!group || group.type !== 'group' || group.ownerId !== expectedUser) throw new Error('Group not found')
     return expectedUser
   }
+  private audience(groupId: string): string {
+    const group = this.conversation(groupId)!
+    return !group.remoteRoomId && !group.socialRoom && !group.person && group.agentIds.every(id => this.agentOwner(id) === group.ownerId)
+      ? 'internal' : `external:${group.remoteRoomId ?? group.socialRoom?.id ?? groupId}`
+  }
   read(groupId: string, expectedUser?: string): UserMemoryDocument {
     const userId = this.authorize(groupId, expectedUser)
     const row = this.db.prepare('SELECT data FROM group_memories WHERE userId = ? AND groupId = ?').get(userId, groupId) as { data: string } | undefined
-    return { ...(row ? JSON.parse(row.data) : emptyUserMemory(userId)), userId, groupId, agentId: undefined }
+    const saved = row ? JSON.parse(row.data) : undefined
+    // Linking an internal group to a shared room must not publish its old memory.
+    const audience = this.audience(groupId)
+    const document = saved?.audiences?.[audience] ?? (saved && !saved.audiences && audience === 'internal' ? saved : emptyUserMemory(userId))
+    return { ...document, userId, groupId, agentId: undefined, audienceId: audience }
   }
   save(input: UserMemoryDocument, groupId: string, expectedUser?: string): UserMemoryDocument {
     const userId = this.authorize(groupId, expectedUser)
     if (input?.userId !== userId || input.groupId !== groupId || input.agentId !== undefined) throw new Error('Account or memory scope changed. Reopen memory settings.')
+    if (input.audienceId !== this.audience(groupId)) throw new Error('Group audience changed. Reopen memory settings.')
     const document = validateUserMemory(input), current = this.read(groupId, userId)
     if (document.revision !== current.revision) throw new Error('Memory changed. Reload before saving to avoid overwriting newer information.')
-    const next = { ...document, revision: current.revision + 1, updatedAt: Date.now() }
-    this.db.prepare('INSERT INTO group_memories (userId, groupId, data) VALUES (?, ?, ?) ON CONFLICT(userId, groupId) DO UPDATE SET data = excluded.data').run(userId, groupId, JSON.stringify(next))
+    const next = { ...document, audienceId: this.audience(groupId), revision: current.revision + 1, updatedAt: Date.now() }
+    const row = this.db.prepare('SELECT data FROM group_memories WHERE userId = ? AND groupId = ?').get(userId, groupId) as { data: string } | undefined
+    const saved = row ? JSON.parse(row.data) : undefined
+    const audiences = saved?.audiences ?? (saved ? { internal: saved } : {})
+    this.db.prepare('INSERT INTO group_memories (userId, groupId, data) VALUES (?, ?, ?) ON CONFLICT(userId, groupId) DO UPDATE SET data = excluded.data').run(userId, groupId, JSON.stringify({ audiences: { ...audiences, [this.audience(groupId)]: next } }))
     return next
   }
   remember(input: UserMemoryEdit, groupId: string, agentId: string, speaker: { id: string; name: string }, humanText: string, expectedUser: string): void {

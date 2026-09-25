@@ -1,3 +1,6 @@
+import type { AccountContext } from '../shared/accountData'
+import { AgentProfileFiles } from './profileFiles'
+import { UserMemoryFiles } from './userMemoryFile'
 import { mediaName, MAX_IM_FILE_BYTES, IMMediaError } from './imMedia'
 import { pathToFileURL } from 'node:url'
 import { GameRuleError } from '../shared/gameText'
@@ -11,9 +14,9 @@ import type { GameState } from '../shared/groupGame'
 import type { GroupWorkflow } from '../shared/groupWorkflow'
 import type { SocialRoom, SocialMessage } from '../shared/social'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
-import { readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { readFile, unlink, writeFile, realpath, lstat } from 'node:fs/promises'
+import { dirname, join, resolve, basename } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type {
   AgentConfig,
@@ -39,6 +42,7 @@ import type {
 } from '../shared/types'
 import { normalizeAgentEmoji } from '../shared/avatar'
 
+export const LOCAL_DATA_VERSION = 1
 const DEFAULT_TOPIC_ID = 'main'
 
 /** Roughly 1.5 MB of base64 — far above a 256px avatar, far below bloat. */
@@ -108,6 +112,7 @@ function inferredBuiltInOverrides(agent: AgentConfig): BuiltInAgentUserOverrides
   if (agent.userOverrides) return { ...agent.userOverrides }
   const fallback = defaultBuiltInAgent(EMBEDDED_BUILT_IN_AGENT_MANIFEST)
   const overrides: BuiltInAgentUserOverrides = {}
+  if (agent.role !== fallback.role) overrides.role = agent.role
   if (agent.name !== fallback.name) overrides.name = agent.name
   if (agent.instructions !== fallback.instructions) overrides.instructions = agent.instructions
   if ((agent.labels ?? '') !== (fallback.labels ?? '')) overrides.labels = agent.labels ?? ''
@@ -258,12 +263,21 @@ export class DouchatStore {
   private readonly db: DatabaseSync
   private readonly statements = new Map<string, StatementSync>()
   private readonly attachmentDirectory: string
+  private readonly skillDirectory: string
+  private profileFiles?: AgentProfileFiles
+  private accountSessionId = randomUUID()
 
   constructor(filePath: string, options: DouchatStoreOptions = {}) {
     mkdirSync(dirname(filePath), { recursive: true })
+    this.skillDirectory = join(dirname(filePath), 'skills')
     this.attachmentDirectory = join(dirname(filePath), 'attachments')
     mkdirSync(this.attachmentDirectory, { recursive: true })
     this.db = new DatabaseSync(filePath)
+    const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
+    if (version > LOCAL_DATA_VERSION) {
+      this.db.close()
+      throw new Error('This data was created by a newer Douchat version. Upgrade Douchat before opening it.')
+    }
     // WAL is what makes a half-written turn survive a crash: the old JSON file
     // was rewritten whole on every message, so losing power mid-write took the
     // entire transcript with it.
@@ -277,20 +291,32 @@ export class DouchatStore {
     this.backfillAccountOwnership()
     this.groupMemories = new GroupMemoryStore(this.db, () => this.currentAccountId, id => this.conversation(id), id => this.agent(id)?.ownerId)
     this.userMemories = new UserMemoryStore(this.db, () => this.currentAccountId, id => this.agent(id)?.ownerId)
-    this.migrateLegacyUserMemories()
+    this.migrateLegacyUserMemories(filePath)
+    this.userMemories = new UserMemoryStore(this.db, () => this.currentAccountId, id => this.agent(id)?.ownerId, join(dirname(filePath), 'accounts'), join(dirname(filePath), 'memories'))
+    this.profileFiles = new AgentProfileFiles(join(dirname(filePath), 'accounts'))
+    for (const agent of this.agents) this.profileFiles.load(agent)
     this.migrateAccountSensitiveMeta()
     this.backfillAttachmentOwnership()
     this.backfillMessageSourceContent()
     this.backfillDeliveryReplies()
     this.recoverInterruptedRuns()
     this.mergeLegacyIMConversations()
+    this.tx(() => {
+      // Existing IDs and references stay intact. Only add missing versions.
+      for (const table of ['agents', 'conversations']) {
+        this.db.exec(`UPDATE ${table} SET data = json_set(data, '$.revision', 1) WHERE json_extract(data, '$.revision') IS NULL`)
+      }
+      this.db.exec(`PRAGMA user_version = ${LOCAL_DATA_VERSION}`)
+    })
   }
 
   static atUserData(userDataPath: string): DouchatStore {
     return new DouchatStore(join(userDataPath, 'douchat.db'))
   }
 
-  private migrateLegacyUserMemories(): void {
+  private migrateLegacyUserMemories(filePath: string): void {
+    const files = new UserMemoryFiles(join(dirname(filePath), 'accounts'))
+    const legacy = new UserMemoryFiles(join(dirname(filePath), 'memories'))
     this.tx(() => {
       for (const agent of this.agents) {
         if (!agent.ownerId || !agent.systemFiles) continue
@@ -300,8 +326,10 @@ export class DouchatStore {
         }).join('\n\n')
         if (!notes) continue
         const row = this.stmt('SELECT data FROM agent_user_memories WHERE userId = ? AND agentId = ?').get(agent.ownerId, agent.id) as { data: string } | undefined
-        const current = row ? JSON.parse(row.data) : emptyUserMemory(agent.ownerId, agent.id)
+        const current = files.read(agent.ownerId, agent.id) ?? legacy.read(agent.ownerId, agent.id)
+          ?? (row ? JSON.parse(row.data) : emptyUserMemory(agent.ownerId, agent.id))
         const next = { ...current, notes: [current.notes, notes].filter(Boolean).join('\n\n'), revision: current.revision + 1, updatedAt: Date.now() }
+        files.write(next)
         this.write('INSERT INTO agent_user_memories (userId, agentId, data) VALUES (?, ?, ?) ON CONFLICT(userId, agentId) DO UPDATE SET data = excluded.data', agent.ownerId, agent.id, JSON.stringify(next))
         delete agent.systemFiles['USER.md']
         delete agent.systemFiles['MEMORY.md']
@@ -411,14 +439,30 @@ export class DouchatStore {
     if (!expectedOwnerId || expectedOwnerId !== this.currentAccountId) throw new Error('Account changed')
     if (!input.data.byteLength || input.data.byteLength > MAX_IM_FILE_BYTES) throw new IMMediaError('文件须为 1 字节至 20 MB，请调整后重发。')
     const name = mediaName(input.name)
-    const path = join(this.attachmentDirectory, `${randomUUID()}-${name}`)
+    const id = randomUUID()
+    const path = join(this.attachmentDirectory, `${id}-${name}`)
     await writeFile(path, input.data, { flag: 'wx', mode: 0o600 })
     if (expectedOwnerId !== this.currentAccountId) {
       await unlink(path).catch(() => undefined)
       throw new Error('Account changed')
     }
+    try { this.write('INSERT INTO attachmentOwners (id, ownerId) VALUES (?, ?)', id, expectedOwnerId) }
+    catch (error) { await unlink(path).catch(() => undefined); throw error }
     const label = name.replace(/[\\[\]`]/g, character => '\\' + character)
     return `[${label}](<${pathToFileURL(path).href.replace(/^file:/, 'douchat-file:')}>)`
+  }
+
+  /** Only explicitly registered documents of the signed-in account bypass normal user-folder roots. */
+  async ownedDocumentPath(input: string): Promise<string | undefined> {
+    const path = resolve(input)
+    if (dirname(path) !== resolve(this.attachmentDirectory)) return undefined
+    const id = basename(path).slice(0, 36)
+    const owner = this.stmt('SELECT ownerId FROM attachmentOwners WHERE id = ?').get(id) as { ownerId: string } | undefined
+    const account = this.currentAccountId
+    if (!account || owner?.ownerId !== account || basename(path)[36] !== '-') throw new Error('Document not found')
+    const metadata = await lstat(path)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || dirname(await realpath(path)) !== await realpath(this.attachmentDirectory) || this.currentAccountId !== account) throw new Error('Document not found')
+    return path
   }
 
   async saveImageAttachment(input: {
@@ -538,6 +582,8 @@ export class DouchatStore {
   }
 
   private putConversation(conversation: Conversation): void {
+    const previous = this.one<Conversation>('SELECT data FROM conversations WHERE id = ?', conversation.id)
+    conversation.revision = (previous?.revision ?? 0) + 1
     this.write(
       `INSERT INTO conversations (id, type, updatedAt, data) VALUES (?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET type = excluded.type, updatedAt = excluded.updatedAt, data = excluded.data`,
@@ -549,6 +595,8 @@ export class DouchatStore {
   }
 
   private putAgent(agent: AgentConfig): void {
+    const previous = this.one<AgentConfig>('SELECT data FROM agents WHERE id = ?', agent.id)
+    agent.revision = (previous?.revision ?? 0) + 1
     this.write(
       `INSERT INTO agents (id, createdAt, data) VALUES (?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET createdAt = excluded.createdAt, data = excluded.data`,
@@ -1097,7 +1145,7 @@ export class DouchatStore {
   // ───────────────────────────── collections ─────────────────────────────
 
   get agents(): AgentConfig[] {
-    return this.all<AgentConfig>('SELECT data FROM agents ORDER BY rowid')
+    return this.all<AgentConfig>('SELECT data FROM agents ORDER BY rowid').map(agent => this.profileFiles?.load(agent) ?? agent)
   }
 
   get conversations(): Conversation[] {
@@ -1128,8 +1176,20 @@ export class DouchatStore {
     return this.meta(CURRENT_ACCOUNT_META)
   }
 
+  captureAccountContext(): AccountContext {
+    if (!this.currentAccountId) throw new Error('Sign in first.')
+    return Object.freeze({ ownerId: this.currentAccountId, sessionId: this.accountSessionId })
+  }
+
+  assertAccountContext(context: AccountContext): void {
+    if (!context.ownerId || context.ownerId !== this.currentAccountId || context.sessionId !== this.accountSessionId) {
+      throw new Error('Account changed. Retry from the current session.')
+    }
+  }
+
   setCurrentAccountId(accountId: string): void {
     const normalized = accountId.trim()
+    if (normalized !== this.currentAccountId) this.accountSessionId = randomUUID()
     this.setMeta(CURRENT_ACCOUNT_META, normalized)
     if (normalized) this.migrateAccountSensitiveMeta(normalized)
   }
@@ -1252,12 +1312,18 @@ export class DouchatStore {
       const agent = this.agent(existing.agentId)
       if (agent) {
         const overrides = inferredBuiltInOverrides(agent)
+        // Older profile forms submitted untouched defaults as user overrides.
+        // Empty values are deliberate clears and must survive template refreshes.
+        for (const key of ['role', 'instructions', 'labels'] as const) {
+          if (overrides[key] && (overrides[key] === definition[key]
+            || overrides[key] === EMBEDDED_BUILT_IN_AGENT_MANIFEST.agents[0][key])) delete overrides[key]
+        }
         const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
         const cloudAgentId = definition.id === 'system-admin-fallback' ? agent.cloudAgentId : definition.id
         Object.assign(agent, {
           ownerId: normalizedAccountId,
           name: overrides.name ?? definition.name,
-          role: definition.role,
+          role: overrides.role ?? definition.role,
           instructions: overrides.instructions ?? definition.instructions,
           labels: overrides.labels ?? definition.labels ?? '',
           color: definition.color,
@@ -1354,7 +1420,8 @@ export class DouchatStore {
   }
 
   agent(agentId: string): AgentConfig | undefined {
-    return this.one<AgentConfig>('SELECT data FROM agents WHERE id = ?', agentId)
+    const agent = this.one<AgentConfig>('SELECT data FROM agents WHERE id = ?', agentId)
+    return agent ? this.profileFiles?.load(agent) ?? agent : undefined
   }
 
   conversation(conversationId: string): Conversation | undefined {
@@ -1484,9 +1551,10 @@ export class DouchatStore {
   createAgent(input: ResolvedCreateAgentInput): AgentConfig {
     const ownerId = this.currentAccountId
     if (!ownerId) throw new Error('Sign in before creating a contact')
-    const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${randomUUID().slice(0, 6)}`
+    const id = `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bot'}-${randomUUID()}`
     const now = Date.now()
     const {
+      systemFilesDirectory: _ignoredSystemFilesDirectory,
       ownerId: _ignoredOwnerId,
       systemRole: _ignoredSystemRole,
       systemKey: _ignoredSystemKey,
@@ -1533,7 +1601,12 @@ export class DouchatStore {
   }): AgentConfig | undefined {
     const agent = this.agent(agentId)
     if (!agent) return undefined
+    if (input.expectedRevision !== undefined && input.expectedRevision !== agent.revision) throw new Error('Agent changed. Reload before saving.')
     const {
+      expectedSystemFiles,
+      expectedRevision: _expectedRevision,
+      revision: _ignoredRevision,
+      systemFilesDirectory: _ignoredSystemFilesDirectory,
       ownerId: _ignoredOwnerId,
       systemRole: _ignoredSystemRole,
       systemKey: _ignoredSystemKey,
@@ -1547,15 +1620,48 @@ export class DouchatStore {
     if (agent.systemRole === 'admin') {
       // Raw renderer fields cannot override system identity or model routing.
       // Model changes use the separately validated selection below.
-      delete next.role
       delete next.color
       delete next.provider
       delete next.model
       delete next.localAgentId
     }
+    if (expectedSystemFiles && next.systemFiles) {
+      for (const name of Object.keys(next.systemFiles) as (keyof typeof next.systemFiles)[]) {
+        if ((agent.systemFiles?.[name] ?? '') !== (expectedSystemFiles[name] ?? '')) throw new Error(`${name} changed. Reload before saving.`)
+      }
+    }
+    const fileChanges = next.systemFiles ? validateAgentFiles(next.systemFiles) : undefined
     if (next.permissions !== undefined) next.permissions = agentPermissions(next.permissions)
     if (next.systemFiles !== undefined) next.systemFiles = { ...agent.systemFiles, ...validateAgentFiles(next.systemFiles) }
-    if (next.skills !== undefined) next.skills = validateAgentSkills(next.skills)
+    if (next.skills !== undefined) {
+      next.skills = validateAgentSkills(next.skills)
+      // Fresh directories prevent stale resources and never follow existing file symlinks.
+      // Retain prior directories for replies already using the previous skill version.
+      const created: string[] = []
+      try {
+        for (const skill of next.skills) {
+          if (!skill.files) continue
+          const previous = agent.skills?.find(item => item.id === skill.id)
+          if (previous?.directory && previous.content === skill.content && JSON.stringify(previous.files) === JSON.stringify(skill.files)) {
+            skill.directory = previous.directory
+            continue
+          }
+          mkdirSync(this.skillDirectory, { recursive: true })
+          const directory = mkdtempSync(join(this.skillDirectory, 'skill-'))
+          created.push(directory)
+          writeFileSync(join(directory, 'SKILL.md'), skill.content)
+          for (const file of skill.files) {
+            const target = join(directory, file.path)
+            mkdirSync(dirname(target), { recursive: true })
+            writeFileSync(target, Buffer.from(file.data, 'base64'), { flag: 'wx', mode: 0o700 })
+          }
+          skill.directory = directory
+        }
+      } catch (error) {
+        for (const directory of created) rmSync(directory, { recursive: true, force: true })
+        throw error
+      }
+    }
     if (next.avatar !== undefined) {
       next.avatar = next.avatar.trim()
       if (!validAvatar(next.avatar)) delete next.avatar
@@ -1576,11 +1682,17 @@ export class DouchatStore {
         next.model = modelSelection.followDefault && agent.modelRoute && agent.modelRoute !== 'default'
           ? agent.modelRoute : modelSelection.binding.model
       }
-      for (const key of ['name', 'avatar', 'avatarEmoji', 'instructions', 'labels'] as const) {
-        if (next[key] !== undefined) overrides[key] = next[key]
+      for (const key of ['name', 'role', 'avatar', 'avatarEmoji', 'instructions', 'labels'] as const) {
+        if (next[key] !== undefined) {
+          // Saving an avatar/name also submits untouched profile fields.
+          if (['name', 'role', 'instructions', 'labels'].includes(key)
+            && next[key] !== '' && next[key] === agent[key] && overrides[key] === undefined) continue
+          overrides[key] = next[key]
+        }
       }
       agent.userOverrides = overrides
     }
+    if (fileChanges) this.profileFiles?.save(agent, fileChanges)
     Object.assign(agent, next)
     return this.tx(() => {
       this.putAgent(agent)
@@ -1606,6 +1718,11 @@ export class DouchatStore {
   deleteAgent(agentId: string): void {
     if (this.agent(agentId)?.systemRole === 'admin') {
       throw new Error('The system administrator cannot be deleted')
+    }
+    const deletedAgent = this.agent(agentId)
+    if (deletedAgent) {
+      this.userMemories.removeAgent(agentId)
+      this.profileFiles?.remove(deletedAgent)
     }
     this.tx(() => {
       this.write('DELETE FROM agents WHERE id = ?', agentId)
@@ -1736,7 +1853,7 @@ export class DouchatStore {
     const topic = newTopic('', now)
     const conversation: Conversation = {
       ownerId,
-      id: `group-${randomUUID().slice(0, 8)}`,
+      id: `group-${randomUUID()}`,
       type: 'group',
       autoNamed: !input.name.trim(),
       name:
@@ -1760,6 +1877,7 @@ export class DouchatStore {
   updateConversation(conversationId: string, input: UpdateConversationInput): Conversation | undefined {
     const conversation = this.conversation(conversationId)
     if (!conversation) return undefined
+    if (input.expectedRevision !== undefined && input.expectedRevision !== conversation.revision) throw new Error('Conversation changed. Reload before saving.')
     if (conversation.type === 'group') {
       if (input.avatar !== undefined) {
         if (!validAvatar(input.avatar)) throw new Error('Invalid group avatar')

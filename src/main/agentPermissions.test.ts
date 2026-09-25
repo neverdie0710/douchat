@@ -1,11 +1,75 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentPermissionBroker, toolCapability } from './agentPermissions'
+import { AgentPermissionBroker, nativeReadPermission, toolCapability } from './agentPermissions'
 import { agentPermissions } from '../shared/agentPermissions'
 import type { AgentConfig } from '../shared/types'
 const config = { id: 'agent', ownerId: 'owner', name: 'Agent' } as AgentConfig
 const input = { requester: 'Friend', roomName: 'Group', capability: 'filesRead' as const, operation: 'read', details: '/private/file' }
 afterEach(() => vi.useRealTimers())
 describe('agent permission boundary', () => {
+  it('classifies only structured native read operations, never command descriptions', () => {
+    expect(nativeReadPermission('claude', JSON.stringify({ tool: 'Read', input: { file_path: '/tmp/report' } }))).toMatchObject({ capability: 'filesRead', operation: 'native_read_file' })
+    expect(nativeReadPermission('claude', JSON.stringify({ tool: 'WebFetch', input: { url: 'https://douchat.ai' } }))).toMatchObject({ capability: 'network' })
+    expect(nativeReadPermission('claude', JSON.stringify({ tool: 'Bash', input: { command: 'cat /tmp/report' } }))).toBeUndefined()
+    expect(nativeReadPermission('codex', '{"app":"Finder"}')).toBeUndefined()
+    expect(nativeReadPermission('claude', 'Read this file')).toBeUndefined()
+  })
+  it('shares approved read access across search and read in one mailbox only', async () => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const task = broker.beginTask('owner', config.id)
+    const search = { ...input, capability: 'accountRead' as const, operation: 'email_search', details: '{"accountId":"work","folder":"INBOX"}' }
+    const pending = broker.authorize(config, search, undefined, false, task)
+    broker.resolve(broker.snapshot()[0].id, 'task'); await pending
+    await broker.authorize(config, { ...search, operation: 'email_read', details: '{"accountId":"work","messageId":"new-message"}' }, undefined, false, task)
+    const other = broker.authorize(config, { ...search, details: '{"accountId":"personal"}' }, undefined, false, task)
+    const cancelled = expect(other).rejects.toThrow('cancelled')
+    expect(broker.snapshot()).toHaveLength(1)
+    broker.endTask(task); await cancelled
+  })
+  it('reuses a website grant only within the same task and revokes it at completion', async () => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const task = broker.beginTask('owner', config.id, 'human')
+    const web = { ...input, requesterId: 'human', capability: 'network' as const, operation: 'computer_open', details: '{"url":"https://douchat.ai/docs"}' }
+    const first = broker.authorize(config, web, undefined, false, task)
+    expect(broker.snapshot()[0].taskScope).toBe('https://douchat.ai')
+    broker.resolve(broker.snapshot()[0].id, 'task'); await first
+    await broker.authorize(config, { ...web, details: '{"url":"https://douchat.ai/about"}' }, undefined, false, task)
+    expect(broker.snapshot()).toHaveLength(0)
+    const other = broker.authorize(config, { ...web, details: '{"url":"https://other.test"}' }, undefined, false, task)
+    const denied = expect(other).rejects.toThrow('declined')
+    broker.resolve(broker.snapshot()[0].id, false); await denied
+    const permissions = agentPermissions(); permissions.sensitive.network = 'deny'
+    await expect(broker.authorize({ ...config, permissions }, web, undefined, false, task)).rejects.toThrow('disabled')
+    await expect(broker.authorize(config, { ...web, requesterId: 'outsider' }, undefined, false, task)).rejects.toThrow('task changed')
+    broker.endTask(task)
+    const nextTask = broker.beginTask('owner', config.id, 'human')
+    const next = broker.authorize(config, web, undefined, false, nextTask)
+    const cancelled = expect(next).rejects.toThrow('cancelled')
+    expect(broker.snapshot()).toHaveLength(1)
+    broker.endTask(nextTask); await cancelled
+  })
+
+  it('coalesces matching parallel requests only when the owner chooses task approval', async () => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const task = broker.beginTask('owner', config.id)
+    const read = { ...input, operation: 'computer_list_files', details: '{"path":"/tmp/allowed"}' }
+    const pending = [broker.authorize(config, read, undefined, false, task), broker.authorize(config, read, undefined, false, task)]
+    broker.resolve(broker.snapshot()[0].id, 'task')
+    await Promise.all(pending)
+    expect(broker.snapshot()).toHaveLength(0)
+    const different = broker.authorize(config, { ...read, details: '{"path":"/tmp/other"}' }, undefined, false, task)
+    const stopped = expect(different).rejects.toThrow('cancelled')
+    broker.cancelAgent(config.id); await stopped
+  })
+
+  it.each(['email_send', 'computer_move_file', 'computer_click', 'create_routine', 'native command'])('never grants task-wide access to %s', async operation => {
+    const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
+    const task = broker.beginTask('owner', config.id)
+    const pending = broker.authorize(config, { ...input, capability: toolCapability(operation), operation, details: '{}' }, undefined, false, task)
+    expect(broker.snapshot()[0].taskScope).toBeUndefined()
+    expect(() => broker.resolve(broker.snapshot()[0].id, 'task')).toThrow('unavailable')
+    broker.resolve(broker.snapshot()[0].id, true); await pending
+    broker.endTask(task)
+  })
   it('requires a fresh native-tool confirmation even with broad allow, while preserving deny', async () => {
     const broker = new AgentPermissionBroker(() => 'owner', vi.fn())
     const permissions = agentPermissions()

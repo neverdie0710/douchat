@@ -755,6 +755,9 @@ describe('private delivery disclosure', () => {
     expect(container.textContent).toContain('Waiting for new progress from local agent')
     expect(container.textContent).toContain('3:05')
     expect(container.textContent).toContain('Checking results')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, localProgress: { phase: 'approval', elapsedSeconds: 200, silentSeconds: 80 } }} agents={agents} />))
+    expect(container.textContent).toContain('Waiting for your approval; review the permission dialog')
+    expect(container.textContent).not.toContain('Local agent is running')
   })
   it('keeps an attributed loading indicator for an image tool and displays elapsed time, not a percentage', async () => {
     const activity: ConversationActivityState = {
@@ -973,4 +976,10 @@ describe('direct-chat transcript visibility', () => {
     const replies = deliveries[0].replies!
     expect(groupDeliveryReplies(replies)).toEqual([replies])
   })
+})
+
+it('labels successful and failed skill reads with their actual relative file paths', async () => {
+  const { messageActionLabel } = await import('./ChatPane')
+  expect(messageActionLabel({ id: 'skill', tool: 'read_skill_file', status: 'succeeded', target: 'references/value.md' })).toBe('Read skill file references/value.md')
+  expect(messageActionLabel({ id: 'skill', tool: 'read_skill_file', status: 'failed', target: 'references/value.md' })).toBe('Could not read skill file references/value.md')
 })

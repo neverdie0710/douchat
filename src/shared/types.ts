@@ -1,3 +1,5 @@
+import type { DesktopDeviceApi } from './deviceApi'
+import type { AccountDataApi } from './accountData'
 import type { CustomModelConfig, CustomProviderInput, CustomModelTest } from './customModels'
 import type { AgentPermissions, PermissionRequest } from './agentPermissions'
 import type { SocialAction, SocialResult, SocialSnapshot } from './social'
@@ -39,6 +41,9 @@ export interface CustomLocalAgentInput {
 }
 
 export interface AgentConfig {
+  /** Local record version; absent only before migration. Not a sync cursor. */
+  revision?: number
+  systemFilesDirectory?: string
   systemFiles?: import('./agentCustomization').AgentFiles
   skills?: import('./agentCustomization').AgentSkill[]
   followDefaultModel?: boolean
@@ -82,6 +87,7 @@ export type BuiltInAgentCapability = 'manage_agents'
 export interface BuiltInAgentUserOverrides {
   /** Explicit model selection, validated and resolved by the main process. */
   modelBinding?: Pick<AgentConfig, 'provider' | 'model'>
+  role?: string
   name?: string
   avatar?: string
   avatarEmoji?: string
@@ -117,6 +123,8 @@ export interface Topic {
 }
 
 export interface Conversation {
+  /** Local record version; absent only before migration. Not a sync cursor. */
+  revision?: number
   /** Only unnamed groups follow member names; legacy and explicitly named groups keep their names. */
   autoNamed?: boolean
   avatar?: string
@@ -336,7 +344,7 @@ export interface ConversationActivityState {
   planningStage?: 'health' | 'decision' | 'plan' | 'recovery'
   serviceName?: string
   localProgress?: {
-    phase: 'connecting' | 'ready' | 'working' | 'waiting'
+    phase: 'connecting' | 'ready' | 'working' | 'waiting' | 'approval'
     elapsedSeconds: number
     silentSeconds: number
     detail?: string
@@ -484,6 +492,9 @@ export interface CreateAgentInput {
 export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel'>
 
 export interface UpdateAgentInput {
+  /** Reject a stale edit when a caller supplies its last observed version. */
+  expectedRevision?: number
+  expectedSystemFiles?: import('./agentCustomization').AgentFiles
   systemFiles?: import('./agentCustomization').AgentFiles
   skills?: import('./agentCustomization').AgentSkill[]
   followDefaultModel?: boolean
@@ -512,6 +523,8 @@ export interface CreateGroupInput {
 }
 
 export interface UpdateConversationInput {
+  /** Reject a stale edit when a caller supplies its last observed version. */
+  expectedRevision?: number
   avatar?: string
   avatarEmoji?: string
   savedToContacts?: boolean
@@ -573,11 +586,7 @@ export interface UpdateState {
   error?: string
 }
 
-export interface DouchatApi {
-  getGroupMemory(conversationId: string): Promise<import('./userMemory').UserMemoryDocument>
-  saveGroupMemory(document: import('./userMemory').UserMemoryDocument, conversationId: string): Promise<import('./userMemory').UserMemoryDocument>
-  getUserMemory(agentId?: string): Promise<import('./userMemory').UserMemoryDocument>
-  saveUserMemory(document: import('./userMemory').UserMemoryDocument, agentId?: string): Promise<import('./userMemory').UserMemoryDocument>
+export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   listIMChannels(agentId: string): Promise<import('./imChannels').IMChannel[]>
   connectIMChannel(agentId: string, input: import('./imChannels').IMConnectInput): Promise<void>
   disconnectIMChannel(agentId: string, provider: import('./imChannels').IMProvider): Promise<void>
@@ -585,19 +594,8 @@ export interface DouchatApi {
   cancelIMLogin(agentId: string, sessionId: string): Promise<void>
   pollIMLogin(agentId: string, sessionId: string): Promise<import('./imChannels').IMLoginStatus>
 
-  resizeDialog: (name: string, width: number, height: number) => Promise<boolean>
-  reportDiagnostic: (event: string, detail: string) => void
-  openDiagnosticLogs: () => Promise<void>
-  copyText: (text: string) => Promise<void>
-  copyAttachment: (attachmentId: string) => Promise<void>
   getSocialSnapshot: () => Promise<SocialSnapshot>
   socialAction: (input: SocialAction) => Promise<SocialResult>
-  platform: string
-  /** The app name macOS shows in Privacy & Security for this build. */
-  microphonePermissionOwner: 'Douchat' | 'Electron'
-  windowAction: (action: 'close' | 'minimize' | 'fullscreen') => void
-  requestMicrophoneAccess: () => Promise<'granted' | 'denied' | 'unsupported'>
-  openMicrophoneSettings: () => Promise<void>
   setInterfaceLanguage: (language: string) => Promise<void>
   getAuthState: () => Promise<DesktopAuthState>
   startLogin: () => Promise<DesktopAuthState>
@@ -621,11 +619,7 @@ export interface DouchatApi {
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => Promise<{ reply: string; durationMs: number; version?: string }>
   cancelLocalAgentTest: () => Promise<void>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
-  searchMessages: (conversationId: string, query: string) => Promise<ChatMessage[]>
-  getMessagePage: (conversationId: string, topicId: string, before?: string) => Promise<{ messages: ChatMessage[]; hasMore: boolean }>
   getAttachmentData: (attachmentId: string) => Promise<string>
-  /** Reopen a file reference saved in chat history after main-process validation. */
-  openLocalFile: (path: string) => Promise<void>
   getSnapshot: () => Promise<AppSnapshot>
   authorizeTokenDance: () => Promise<string>
   cancelTokenDanceAuthorization: () => Promise<void>
@@ -637,13 +631,15 @@ export interface DouchatApi {
   saveCustomModels: (providers: CustomProviderInput[], defaultModel: string) => Promise<CustomModelConfig>
   testCustomModel: (input: CustomModelTest) => Promise<{ ok: boolean; error?: string; model?: string }>
   createAgent: (input: CreateAgentInput) => Promise<AppSnapshot>
-  resolveAgentPermission: (id: string, allow: boolean) => Promise<AppSnapshot>
+  resolveAgentPermission: (id: string, allow: import('./agentPermissions').PermissionApproval) => Promise<AppSnapshot>
+  exportAgentArchive: (agentId: string) => Promise<boolean>
+  parseAgentArchive: (data: Uint8Array, root?: string) => Promise<import('./agentArchive').AgentArchivePreview>
+  parseSkillArchive: (data: Uint8Array) => Promise<import('./agentCustomization').AgentSkill[]>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>
   deleteAgent: (agentId: string) => Promise<AppSnapshot>
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
-  openConversationWindow: (conversationId: string) => Promise<void>
   openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
   getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
   testEmailConnector: (input: EmailConnectorInput) => Promise<EmailConnectionTestResult>

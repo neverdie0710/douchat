@@ -1,6 +1,7 @@
 export const sensitiveCapabilities = ['filesRead', 'filesWrite', 'network', 'browserControl', 'accountRead', 'accountWrite', 'automation', 'localExecution', 'otherTools'] as const
 export type SensitiveCapability = typeof sensitiveCapabilities[number]
 export type PermissionDecision = 'allow' | 'ask' | 'deny'
+export type PermissionApproval = boolean | 'task'
 export interface AgentPermissions {
   groupHumans: PermissionDecision
   groupAgents: PermissionDecision
@@ -23,6 +24,7 @@ export const permissionLabels: Record<SensitiveCapability | 'groupHumans' | 'gro
   automation: 'Create scheduled tasks', localExecution: 'Run the local agent program', otherTools: 'Other tools'
 }
 export interface PermissionRequest {
+  taskScope?: string
   context?: 'direct' | 'group'
   id: string
   ownerId: string

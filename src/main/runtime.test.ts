@@ -377,6 +377,75 @@ describe('DouchatRuntime', () => {
     } finally { runtime.disposeAgent(agent.id); vi.useRealTimers() }
   })
 
+  it.each(['direct', 'group'] as const)('allows ongoing model/tool rounds beyond 120 seconds in %s chat', async context => {
+    vi.useFakeTimers()
+    const { store } = createRuntime()
+    const runtime = new DouchatRuntime(store, idleComputer, () => {})
+    const internal = runtime as any, config = store.accountAgents[0]
+    let emit: (event: any) => void = () => {}
+    let finish!: () => void
+    const unsubscribe = vi.fn()
+    const session = {
+      state: { messages: [{ role: 'assistant', content: [{ type: 'text', text: 'PPT ready' }] }] },
+      abort: vi.fn(), subscribe: vi.fn((listener: typeof emit) => { emit = listener; return unsubscribe }),
+      prompt: vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+    }
+    vi.spyOn(internal, 'session').mockReturnValue(session)
+    internal.sessions.set('active-tools', { agentId: config.id, agent: session })
+    const pending = internal.runReply({ config, sessionKey: 'active-tools', context, timeoutMs: 120_000,
+      prompt: 'Build a PPT', conversationId: 'crew', topicId: 'main' })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      for (let index = 0; index < 4; index++) {
+        await vi.advanceTimersByTimeAsync(60_000)
+        emit({ type: 'message_update' })
+        emit({ type: 'tool_execution_start', toolCallId: `tool-${index}` })
+        // A long tool/approval interval must not consume model response time.
+        await vi.advanceTimersByTimeAsync(150_000)
+        emit({ type: 'tool_execution_end', toolCallId: `tool-${index}` })
+      }
+      expect(session.abort).not.toHaveBeenCalled()
+      finish()
+      await expect(pending).resolves.toMatchObject({ text: 'PPT ready' })
+      expect(session.prompt).toHaveBeenCalledOnce()
+      expect(unsubscribe).toHaveBeenCalledOnce()
+    } finally { runtime.disposeAgent(config.id); vi.useRealTimers() }
+  })
+
+  it('keeps parallel tools paused, then times out a genuinely silent model after the final tool', async () => {
+    vi.useFakeTimers()
+    const { store } = createRuntime()
+    const runtime = new DouchatRuntime(store, idleComputer, () => {})
+    const internal = runtime as any, config = store.accountAgents[0]
+    let emit: (event: any) => void = () => {}
+    const unsubscribe = vi.fn()
+    const session = { state: { messages: [] }, abort: vi.fn(),
+      subscribe: (listener: typeof emit) => { emit = listener; return unsubscribe },
+      prompt: vi.fn(() => new Promise<void>(() => {})) }
+    vi.spyOn(internal, 'session').mockReturnValue(session)
+    internal.sessions.set('parallel-tools', { agentId: config.id, agent: session })
+    let completed = false
+    const pending = internal.runReply({ config, sessionKey: 'parallel-tools', context: 'group', timeoutMs: 120_000,
+      prompt: 'Build a PPT', conversationId: 'crew', topicId: 'main' }).then((reply: any) => { completed = true; return reply })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      emit({ type: 'tool_execution_start', toolCallId: 'first' })
+      emit({ type: 'tool_execution_start', toolCallId: 'second' })
+      await vi.advanceTimersByTimeAsync(150_000)
+      emit({ type: 'tool_execution_end', toolCallId: 'first' })
+      await vi.advanceTimersByTimeAsync(150_000)
+      expect(completed).toBe(false)
+      emit({ type: 'tool_execution_end', toolCallId: 'second' })
+      await vi.advanceTimersByTimeAsync(119_999)
+      expect(completed).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(pending).resolves.toMatchObject({ error: 'The model response timed out after 120 seconds.' })
+      expect(session.abort).toHaveBeenCalledOnce()
+      expect(session.prompt).toHaveBeenCalledOnce()
+      expect(unsubscribe).toHaveBeenCalledOnce()
+    } finally { runtime.disposeAgent(config.id); vi.useRealTimers() }
+  })
+
   it('requires an explicit execution grant before starting an externally requested local agent', async () => {
     const { store, runtime } = createRuntime()
     const agent = store.createAgent({ name: 'Local', role: '', instructions: '', color: '', provider: 'local', model: 'default', localAgentId: 'codex' })
@@ -1657,4 +1726,65 @@ it('updates an attachment receipt in its original topic without duplicating it a
   expect(messages[0]).toMatchObject({ text: 'Describe', topicId: original.topicId, createdAt: original.createdAt })
   expect(messages[0].attachments).toHaveLength(1)
   store.close()
+})
+
+it('exposes live skill resources to private and group agents, but not scheduling controllers', async () => {
+  const { store, runtime } = createRuntime()
+  const internal = runtime as any
+  const agent = store.accountAgents[0]
+  vi.spyOn(internal, 'resolveModel').mockReturnValue({ id: 'mock', provider: 'mock', api: 'openai-completions' })
+  store.updateAgent(agent.id, { skills: [{ id: 'growth', name: 'Growth', content: 'Read references/value.md before analysis', enabled: true, files: [{ path: 'references/value.md', data: Buffer.from('Reference evidence').toString('base64') }] }] })
+  const current = store.agent(agent.id)!
+  for (const context of ['direct', 'group']) {
+    const session = internal.session(current, `${context}:skills`, context)
+    const read = session.state.tools.find((tool: any) => tool.name === 'read_skill_file')
+    expect(read).toBeDefined()
+    const response = await read.execute('read', { skillId: 'growth', path: 'references/value.md' })
+    expect(JSON.parse(response.content[0].text).content).toBe('Reference evidence')
+    expect(session.state.systemPrompt).toContain('Skill ID: growth')
+    expect(session.state.systemPrompt).toContain('read_skill_file with that ID')
+  }
+  expect(internal.session(current, 'controller:skills', 'controller').state.tools).toEqual([])
+  expect(internal.session(current, 'direct:disabled-tools', 'direct', true).state.tools).toEqual([])
+  const read = internal.session(current, 'direct:skills', 'direct').state.tools.find((tool: any) => tool.name === 'read_skill_file')
+  store.updateAgent(agent.id, { skills: [] })
+  await expect(read.execute('read', { skillId: 'growth', path: 'references/value.md' })).rejects.toThrow('not found')
+  store.setCurrentAccountId('different-owner')
+  await expect(read.execute('read', { skillId: 'growth', path: 'SKILL.md' })).rejects.toThrow('account changed')
+})
+
+it('feeds a real skill tool result back into the agent loop and records the successful read', async () => {
+  const { createAssistantMessageEventStream } = await import('@earendil-works/pi-ai')
+  const { store, runtime } = createRuntime()
+  const internal = runtime as any
+  const agent = store.accountAgents[0]
+  vi.spyOn(internal, 'resolveModel').mockReturnValue({ id: 'mock', provider: 'mock', api: 'openai-completions' })
+  store.updateAgent(agent.id, { skills: [{ id: 'growth', name: 'Growth', content: 'Read references/value.md', enabled: true, files: [{ path: 'references/value.md', data: Buffer.from('REFERENCE_EVIDENCE').toString('base64') }] }] })
+  const sessionKey = 'direct:skill-loop'
+  const session = internal.session(store.agent(agent.id), sessionKey, 'direct')
+  const run = store.createRun({ agentId: agent.id, conversationId: `direct-${agent.id}`, title: 'Skill loop', prompt: 'Diagnose growth', trigger: 'chat' })
+  internal.activeRun.set(sessionKey, run.id)
+  let calls = 0
+  session.streamFunction = (_model: unknown, context: any) => {
+    const stream = createAssistantMessageEventStream()
+    const first = calls++ === 0
+    if (!first) {
+      const result = context.messages.find((message: any) => message.role === 'toolResult')
+      expect(result.isError).toBe(false)
+      expect(result.content[0].text).toContain('REFERENCE_EVIDENCE')
+    }
+    const message: any = {
+      role: 'assistant', api: 'openai-completions', provider: 'mock', model: 'mock', timestamp: Date.now(),
+      content: first ? [{ type: 'toolCall', id: 'read-value', name: 'read_skill_file', arguments: { skillId: 'growth', path: 'references/value.md' } }] : [{ type: 'text', text: 'Analysis based on the reference.' }],
+      stopReason: first ? 'toolUse' : 'stop',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+    }
+    stream.push({ type: 'start', partial: message })
+    stream.push({ type: 'done', reason: message.stopReason, message })
+    return stream
+  }
+  await session.prompt('Diagnose growth')
+  expect(calls).toBe(2)
+  expect(internal.toolActions.get(`${run.id}:${agent.id}`).get('read-value')).toMatchObject({ status: 'succeeded', target: 'references/value.md' })
+  expect(store.runEvents.some(event => event.runId === run.id && event.label.includes('read_skill_file succeeded'))).toBe(true)
 })

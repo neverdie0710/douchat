@@ -40,6 +40,54 @@ function scriptedPolicy(prompt: string, agents: { id: string; name: string }[], 
 }
 afterEach(() => { for (const { store, directory } of resources.splice(0)) { store.close(); rmSync(directory, { recursive: true, force: true }) } })
 
+it('keeps an unmentioned follow-up with the last conversational partner and permits a new task to change members', async () => {
+  const { runtime, store, agents, group, internal } = fixture()
+  store.saveDecisionSettings({ mode: 'leader', providerId: '', model: '' })
+  const speakers: string[] = []
+  internal.runReply = vi.fn(async ({ config, context, prompt }: any) => {
+    if (context === 'controller') {
+      const payload = JSON.parse(prompt.slice(prompt.indexOf('{')))
+      expect(payload.conversationContinuity.memberId).toBe(agents[1].id)
+      expect(config.id).toBe(agents[1].id)
+      const followup = payload.currentRequest.content === '你知道我是谁？'
+      return { text: JSON.stringify({ continueConversation: followup, mode: 'single',
+        memberIds: [followup ? agents[0].id : agents[2].id], leaderMemberId: agents[0].id,
+        triggerMessageIds: [payload.currentRequest.id] }) }
+    }
+    speakers.push(config.id)
+    return { text: speakers.length === 1 ? '要不要我把待办清单建起来？' : '已回复。' }
+  })
+  await runtime.sendMessage(group.id, '@产品 最近有什么待办事项')
+  await runtime.sendMessage(group.id, '你知道我是谁？')
+  expect(speakers).toEqual([agents[1].id, agents[1].id])
+  expect(store.topicMessages(group.id, group.activeTopicId).filter(message => message.kind === 'system')).toEqual([])
+  await runtime.sendMessage(group.id, '换个话题，请工程分析代码性能')
+  expect(speakers).toEqual([agents[1].id, agents[1].id, agents[2].id])
+  await runtime.sendMessage(group.id, '@测试 请检查结果')
+  expect(speakers.at(-1)).toBe(agents[3].id)
+})
+
+it.each([0, 1])('answers a direct mention without planning, group probes or dispatch notices (member %s)', async target => {
+  const { runtime, store, agents, group, internal } = fixture()
+  const health = vi.fn(async () => ({}))
+  internal.refreshHealth = health
+  const configured = vi.spyOn(internal.groupDecisionService, 'decide')
+  internal.runReply = vi.fn(async ({ config, context, prompt, toolsDisabled }: any) => {
+    expect(config.id).toBe(agents[target].id)
+    expect(context).toBe('group')
+    expect(JSON.parse(prompt.slice(prompt.indexOf('{'))).turn.directAddress).toBe(true)
+    expect(toolsDisabled).toBeFalsy()
+    return { text: '最近有两项待办。' }
+  })
+  await runtime.sendMessage(group.id, `@${agents[target].name} 最近有什么待办事项`)
+  expect(internal.runReply).toHaveBeenCalledTimes(1)
+  expect(health).not.toHaveBeenCalled()
+  expect(configured).not.toHaveBeenCalled()
+  expect(store.topicMessages(group.id, group.activeTopicId).map(message => message.authorId)).toEqual(['user', agents[target].id])
+  expect(store.groupWorkflows()[0].status).toBe('completed')
+  expect(store.conversation(group.id)?.leadAgentId).toBe(agents[0].id)
+})
+
 it('completes roll call once per member while skipping a failed local adapter and replacing a failed leader', async () => {
   const { runtime, store, agents, group, internal } = fixture()
   store.updateAgent(agents[0].id, { localAgentId: 'openclaw' })
@@ -297,7 +345,7 @@ it('recovers a finished journal by replaying saved outputs without another model
   workflow.status = 'running'; store.saveGroupWorkflow(workflow)
   const count = store.topicMessages(group.id, group.activeTopicId).length
   await runtime.recoverGroupWorkflows()
-  expect(internal.runReply).toHaveBeenCalledTimes(2)
+  expect(internal.runReply).toHaveBeenCalledTimes(1)
   expect(store.topicMessages(group.id, group.activeTopicId)).toHaveLength(count)
   expect(store.groupWorkflows()[0].status).toBe('completed')
   expect(workflow.group.members.map(member => member.id)).toContain(agents[2].id)
@@ -444,6 +492,7 @@ it.each(['leader', 'ordinary', '~typesafe/jev-latest'])('uses configured policy 
       return { text: JSON.stringify(policy(JSON.parse(prompt.slice(prompt.indexOf('{'))))) }
     }
     speakers.push(config.id)
+    if (kind === 'silent') return { text: '[[douchat_silent]]' }
     if (config.id === agents[0].id) return { text: '', error: 'Disconnected before producing a reply' }
     return { text: '完成我的指定回复。' }
   }
@@ -454,14 +503,15 @@ it.each(['leader', 'ordinary', '~typesafe/jev-latest'])('uses configured policy 
   expect(store.groupWorkflows().at(-1)?.status).toBe('completed')
   kind = 'work'; phases.length = 0; speakers.length = 0
   await runtime.sendMessage(group.id, '@组长 请给出实现建议')
-  expect(phases).toEqual(['initial', 'recovery', 'continuation'])
+  expect(phases).toEqual(['recovery'])
   expect(speakers).toEqual([agents[0].id, agents[2].id])
   expect(store.groupWorkflows().at(-1)?.status).toBe('completed')
   kind = 'silent'; phases.length = 0; speakers.length = 0
   await runtime.sendMessage(group.id, '@工程 这条是给真人看的，不用回复')
-  expect(phases).toEqual(['initial'])
-  expect(speakers).toEqual([])
-  expect(configured).toHaveBeenCalledTimes(model === 'leader' ? 0 : 6)
+  expect(phases).toEqual([])
+  expect(speakers).toEqual([agents[2].id])
+  expect(store.topicMessages(group.id, group.activeTopicId).at(-1)?.authorId).toBe('user')
+  expect(configured).toHaveBeenCalledTimes(model === 'leader' ? 0 : 3)
 })
 
 it('freezes decision settings for recovery and applies edits to the next task', async () => {
@@ -482,7 +532,7 @@ it('freezes decision settings for recovery and applies edits to the next task', 
     return { text: '已完成。' }
   }
   await runtime.sendMessage(group.id, '@产品 提供需求')
-  expect(used).toEqual(['first', 'first'])
+  expect(used).toEqual(['first'])
   expect(store.groupWorkflows().at(-1)?.decisionSettings).toEqual(first)
   await runtime.sendMessage(group.id, '@产品 下一项需求')
   expect(used.at(-1)).toBe('second')
@@ -619,7 +669,7 @@ it('repairs a hosted coordinator format error in a fresh session before falling 
     return { text: JSON.stringify({ mode: 'single', memberIds: [config.id], addressedMemberId: config.id, triggerMessageIds: [payload.currentRequest.id],
       assignments: { [config.id]: '回复用户', [agents[1].id]: null }, participantScope: null, publicDeliverables: null }) }
   }
-  await runtime.sendMessage(group.id, '@组长 回答这个问题。')
+  await runtime.sendMessage(group.id, '请组长回答这个问题。')
   expect(planners).toEqual([agents[0].id, agents[0].id])
   expect(aborted).toHaveBeenCalledTimes(2)
   expect(store.runEvents.some(event => event.label === 'Correcting decision format')).toBe(true)

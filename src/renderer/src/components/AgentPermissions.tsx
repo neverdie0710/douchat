@@ -1,10 +1,10 @@
 import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { useContext, useState, type ReactElement } from 'react'
-import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
+import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionApproval, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
 import type { AgentConfig } from '../../../shared/types'
 import { t } from '../preferences'
 import type { SocialSnapshot } from '../../../shared/social'
-import { UserAvatar } from './common'
+import { AgentAvatar, agentDisplayName, UserAvatar } from './common'
 
 export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   agent: AgentConfig; onClose: () => void; onSave: (permissions: AgentPermissions) => Promise<void>
@@ -47,29 +47,51 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
   </NativeDialog>
 }
 
-export function AgentPermissionPrompt({ request, social, onResolve }: { request: PermissionRequest; social?: SocialSnapshot; onResolve: (allow: boolean) => Promise<void> }): ReactElement {
+export function AgentPermissionPrompt({ request, agent, social, onResolve }: { request: PermissionRequest; agent?: AgentConfig; social?: SocialSnapshot; onResolve: (allow: PermissionApproval) => Promise<void> }): ReactElement {
+  const contact = agent?.id === request.agentId && agent.ownerId === request.ownerId ? agent : undefined
+  let native: { tool?: string; input?: { command?: string }; arguments?: { command?: string } } | undefined
+  try { native = JSON.parse(request.details) } catch { /* Plain-text requests remain visible. */ }
+  const nativeLabels: Record<string, string> = {
+    Bash: 'Run a terminal command', Read: 'Read a file', Write: 'Write a file', Edit: 'Edit a file',
+    Glob: 'Find files', Grep: 'Search file contents', WebFetch: 'Read a web page', WebSearch: 'Search the web'
+  }
+  const nativeTool = typeof native?.tool === 'string' ? native.tool : request.operation === 'Claude: Bash' ? 'Bash' : undefined
+  const actionLabel = nativeTool && Object.hasOwn(nativeLabels, nativeTool) ? nativeLabels[nativeTool] : undefined
+  const command = nativeTool === 'Bash' ? native?.input?.command ?? native?.arguments?.command : undefined
   const people = social?.userId === request.ownerId && request.requesterKind !== 'agent' ? social : undefined
   const person = people?.rooms.flatMap(room => room.members).find(member => member.id === request.requesterId)
     ?? people?.friendships.find(friend => friend.person.id === request.requesterId)?.person
   const requesterName = person?.name || request.requester
+  const selfRequest = request.requesterKind === 'agent' && request.requesterId === request.agentId
+  const room = request.context === 'group' || request.context !== 'direct' && request.roomName !== request.agentName && request.roomName !== requesterName ? request.roomName : undefined
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const resolve = async (allow: boolean) => { setBusy(true); try { await onResolve(allow) } catch { setError(t('Could not save changes')); setBusy(false) } }
+  const resolve = async (allow: PermissionApproval) => { setBusy(true); try { await onResolve(allow) } catch { setError(t('Could not save changes')); setBusy(false) } }
   return <NativeDialog className="modal-backdrop permission-approval-backdrop" onClose={() => { if (!busy) void resolve(false) }}>
     <section className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Permission required')} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) void resolve(false) } }}>
       <header className="edit-contact-heading"><h2>{t('Permission required')}</h2></header><div className="permission-body">
-      <p><strong>{request.agentName}</strong> · {t(permissionLabels[request.capability])}</p>
-      <p className="muted">{t('Requested by')}: {requesterName} · {request.roomName}</p>
-      {request.requesterKind !== 'agent' ? <div className="permission-requester">
+      <div className="permission-actor">
+        {contact ? <AgentAvatar agent={contact} size={40} /> : <UserAvatar src="" name={request.agentName} size={40} />}
+        <span className="permission-requester-copy"><strong>{contact ? agentDisplayName(contact) : request.agentName}</strong>
+          <span>{t(actionLabel ?? (request.capability === 'otherTools' ? 'Run requested operation' : permissionLabels[request.capability]))}</span></span>
+      </div>
+      {!selfRequest && (request.requesterKind !== 'agent' ? <div className="permission-requester">
         <UserAvatar src={person?.image || ''} name={requesterName} size={32} />
-        <span className="permission-requester-copy"><strong>{requesterName}</strong><small className="muted">{t('Human member')}</small></span>
-      </div> : request.requesterId && <p className="muted permission-requester-id">{t('Agent')} · {request.requesterId}</p>}
-      <p>{request.operation}</p><pre className="permission-details">{request.details}</pre>
+        <span className="permission-requester-copy"><small className="muted">{t('Requested by')}</small><strong>{requesterName}</strong></span>
+      </div> : <p className="muted" title={request.requesterId}>{t('Requested by')}: {requesterName} · {t('Agent')}</p>)}
+      {room && <p className="muted">{t('Group')}: {room}</p>}
+      {!actionLabel && <p>{request.operation}</p>}
+      {nativeTool === 'Bash' && <p>{t('This runs the command below on your computer.')}</p>}
+      {typeof command === 'string' && command.trim() ? <>
+        <pre className="permission-details">{command}</pre>
+        <details><summary>{t('Full request details')}</summary><pre className="permission-details">{request.details}</pre></details>
+      </> : <pre className="permission-details">{request.details}</pre>}
       {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
       {request.context !== 'direct' && <p className="muted">{t('Results may be visible to everyone in this group.')}</p>}
-      <p className="muted">{t('This approval is for this operation only. No response within 10 minutes means deny.')}</p>
+      {request.taskScope && <p className="permission-notice">{t('Task approval scope')}: {request.taskScope}<br />{t('Expires when this task ends. Other resources still require approval.')}</p>}
+      <p className="muted">{t(request.taskScope ? 'Allow this operation once, or reuse approval within the scope above for this task. No response within 10 minutes means deny.' : 'This approval is for this operation only. No response within 10 minutes means deny.')}</p>
       {error && <p role="alert">{t(error)}</p>}
-      </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button></footer>
+      </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button>{request.taskScope && <button className="primary-button" disabled={busy} onClick={() => void resolve('task')}>{t('Allow for this task')}</button>}</footer>
     </section>
   </NativeDialog>
 }

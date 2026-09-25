@@ -1,8 +1,11 @@
 # Local group collaboration
 
-The desktop scheduler uses the account's saved decision mode for every initial
-request (including attendance and explicit @mentions), follow-up handoff and
-failure recovery. The selected policy elects `leaderMemberId` using the task,
+New desktop workflows route a leading, unambiguous human `@member` directly to
+that member, without a planning call, group-wide health probes or a dispatch
+notice. Their public/private handoffs execute directly and stop once settled.
+The account's saved decision mode handles other initial requests (including
+attendance and multiple mentions), their follow-up handoffs and failure recovery.
+The selected policy elects `leaderMemberId` using the task,
 member profiles, shared context, health and latency. A healthy existing leader
 can retain ownership on contextual continuations. The runtime executes validated
 plans and does not replace the policy with a keyword route or speed-only election.
@@ -19,8 +22,23 @@ plans and does not replace the policy with a keyword route or speed-only electio
   A third party named as a delivery target runs only after a real handoff.
   Resolution is model-driven; new tasks are not automatically assigned to the
   previous speaker.
-- A single explicit @mention also goes through the selected policy; normally it
-  produces a single-member plan, but a no-reply instruction can suppress it.
+- For an unmentioned follow-up, the policy receives `conversationContinuity`:
+  the sole speaker from the preceding human turn, with that request and recent
+  reply bubbles. It classifies personal questions, corrections, elaborations and
+  acceptance of that speaker's offer as a continuation. Chat models return
+  `continueConversation=true`; System One uses `route=followup`. The runtime binds
+  these replies to that member without a leader handoff notice or summary.
+  Explicit addresses, fresh topics, multiple prior speakers, unavailable members,
+  and pending group-task checkpoints do not inherit this route. Clearly new tasks
+  still get a new worker selection. Fallback planning prefers the conversational
+  partner, while the group's elected leader remains a separate role.
+- A leading single @mention goes directly to its recipient, who interprets the
+  request and retains normal tools. For an explicit no-reply instruction, the
+  recipient returns `[[douchat_silent]]`; the runtime emits no public message.
+  Quoted mentions, references in prose, unknown/multiple recipients and
+  agent-posted requests retain policy routing. Workflows awaiting clarification
+  retain their full task context. Journals before scheduling version 4 replay
+  their original policy route to avoid repeating completed work.
 - The controller chooses ordered execution for dependent work, including requests
   addressed to multiple members or @all. Workers see earlier results and private
   handoff triggers. There is no automatically inserted leader opening. The policy
@@ -28,7 +46,7 @@ plans and does not replace the policy with a keyword route or speed-only electio
 - Independent requests such as “大家每人讲个笑话” start the requested members in
   parallel, including the leader. There is no extra leader acknowledgement turn.
   Replies appear as each finishes and activity tracks the remaining members.
-- Public @mentions and private deliveries become inputs to the next policy
+- For policy-planned tasks, public @mentions and private deliveries become inputs to the next policy
   decision. Handoffs to members already in a declared plan retain their message
   triggers; additional recipients require a new policy decision. A bounded turn limit and cancellation prevent
   unbounded exchanges.

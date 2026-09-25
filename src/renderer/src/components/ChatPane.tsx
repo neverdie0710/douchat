@@ -113,6 +113,8 @@ function MessageAttachments({ attachments }: { attachments?: MessageAttachment[]
 export function messageActionLabel(action: MessageAction): string {
   if (action.tool === 'update_user_memory') return t({ running: 'Updating user memory', succeeded: 'Updated user memory', failed: 'Could not update user memory' }[action.status])
   const target = action.target || t('the selected item')
+  if (action.tool === 'read_skill_file') return tr({ running: 'Reading skill file {name}', succeeded: 'Read skill file {name}', failed: 'Could not read skill file {name}' }[action.status], { name: target })
+  if (action.tool === 'list_skill_files') return t({ running: 'Listing skill files', succeeded: 'Listed skill files', failed: 'Could not list skill files' }[action.status])
   const labels: Record<MessageAction['status'], string> = action.tool === 'computer_open_file'
     ? {
         running: tr('Opening {name} with the system default app', { name: target }),
@@ -250,6 +252,7 @@ function activityDetailLabel(activity: ConversationActivityState): string {
   if (activity.localProgress) {
     const progress = activity.localProgress
     if (progress.phase === 'connecting') return t('Connecting to local agent')
+    if (progress.phase === 'approval') return t('Waiting for your approval; review the permission dialog')
     if (progress.phase === 'ready') return t('Task received; getting started')
     const elapsed = `${Math.floor(progress.elapsedSeconds / 60)}:${String(progress.elapsedSeconds % 60).padStart(2, '0')}`
     const state = progress.silentSeconds >= 60 ? t('Waiting for new progress from local agent') : t('Local agent is running')

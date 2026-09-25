@@ -6,7 +6,7 @@ import type { AgentConfig } from '../shared/types'
 let root: string | undefined
 export function configureLocalWorkspaces(userData?: string): void { root = userData ? join(userData, 'local-workspaces') : undefined }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
-interface RecordData { owner: string; agent: string; sessionKey: string; generation: string; fingerprint: string; thread?: string }
+interface RecordData { owner: string; agent: string; sessionKey: string; generation: string; fingerprint: string; thread?: string; claudeAccountLogin?: boolean }
 function read(file: string): RecordData | undefined {
   try { return JSON.parse(readFileSync(file, 'utf8')) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) return
@@ -30,7 +30,8 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string) {
   const old = read(file)
   const record: RecordData = { owner: config.ownerId, agent: config.id, sessionKey: key,
     generation: old?.generation && /^[a-f0-9-]{36}$/.test(old.generation) ? old.generation : randomUUID(), fingerprint,
-    ...(old?.fingerprint === fingerprint && old.thread ? { thread: old.thread } : {}) }
+    ...(old?.fingerprint === fingerprint && old.thread ? { thread: old.thread } : {}),
+    ...(config.localAgentId === 'claude' && old?.claudeAccountLogin === true ? { claudeAccountLogin: true } : {}) }
   save(file, record)
   const legacyDirectory = join(root, 'files', hash(config.ownerId), hash(config.id), id, record.generation)
   // Cursor flattens the entire workspace path into one directory name for its
@@ -43,11 +44,15 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string) {
     renameSync(legacyDirectory, directory)
   }
   mkdirSync(directory, { recursive: true, mode: 0o700 })
-  return { directory, thread: record.thread, remember(thread?: string) {
+  return { directory, thread: record.thread, claudeAccountLogin: record.claudeAccountLogin, rememberAccountLogin() {
+    const current = read(file)
+    if (current?.generation !== record.generation || current.fingerprint !== fingerprint) return
+    save(file, { ...current, claudeAccountLogin: true })
+  }, remember(thread?: string) {
     // A late completion must never restore a session invalidated by Clear chat.
     const current = read(file)
     if (current?.generation !== record.generation || current.fingerprint !== fingerprint) return
-    save(file, { ...record, thread })
+    save(file, { ...current, thread })
   } }
 }
 export function resetLocalWorkspaces(owner: string, matches: (sessionKey: string, agentId: string) => boolean): void {

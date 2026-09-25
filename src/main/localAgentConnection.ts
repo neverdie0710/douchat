@@ -1,17 +1,9 @@
+import type { LocalProgress, ProgressListener, LocalToolApproval, LocalApprovalHandler } from '../shared/agentExecutor'
+export type { LocalProgress, ProgressListener, LocalToolApproval, LocalApprovalHandler } from '../shared/agentExecutor'
 import { appendLocalAgentArguments } from '../shared/localAgentArguments'
 import { localModelId, withLocalModel } from '../shared/localModels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
-
-export interface LocalProgress {
-  phase: 'connecting' | 'ready' | 'working' | 'waiting'
-  elapsedSeconds: number
-  silentSeconds: number
-  detail?: string
-}
-export type ProgressListener = (progress: LocalProgress) => void
-export interface LocalToolApproval { message: string; details: string }
-export type LocalApprovalHandler = (request: LocalToolApproval, signal: AbortSignal) => Promise<void>
 
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
@@ -41,6 +33,7 @@ export class LocalAgentConnection {
   private failTurn?: (error: Error) => void
   private failure?: Error
   private turnCount = 0
+  private turnActivity = false
   private lastEvent = Date.now()
   private approvalHandler?: LocalApprovalHandler
   private activeTurnId?: string
@@ -52,6 +45,7 @@ export class LocalAgentConnection {
     this.closedPromise = new Promise((resolve) => { this.resolveClosed = resolve })
   }
   get alive(): boolean { return !this.failure }
+  get canRetryAuthentication(): boolean { return !this.turnActivity }
   get hasHistory(): boolean { return this.turnCount > 0 }
   get thread(): string | undefined { return this.threadId }
 
@@ -60,7 +54,7 @@ export class LocalAgentConnection {
     if (this.failure) throw this.failure
     const args = this.kind === 'codex'
       ? ['app-server']
-      : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(resume ? resume.thread ? ['--resume', resume.thread] : [] : ['--no-session-persistence']), '--allowedTools', 'WebSearch,WebFetch', '--permission-mode', 'dontAsk']
+      : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(resume ? resume.thread ? ['--resume', resume.thread] : [] : ['--no-session-persistence']), '--allowedTools', 'WebSearch,WebFetch', ...(toolApprovals ? ['--permission-prompt-tool', 'stdio'] : ['--permission-mode', 'dontAsk'])]
     this.rememberThread = resume?.remember
     if (this.kind === 'claude' && resume?.thread) { this.threadId = resume.thread; this.turnCount = 1 }
     this.child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', args, model) : args, extraArgs)], {
@@ -77,6 +71,7 @@ export class LocalAgentConnection {
       this.close(new Error(`Local agent disconnected (${code ?? 'signal'}). ${this.stderr}`))
       this.resolveClosed()
     })
+    if (this.kind === 'claude' && toolApprovals) await this.request('initialize', { hooks: null }, true)
     if (this.kind === 'codex') {
       await this.request('initialize', { clientInfo: { name: 'douchat', version: '1.0.0' }, capabilities: { experimentalApi: true } })
       this.write({ method: 'initialized' })
@@ -136,6 +131,36 @@ export class LocalAgentConnection {
       this.write({ id: packet.id, result: { action: allowed ? 'accept' : 'decline', content: allowed ? {} : null, _meta: null } })
     }
     if (this.approvals.get(packet.id) === abort) this.approvals.delete(packet.id)
+  }
+
+  private async approveClaudeTool(packet: Packet): Promise<void> {
+    this.turnActivity = true
+    const id = packet.request_id
+    const request = packet.request
+    if (typeof id !== 'string' || !id || this.approvals.has(id)) {
+      this.close(new Error('Invalid or duplicate Claude approval request')); return
+    }
+    const respond = (response: Packet) => this.write({ type: 'control_response', response: { subtype: 'success', request_id: id, response } })
+    const handler = this.approvalHandler
+    if (!this.listener || !handler || request?.subtype !== 'can_use_tool'
+      || typeof request.tool_name !== 'string' || !request.tool_name.trim()
+      || !request.input || typeof request.input !== 'object' || Array.isArray(request.input)) {
+      respond({ behavior: 'deny', message: 'No active owner approval handler for this request.' }); return
+    }
+    const abort = new AbortController()
+    this.approvals.set(id, abort)
+    let allowed = false
+    try {
+      await handler({ message: `Claude: ${request.tool_name}`, details: JSON.stringify({
+        tool: request.tool_name, input: request.input,
+        ...(typeof request.blocked_path === 'string' ? { blockedPath: request.blocked_path } : {})
+      }, null, 2) }, abort.signal)
+      allowed = true
+    } catch { /* Denial, expiry and cancellation do not grant access. */ }
+    if (!abort.signal.aborted && !this.failure) respond(allowed
+      ? { behavior: 'allow', updatedInput: request.input }
+      : { behavior: 'deny', message: 'The owner denied or cancelled this operation.' })
+    if (this.approvals.get(id) === abort) this.approvals.delete(id)
   }
 
   private cancelApprovals(): void {
@@ -208,6 +233,11 @@ export class LocalAgentConnection {
       } else if (packet.id !== undefined && packet.method) {
         if (packet.method === 'mcpServer/elicitation/request') void this.approveComputerUse(packet).catch(error => this.close(error))
         else this.write({ id: packet.id, error: { code: -32601, message: 'Interactive requests are not supported in Douchat.' } })
+      } else if (packet.type === 'control_cancel_request') {
+        this.approvals.get(packet.request_id)?.abort()
+        this.approvals.delete(packet.request_id)
+      } else if (packet.type === 'control_request' && this.kind === 'claude' && packet.request?.subtype === 'can_use_tool') {
+        void this.approveClaudeTool(packet).catch(error => this.close(error))
       } else if (packet.type === 'control_request') {
         this.write({ type: 'control_response', response: { subtype: 'error', request_id: packet.request_id, error: 'Interactive requests are not supported in Douchat' } })
       } else {
@@ -229,16 +259,22 @@ export class LocalAgentConnection {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
     if (this.listener) throw new Error('This local agent session is already working')
-    this.approvalHandler = onApproval
+    this.turnActivity = false
     const started = Date.now()
     this.lastEvent = started
     let detail: string | undefined
+    let waitingApproval = false
     let lastReport = 0
     const report = (): void => {
       if (Date.now() - lastReport < 1_000) return
       lastReport = Date.now()
-      progress?.({ phase: detail ? 'working' : 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: Math.floor((Date.now() - this.lastEvent) / 1000), detail })
+      progress?.({ phase: waitingApproval ? 'approval' : detail ? 'working' : 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: Math.floor((Date.now() - this.lastEvent) / 1000), detail })
     }
+    this.approvalHandler = onApproval ? async (request, approvalSignal) => {
+      waitingApproval = true; lastReport = 0; report()
+      try { await onApproval(request, approvalSignal) }
+      finally { waitingApproval = false; lastReport = 0; report() }
+    } : undefined
     const heartbeat = setInterval(report, 15_000)
     const abort = (): void => this.close(new Error('Stopped'))
     signal?.addEventListener('abort', abort, { once: true })
@@ -251,7 +287,17 @@ export class LocalAgentConnection {
           if (this.kind === 'claude') {
             if (packet.type === 'system' && packet.subtype === 'init' && typeof packet.session_id === 'string') { this.threadId = packet.session_id; this.rememberThread?.(this.threadId) }
             if (packet.type === 'system' && packet.subtype === 'init') progress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
+            if (packet.type === 'stream_event' && ['content_block_start', 'content_block_delta'].includes(packet.event?.type)) {
+              this.turnActivity = true
+              const block = packet.event.content_block
+              if (block?.type === 'tool_use') detail = `Tool: ${block.name}`
+              else if (block?.type === 'text' || packet.event.delta?.type === 'text_delta') detail = 'Generating response content'
+              // Do not expose partial tool arguments, credentials, or reasoning text.
+              report()
+            }
             if (packet.type === 'assistant') {
+              // API errors can be represented as assistant text; they are not model work.
+              if (!packet.error && !packet.message?.error) this.turnActivity = true
               for (const item of packet.message?.content ?? []) {
                 if (item.type === 'text') detail = String(item.text).slice(-500)
                 if (item.type === 'tool_use') detail = `Tool: ${item.name}`

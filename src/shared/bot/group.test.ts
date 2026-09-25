@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { groupDecisionPrompt, groupConversationPrompt, runGroupConversation, validateGroupDecision, type BotGroup, type GroupMessage } from './group'
+import { directGroupDecision, groupConversationContinuity, groupDecisionPrompt, groupConversationPrompt, runGroupConversation, validateGroupDecision, type BotGroup, type GroupMessage } from './group'
 import { privateContext, type PrivateDelivery } from './privateMessages'
 
 const group: BotGroup = { id: 'g', name: 'Team', leadMemberId: 'a', members: [
@@ -9,6 +9,73 @@ const stop = { mode: 'none', memberIds: [], triggerMessageIds: [] }
 const user: GroupMessage = { id: 'u', role: 'user', content: 'Work together' }
 const message = (id: string, content = 'Done'): GroupMessage => ({ id: `${id}-reply`, role: 'assistant', sender: { id, name: id }, content })
 const signal = () => new AbortController().signal
+
+const followupContext = (content = '你知道我是谁？') => ({ requestMessageId: 'followup', privateDeliveries: [], completedTurns: [], messages: [
+  { ...user, content: '@Writer 最近有什么待办事项' }, message('b', '目前没有待办。'),
+  { ...message('b', '要不要建立待办清单？'), id: 'b-offer' }, { ...user, id: 'followup', content }
+] })
+
+it('preserves the conversational partner across multiple bubbles and binds a classified follow-up to that member', () => {
+  const context = followupContext()
+  expect(groupConversationContinuity(group, context)).toMatchObject({ memberId: 'b', replies: [{ id: 'b-reply' }, { id: 'b-offer' }] })
+  const decision = validateGroupDecision({ continueConversation: true, mode: 'single', leaderMemberId: 'a', memberIds: ['a'] }, group, context)
+  expect(decision).toMatchObject({ memberIds: ['b'], addressedMemberId: 'b', leaderMemberId: 'a', triggerMessageIds: ['followup'] })
+  expect(groupDecisionPrompt(group, context)).toContain('conversationContinuity')
+})
+
+it.each(['@Reviewer 帮我看看', '@all 说说看'])('explicit addressing takes precedence over conversational continuity: %s', content => {
+  expect(groupConversationContinuity(group, followupContext(content))).toBeNull()
+})
+
+it('does not bind a classified new task to the prior speaker', () => {
+  const decision = validateGroupDecision({ continueConversation: false, mode: 'single', memberIds: ['c'], triggerMessageIds: ['followup'] }, group, followupContext('换个话题，请做代码审查'))
+  expect(decision.memberIds).toEqual(['c'])
+})
+
+it('does not guess a partner after multiple speakers, in a fresh topic, during recovery or when unavailable', () => {
+  const context = followupContext()
+  expect(groupConversationContinuity(group, { ...context, messages: [context.messages[0], message('a'), ...context.messages.slice(1)] })).toBeNull()
+  expect(groupConversationContinuity(group, { ...context, messages: [context.messages.at(-1)!] })).toBeNull()
+  expect(groupConversationContinuity(group, { ...context, messages: context.messages.map(message => message.id === 'followup' ? { ...message, resumesGroupTask: true } : message) })).toBeNull()
+  expect(groupConversationContinuity(group, { ...context, unavailableMemberIds: ['b'] })).toBeNull()
+  expect(groupConversationContinuity(group, { ...context, recovery: { failedMemberId: 'b', participationOnly: false, triggerMessageIds: ['followup'] } })).toBeNull()
+  expect(() => validateGroupDecision({ continueConversation: true, mode: 'single' }, group, { ...context, unavailableMemberIds: ['b'] })).toThrow('available conversational partner')
+})
+
+it.each(['@Writer hello', '  @Writer：最近有什么待办事项', '@writer hello'])('recognizes a direct human address: %s', content => {
+  expect(directGroupDecision({ ...user, content }, group)).toMatchObject({ mode: 'single', memberIds: ['b'], addressedMemberId: 'b' })
+})
+
+it.each(['@all hello', '@everyone hello', '@Writer @Reviewer collaborate', '@Unknown @Writer hello', '@Writer ask @Unknown',
+  'Ask @Writer for help', '> @Writer hello', '`@Writer` hello', '@WriterExtra hello'])('keeps ambiguous and group requests on the policy path: %s', content => {
+  expect(directGroupDecision({ ...user, content }, group)).toBeNull()
+})
+
+it('keeps agent-posted mentions on the policy path', () => {
+  expect(directGroupDecision({ ...user, role: 'assistant', content: '@Writer hello' }, group)).toBeNull()
+})
+
+it.each(['public', 'private'])('lets the direct recipient hand off work without an unrelated coordinator: %s', channel => {
+  const decide = vi.fn().mockRejectedValue(new Error('No planner expected'))
+  const speakers: string[] = []
+  return runGroupConversation({ group, user: { ...user, content: '@Writer start' }, signal: signal(), configuredRouting: true,
+    directMentionRouting: true, decide, reply: async (member, turn, visible) => {
+      speakers.push(member.id)
+      if (member.id === 'b') {
+        expect(turn.directAddress).toBe(true)
+        return channel === 'public' ? [message('b', '@Reviewer check this draft')] : { messages: [], privateMessages: [
+          { id: 'private-request', sender: group.members[1], recipient: group.members[2], content: 'Check this draft', createdAt: 1 }
+        ] }
+      }
+      expect(turn.triggerMessageIds).toEqual([channel === 'public' ? 'b-reply' : 'private-request'])
+      expect(visible[0].id).toBe(user.id)
+      return [message('c', 'Reviewed')]
+    } }).then(result => {
+    expect(result.failed).toBe(false)
+    expect(speakers).toEqual(['b', 'c'])
+    expect(decide).not.toHaveBeenCalled()
+  })
+})
 
 it.each([
   [{ mode: 'ordered', memberIds: ['a'] }, 'mode must be'],

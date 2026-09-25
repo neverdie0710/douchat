@@ -33,6 +33,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   send({method:'item/completed',params:{threadId,item:{type:'agentMessage',phase:'final_answer',text:JSON.stringify({approval:p.result,approvalPolicy})}}});
   send({method:'turn/completed',params:{threadId,turn:{status:'completed'}}});return;
  }
+ if(p.type==='control_response') {send({type:'result',result:JSON.stringify(p.response.response)});return;}
  if(p.type==='control_request') {send({type:'control_response',response:{subtype:'success',request_id:p.request_id,response:{models:[{value:'test-model',displayName:'Test model'}]}}});return;}
  if(p.method==='initialize') send({id:p.id,result:{}});
  if(p.method==='thread/start') {model=p.params.model;approvalPolicy=p.params.approvalPolicy;send({id:p.id,result:{thread:{id:'thread-'+process.pid}}});}
@@ -42,6 +43,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt===null)return;
  count++;
  if(p.method)send({id:p.id,result:{turn:{id:'turn-'+count}}});
+ if(prompt.startsWith('claude-approval')) {
+  send({type:'control_request',request_id:'claude-tool-1',request:{subtype:'can_use_tool',tool_name:'Bash',input:{command:'git clone https://example.com/skill.git'}}});
+  if(prompt==='claude-approval-cancel')setTimeout(()=>{send({type:'control_cancel_request',request_id:'claude-tool-1'});send({type:'result',result:'cancelled'});},30);
+  return;
+ }
  if(prompt.startsWith('approval')) {
   send({method:'turn/started',params:{threadId,turn:{id:'turn-'+count}}});
   send({id:999,method:'mcpServer/elicitation/request',params:{threadId:prompt==='approval-other-thread'?'another-thread':threadId,turnId:prompt==='approval-old-turn'?'old-turn':'turn-'+count,
@@ -52,6 +58,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt==='crash'){process.exit(12);return;}
  if(prompt==='invalid'){send(null);return;}
  if(prompt==='wait')return;
+ if(prompt==='work-then-no-credit'){send({type:'assistant',message:{content:[{type:'tool_use',name:'Bash'}]}});send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='no-credit' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='auth-conflict' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set'});return;}
  if(prompt==='spawn-child') { const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});send({method:'item/completed',params:{threadId,item:{type:'agentMessage',text:String(child.pid)}}});send({method:'turn/completed',params:{threadId,turn:{status:'completed'}}});return; }
@@ -80,6 +87,43 @@ async function connected(kind: 'codex' | 'claude' = 'codex') {
 }
 const options = { sessionKey: 'direct:conversation:topic', continuationPrompt: 'next turn' }
 describe('persistent local agent connections', () => {
+  it.each([true, false])('routes Claude tool permission and returns the owner decision: %s', async allow => {
+    const child = new LocalAgentConnection('claude'); children.push(child)
+    await child.connect(script, directory, process.env, undefined, false, undefined, true)
+    const handler = vi.fn(async (_request: { message: string; details: string }) => { if (!allow) throw new Error('Denied') })
+    const progress = vi.fn()
+    const result = JSON.parse(await child.turn('claude-approval', undefined, progress, handler))
+    expect(progress.mock.calls.some(([state]) => state.phase === 'approval')).toBe(true)
+    expect(progress.mock.calls.at(-1)![0].phase).not.toBe('approval')
+    expect(handler).toHaveBeenCalledOnce()
+    expect(JSON.parse(handler.mock.calls[0][0].details).input.command).toContain('git clone')
+    expect(result.behavior).toBe(allow ? 'allow' : 'deny')
+    if (allow) expect(result.updatedInput).toEqual({ command: 'git clone https://example.com/skill.git' })
+    expect(result.updatedPermissions).toBeUndefined()
+    const metadata = JSON.parse(await child.turn('args', undefined, undefined, handler))
+    expect(metadata.args).toContain('--permission-prompt-tool')
+    expect(metadata.args).not.toContain('dontAsk')
+    expect(metadata.args).not.toContain('--dangerously-skip-permissions')
+  })
+  it('denies Claude tools without an active approval handler', async () => {
+    const child = await connected('claude')
+    expect(JSON.parse(await child.turn('claude-approval', undefined)).behavior).toBe('deny')
+  })
+  it.each(['cancel', 'stop'])('cancels pending Claude approval on %s', async action => {
+    const child = await connected('claude')
+    const stop = new AbortController()
+    let approvalSignal: AbortSignal | undefined
+    const handler = vi.fn((_request, signal: AbortSignal) => new Promise<void>((_resolve, reject) => {
+      approvalSignal = signal
+      signal.addEventListener('abort', () => reject(new Error('Cancelled')), { once: true })
+    }))
+    const work = child.turn(action === 'cancel' ? 'claude-approval-cancel' : 'claude-approval', stop.signal, undefined, handler)
+    const outcome = action === 'stop' ? expect(work).rejects.toThrow('Stopped') : expect(work).resolves.toBe('cancelled')
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce())
+    if (action === 'stop') stop.abort()
+    await outcome
+    expect(approvalSignal?.aborted).toBe(true)
+  })
   it('routes native Computer Use confirmation through the current owner approval callback', async () => {
     let approve!: () => void
     const onApproval = vi.fn((_request: { message: string; details: string }, _signal: AbortSignal) => new Promise<void>(resolve => { approve = resolve }))
@@ -174,6 +218,33 @@ describe('persistent local agent connections', () => {
     const first = JSON.parse((await runLocalAgent(claude, prompt, undefined, [], options)).text)
     const second = JSON.parse((await runLocalAgent(claude, 'next', undefined, [], options)).text)
     expect(second).toMatchObject({ pid: first.pid, count: 2 })
+  })
+  it('persists successful Claude account authentication across connection recreation', async () => {
+    const profile = join(directory, 'claude-auth-persistence')
+    configureLocalWorkspaces(profile)
+    const claude = { ...config, localAgentId: 'claude' }
+    await runLocalAgent(claude, 'no-credit', undefined, [], options)
+    disposeLocalAgentSessions(config.id)
+    configureLocalWorkspaces(profile)
+    // No continuation override: the fake CLI rejects this prompt whenever an API key is inherited.
+    const result = JSON.parse((await runLocalAgent(claude, 'no-credit', undefined, [], { sessionKey: options.sessionKey })).text)
+    expect(result.args).toContain('--resume')
+    expect(result.count).toBe(2)
+  })
+  it('recovers a legacy resumed Claude conversation on an initial authentication failure', async () => {
+    configureLocalWorkspaces(join(directory, 'claude-auth-legacy'))
+    const claude = { ...config, localAgentId: 'claude' }
+    await runLocalAgent(claude, 'hello', undefined, [], options)
+    disposeLocalAgentSessions(config.id)
+    const result = JSON.parse((await runLocalAgent(claude, 'no-credit', undefined, [], { sessionKey: options.sessionKey })).text)
+    expect(result.args).toContain('--resume')
+    expect(result.count).toBe(2)
+  })
+  it('does not replay Claude work when a billing error follows a tool call', async () => {
+    const claude = { ...config, localAgentId: 'claude' }
+    const validate = vi.mocked(validateLocalAgent).mock.calls.length
+    await expect(runLocalAgent(claude, 'work-then-no-credit', undefined, [], options)).rejects.toThrow('Credit balance')
+    expect(vi.mocked(validateLocalAgent).mock.calls.length - validate).toBe(1)
   })
   it.each(['claude', 'codex'])('passes the configured model to %s and starts a new connection after a model change', async (id) => {
     const agent = { ...config, localAgentId: id, model: 'test-first' }

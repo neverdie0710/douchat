@@ -2,7 +2,7 @@ import { completionReviewPrompt, completionReviewDecision, participationDecision
 import { groupTaskEvidence } from '../shared/bot/groupTasks'
 import { customEndpoint } from '../shared/customModels'
 import { decisionJson, decisionProtocol, type DecisionSettings } from '../shared/groupDecision'
-import { groupDecisionPrompt, validateGroupDecision, type BotGroup, type GroupDecision, type GroupDecisionContext } from '../shared/bot/group'
+import { GROUP_CONTINUITY_INSTRUCTION, groupConversationContinuity, groupDecisionPrompt, validateGroupDecision, type BotGroup, type GroupDecision, type GroupDecisionContext } from '../shared/bot/group'
 import type { CustomProviderRecord } from './customModels'
 import { randomUUID } from 'node:crypto'
 
@@ -65,7 +65,7 @@ export class GroupDecisionService {
   async plan(provider: DecisionProvider, model: string, group: BotGroup, context: GroupDecisionContext, signal: AbortSignal,
     coordinator = group.members.find(member => member.id === group.leadMemberId) ?? group.members[0], lightweight = false): Promise<GroupDecision> {
     if (context.recovery) return this.recover(provider, model, group, context, signal)
-    if (lightweight) {
+    if (lightweight && !groupConversationContinuity(group, context)) {
       try {
         const raw = decisionJson(await this.complete(provider, model, (context.completedTurns.length ? completionReviewPrompt(group, context) : participationPrompt(group, context, coordinator)), signal)) as GroupDecision & { participation?: boolean }
         const simple = raw && raw.participation === undefined && raw.mode
@@ -83,6 +83,7 @@ export class GroupDecisionService {
         requiredCapabilities: { type: 'array', items: { type: 'string', enum: ['filesRead', 'filesWrite', 'network', 'browserControl', 'accountRead', 'accountWrite', 'automation', 'localExecution', 'otherTools'] } }
       }, required: ['id', 'memberId', 'instruction', 'dependsOn', 'expectedOutput', 'publicDeliverable', 'requiredCapabilities'] } }] },
       mode: { type: 'string', enum: ['none', 'single', 'parallel', 'sequential'] },
+      continueConversation: { type: 'boolean' },
       memberIds: { type: 'array', items: { type: 'string', enum: ids } },
       publicDeliverables: { type: 'array', items: { type: 'string', enum: ids } },
       triggerMessageIds: { type: 'array', items: { type: 'string', enum: [...new Set([...context.messages.map(message => message.id), ...context.privateDeliveries.map(message => message.id)])] } },
@@ -91,7 +92,7 @@ export class GroupDecisionService {
       leaderMemberId: { anyOf: [{ type: 'string', enum: ids }, { type: 'null' }] },
       addressedMemberId: { anyOf: [{ type: 'string', enum: ids }, { type: 'null' }] },
       assignments: { type: 'object', additionalProperties: false, properties: Object.fromEntries(ids.map(id => [id, { anyOf: [{ type: 'string' }, { type: 'null' }] }])), required: ids }
-    }, required: ['tasks', 'mode', 'memberIds', 'publicDeliverables', 'triggerMessageIds', 'waitForHuman', 'leaderFirst', 'supervise', 'requireSummary', 'participationOnly', 'participantScope', 'leaderMemberId', 'addressedMemberId', 'assignments'] }
+    }, required: ['continueConversation', 'tasks', 'mode', 'memberIds', 'publicDeliverables', 'triggerMessageIds', 'waitForHuman', 'leaderFirst', 'supervise', 'requireSummary', 'participationOnly', 'participantScope', 'leaderMemberId', 'addressedMemberId', 'assignments'] }
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const raw = decisionJson(await this.complete(provider, model, `${groupDecisionPrompt(group, context, coordinator)}\nIf the response schema requires unused optional fields, use false for flags and null for an unused addressee or member assignment.${correction}`, signal, schema)) as Record<string, unknown>
@@ -210,8 +211,14 @@ export class GroupDecisionService {
         single: 'One clearly suitable agent can directly complete a still-unfinished request.',
         ordered: 'A NEW request for every group member to contribute individually in roster order under the same instructions, observing prior completed contributions as needed. No setup, custom participant order, subset selection, delegated deliverables or earlier unfinished task. Historical tasks do not count as current progress.',
         parallel: 'Several requested independent contributions remain unfinished, with no setup or dependencies.',
-        plan: 'Needs hosting, setup, clarification, contextual pronoun resolution, or complex multi-step planning. Excludes immediate homogeneous full-roster personal contributions (ordered). Unavailable participants alone do not require a new plan.'
+        followup: 'A conversational follow-up to conversationContinuity.memberId, including a personal question using you, a correction, elaboration or acceptance of their offer. Exactly that member should answer; no group planning or summary.',
+        plan: 'Needs hosting, setup, clarification, ambiguous contextual pronoun resolution, or complex multi-step planning. Clear follow-ups to conversationContinuity use followup. Excludes immediate homogeneous full-roster personal contributions (ordered). Unavailable participants alone do not require a new plan.'
       } }
+    }
+    const continuity = groupConversationContinuity(group, context)
+    if (!context.recovery) {
+      const route = questions.route as { instructions: string }
+      route.instructions += `\n${GROUP_CONTINUITY_INSTRUCTION} Choose followup only when conversationContinuity is present.`
     }
     if (context.recovery) {
       delete questions.route
@@ -232,6 +239,7 @@ export class GroupDecisionService {
     const endpoint = customEndpoint(provider.apiBase, provider.kind).replace(/\/chat\/completions$/, '/systemone')
     const data = await this.post(endpoint, provider, { model: settings.model, state: {
       taskEvidence: groupTaskEvidence(context), latestMessage: latest, members, fullRoster: group.members, health: group.health ?? {}, currentLeader: group.leadMemberId,
+      conversationContinuity: continuity,
       completedTurns: context.completedTurns, recovery: context.recovery, privateDeliveryEnvelopes: context.privateDeliveries.map(({ id, sender, recipient, intent }) => ({ id, sender, recipient, intent })),
       messages: context.messages.slice(-12).map(message => ({ ...message, content: message.content.slice(0, 2000) }))
     }, questions }, signal, 8_000)
@@ -256,6 +264,10 @@ export class GroupDecisionService {
       if (!['ignore', 'completed', 'waiting'].includes(stop ?? '') || typeof needsReply !== 'number' || !Number.isFinite(needsReply) || needsReply < 0 || needsReply > .2
         || stop === 'completed' && !context.completedTurns.length) throw new DecisionEscalation('The no-reply decision requires review.', leaderMemberId)
       return { mode: 'none', memberIds: [], triggerMessageIds: [], ...(stop === 'waiting' ? { waitForHuman: true } : {}) }
+    }
+    if (route.choice === 'followup') {
+      if (!continuity) throw new DecisionEscalation('The conversational recipient requires review.', leaderMemberId)
+      return validateGroupDecision({ continueConversation: true, mode: 'single' }, group, context)
     }
     if (!leaderMemberId) throw new DecisionEscalation('The leader must review the coordinator selection.')
     if (route.choice === 'single') {

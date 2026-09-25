@@ -609,7 +609,7 @@ function WorkspaceApp(): ReactElement {
               onTogglePin={togglePin} />
         </MemberProfilePopover>
       )}
-      {uiSnapshot.permissionRequests?.[0] && <AgentPermissionPrompt key={uiSnapshot.permissionRequests[0].id} request={uiSnapshot.permissionRequests[0]} social={socialSnapshot}
+      {uiSnapshot.permissionRequests?.[0] && <AgentPermissionPrompt key={uiSnapshot.permissionRequests[0].id} request={uiSnapshot.permissionRequests[0]} agent={uiSnapshot.agents.find(agent => agent.id === uiSnapshot.permissionRequests![0].agentId)} social={socialSnapshot}
         onResolve={async (allow) => { setSnapshot(await window.douchat.resolveAgentPermission(uiSnapshot.permissionRequests![0].id, allow)) }} />}
       {dialog?.kind === 'add-friend' && <AddFriendModal onClose={() => setDialog(null)} />}
       {dialog && ((dialog.kind === 'bot' && dialog.agent) || dialog.kind === 'agent-permissions' || dialog.kind === 'im-channels' || dialog.kind === 'local-model') && <AgentSettingsDialog

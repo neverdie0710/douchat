@@ -20,8 +20,8 @@ function setup(localAgentId = 'codex') {
   return { store, runtime, agent, conversationId: `direct-${agent.id}` }
 }
 describe('local contact routing', () => {
-  it('shows native Codex app access in the owner permission UI before resuming', async () => {
-    const { store, runtime, agent, conversationId } = setup()
+  it.each(['codex', 'claude'])('shows native %s access in the owner permission UI before resuming', async localAgentId => {
+    const { store, runtime, agent, conversationId } = setup(localAgentId)
     const resumed = vi.fn()
     vi.mocked(runLocalAgent).mockImplementation(async (_config, _prompt, signal, _images, options) => {
       if (!options?.onApproval) throw new Error('Missing native approval handler')
@@ -39,6 +39,54 @@ describe('local contact routing', () => {
     expect(resumed).toHaveBeenCalledOnce()
     expect(runtime.snapshot().permissionRequests).toHaveLength(0)
     expect(store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)?.text).toBe('Approved app access')
+  })
+  it('lets a local Claude request an approved skill install for another owned agent', async () => {
+    const { store, runtime, agent, conversationId } = setup('claude')
+    const target = store.createAgent({ name: 'Target', role: '', instructions: '', color: '', provider: 'gateway', model: 'default' })
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, prompt) => {
+      const url = /Endpoint: (http:\/\/127\.0\.0\.1:\d+\/tools)/.exec(prompt)![1]
+      const authorization = /Authorization: (Bearer [a-f0-9]+)/.exec(prompt)![1]
+      const response = await fetch(url, { method: 'POST', headers: { authorization }, body: JSON.stringify({ tool: 'create_skill', arguments: {
+        targetAgentId: target.id, files: [{ path: 'SKILL.md', content: '---\nname: demo\ndescription: Demo workflow\n---\nUse the workflow.' }]
+      } }) })
+      expect(response.status).toBe(200)
+      return { text: 'Installed', images: [] }
+    })
+    try {
+      const work = runtime.sendMessage(conversationId, 'Create a demo skill for Target')
+      await vi.waitFor(() => expect(runtime.snapshot().permissionRequests).toHaveLength(1))
+      const request = runtime.snapshot().permissionRequests![0]
+      expect(request.agentId).toBe(target.id)
+      expect(request.requesterId).toBe(agent.id)
+      expect(store.agent(target.id)?.skills ?? []).toHaveLength(0)
+      runtime.resolveAgentPermission(request.id, true)
+      await work
+      expect(store.agent(target.id)?.skills?.[0].name).toBe('demo')
+      expect(store.agent(agent.id)?.skills ?? []).toHaveLength(0)
+    } finally { runtime.disposeAgent(agent.id); store.close() }
+  })
+  it('delivers a generated HTML file even if the agent omits its link in the final answer', async () => {
+    const { store, runtime, agent, conversationId } = setup('claude')
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, prompt) => {
+      const url = /Endpoint: (http:\/\/127\.0\.0\.1:\d+\/tools)/.exec(prompt)![1]
+      const authorization = /Authorization: (Bearer [a-f0-9]+)/.exec(prompt)![1]
+      const response = await fetch(url, { method: 'POST', headers: { authorization }, body: JSON.stringify({ tool: 'create_file', arguments: { name: 'slides.html', content: '<html>Douchat slides</html>' } }) })
+      expect(response.status).toBe(200)
+      return { text: 'Created slides.', images: [] }
+    })
+    try {
+      await runtime.sendMessage(conversationId, 'Make HTML slides')
+      const message = store.topicMessages(conversationId, store.activeTopicId(conversationId)).at(-1)!
+      expect(message.text).toContain('[slides.html](<douchat-file:')
+      const url = /<([^>]+)>/.exec(message.text)![1]
+      const { fileURLToPath } = await import('node:url')
+      const { readFile } = await import('node:fs/promises')
+      const path = fileURLToPath(url.replace('douchat-file:', 'file:'))
+      expect(await store.ownedDocumentPath(path)).toBe(path)
+      expect(await readFile(path, 'utf8')).toBe('<html>Douchat slides</html>')
+      store.setCurrentAccountId('another-owner')
+      await expect(store.ownedDocumentPath(path)).rejects.toThrow('Document not found')
+    } finally { runtime.disposeAgent(agent.id); store.close() }
   })
   it('calls the local CLI without endpoint auth and isolates topic history', async () => {
     const { store, runtime, conversationId } = setup()

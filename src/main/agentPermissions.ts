@@ -1,10 +1,41 @@
 import { randomUUID } from 'node:crypto'
-import { agentPermissions, type PermissionRequest, type SensitiveCapability } from '../shared/agentPermissions'
+import { agentPermissions, type PermissionApproval, type PermissionRequest, type SensitiveCapability } from '../shared/agentPermissions'
 import type { AgentConfig } from '../shared/types'
 
+/** Scopes come from known tool contracts, never model-supplied approval labels.
+ * Writes to existing files, sending, scheduling, clicks and native execution
+ * intentionally remain single-use. */
+function reusableScope(input: Pick<PermissionRequest, 'capability' | 'operation' | 'details'>): string | undefined {
+  let args: Record<string, unknown>
+  try { args = JSON.parse(input.details); if (!args || Array.isArray(args) || typeof args !== 'object') return } catch { return }
+  if (['computer_open', 'native_web_fetch'].includes(input.operation) && ['network', 'browserControl'].includes(input.capability)) {
+    try { const url = new URL(String(args.url)); if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) return url.origin } catch { return }
+  }
+  if (input.capability === 'filesRead' && ['computer_list_files', 'computer_open_file', 'native_read_file'].includes(input.operation)) {
+    if (typeof args.path === 'string' && args.path.startsWith('/') && !args.path.split('/').includes('..')) return args.path
+    if (input.operation === 'computer_list_files' && args.path === undefined) return 'Downloads / Desktop / Documents: directory listing'
+  }
+  if (input.capability === 'filesWrite' && input.operation === 'create_file') return 'New files in task output storage'
+  if (input.capability === 'accountRead' && ['email_search', 'email_read'].includes(input.operation) && typeof args.accountId === 'string' && args.accountId) {
+    return JSON.stringify({ account: args.accountId, folder: args.folder || 'INBOX' })
+  }
+  return undefined
+}
+
+/** Only native protocols with explicit read-only tool contracts are classified.
+ * Free-form command descriptions and Computer Use requests cannot grant a scope. */
+export function nativeReadPermission(runtime: string | undefined, details: string): { capability: SensitiveCapability; operation: string; details: string } | undefined {
+  if (runtime !== 'claude') return
+  try {
+    const request = JSON.parse(details)
+    if (request.tool === 'Read' && typeof request.input?.file_path === 'string') return { capability: 'filesRead', operation: 'native_read_file', details: JSON.stringify({ path: request.input.file_path }) }
+    if (request.tool === 'WebFetch' && typeof request.input?.url === 'string') return { capability: 'network', operation: 'native_web_fetch', details: JSON.stringify({ url: request.input.url }) }
+  } catch { return }
+}
+
 export function toolCapability(name: string): SensitiveCapability {
-  if (name === 'computer_list_files' || name === 'computer_open_file') return 'filesRead'
-  if (['computer_make_directory', 'computer_move_file'].includes(name)) return 'filesWrite'
+  if (name === 'computer_list_files' || name === 'computer_open_file' || name === 'read_skill_file' || name === 'list_skill_files') return 'filesRead'
+  if (['computer_make_directory', 'computer_move_file', 'create_file'].includes(name)) return 'filesWrite'
   if (name === 'computer_open') return 'network'
   if (name.startsWith('computer_')) return 'browserControl'
   if (/^(email|mail)_/.test(name)) return /send|delete|move|mark|draft|reply/.test(name) ? 'accountWrite' : 'accountRead'
@@ -14,19 +45,37 @@ export function toolCapability(name: string): SensitiveCapability {
 
 /** Decisions live in the owner main process, never in model arguments or requester IPC. */
 export class AgentPermissionBroker {
-  private pending = new Map<string, { request: PermissionRequest; finish: (result: 'allowed' | 'declined' | 'expired' | 'cancelled') => void }>()
+  private tasks = new Map<string, { ownerId: string; agentId: string; requesterId?: string; grants: Set<string> }>()
+  private pending = new Map<string, { taskId?: string; grant?: string; request: PermissionRequest; finish: (result: 'allowed' | 'declined' | 'expired' | 'cancelled') => void }>()
   constructor(private readonly currentOwner: () => string | undefined, private readonly changed: () => void) {}
   snapshot(): PermissionRequest[] { return [...this.pending.values()].map((p) => p.request).filter((p) => p.ownerId === this.currentOwner()) }
   hasPending(agentId: string): boolean { return [...this.pending.values()].some((entry) => entry.request.agentId === agentId) }
-  resolve(id: string, allow: boolean): void {
+  beginTask(ownerId: string, agentId: string, requesterId?: string): string {
+    if (!ownerId || ownerId !== this.currentOwner()) throw new Error('Agent account changed')
+    const id = randomUUID()
+    this.tasks.set(id, { ownerId, agentId, requesterId, grants: new Set() })
+    return id
+  }
+  endTask(id: string): void {
+    this.tasks.delete(id)
+    for (const entry of this.pending.values()) if (entry.taskId === id) entry.finish('cancelled')
+  }
+  resolve(id: string, allow: PermissionApproval): void {
     const entry = this.pending.get(id)
     if (!entry || entry.request.ownerId !== this.currentOwner()) throw new Error('Permission request is no longer available')
-    entry.finish(allow === true ? 'allowed' : 'declined')
+    if (allow !== true && allow !== false && allow !== 'task') throw new Error('Invalid permission approval')
+    if (allow === 'task') {
+      const task = entry.taskId ? this.tasks.get(entry.taskId) : undefined
+      if (!task || !entry.grant || !entry.request.taskScope) throw new Error('Task approval is unavailable for this operation')
+      task.grants.add(entry.grant)
+      for (const pending of this.pending.values()) if (pending.taskId === entry.taskId && pending.grant === entry.grant) pending.finish('allowed')
+    } else entry.finish(allow ? 'allowed' : 'declined')
   }
   cancelAgent(id: string): void {
+    for (const [taskId, task] of this.tasks) if (task.agentId === id) this.endTask(taskId)
     for (const entry of this.pending.values()) if (entry.request.agentId === id) entry.finish('cancelled')
   }
-  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details' | 'context'>, signal?: AbortSignal, forceAsk = false): Promise<void> {
+  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details' | 'context'>, signal?: AbortSignal, forceAsk = false, taskId?: string): Promise<void> {
     signal?.throwIfAborted()
     if (!config.ownerId || config.ownerId !== this.currentOwner()) throw new Error('Agent account changed')
     if (input.details.length > 64000) throw new Error('Operation is too large to review; split it into smaller requests')
@@ -34,6 +83,11 @@ export class AgentPermissionBroker {
     const rule = input.capability === 'groupHumans' || input.capability === 'groupAgents' ? policy[input.capability] : policy.sensitive[input.capability]
     if (rule === 'deny') throw new Error('The owner has disabled this permission')
     if (rule === 'allow' && !forceAsk) return
+    const task = taskId ? this.tasks.get(taskId) : undefined
+    if (taskId && (!task || task.ownerId !== config.ownerId || task.agentId !== config.id || task.requesterId !== input.requesterId)) throw new Error('Permission task changed')
+    const scope = !forceAsk && task ? reusableScope(input) : undefined
+    const grant = scope ? JSON.stringify([input.capability, ['email_read', 'email_search'].includes(input.operation) ? 'email_read' : input.operation, scope, input.requesterKind, input.context, input.roomName]) : undefined
+    if (grant && task?.grants.has(grant)) return
     if (this.pending.size >= 20) throw new Error('Too many permission requests')
     const result = await new Promise<'allowed' | 'declined' | 'expired' | 'cancelled'>((resolve) => {
       const id = randomUUID()
@@ -47,7 +101,7 @@ export class AgentPermissionBroker {
         this.changed()
       }
       timer = setTimeout(() => finish('expired'), 10 * 60_000)
-      this.pending.set(id, { request: { ...input, id, ownerId: config.ownerId!, agentId: config.id, agentName: config.name, createdAt: Date.now(), details: input.details }, finish })
+      this.pending.set(id, { taskId, grant, request: { ...input, ...(scope ? { taskScope: scope } : {}), id, ownerId: config.ownerId!, agentId: config.id, agentName: config.name, createdAt: Date.now(), details: input.details }, finish })
       signal?.addEventListener('abort', abort, { once: true })
       if (signal?.aborted) abort()
       this.changed()

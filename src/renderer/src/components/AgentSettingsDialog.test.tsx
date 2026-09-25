@@ -33,13 +33,13 @@ async function input(element: HTMLInputElement | HTMLTextAreaElement, value: str
 }
 it('retains file drafts between tabs, saves both files, and keeps the editor open', async () => {
   await click('Customize')
-  expect([...document.querySelectorAll('.agent-file-tabs [role=tab]')].map(tab => tab.textContent)).toEqual(['Soul', 'Identity', 'Bootstrap'])
+  expect([...document.querySelectorAll('.agent-file-tabs [role=tab]')].map(tab => tab.textContent)).toEqual(['Soul', 'Identity', 'Bootstrap', 'User profile', 'Memory'])
   await input(document.querySelector('#agent-file-content')!, 'Speak concisely')
   await click('Identity'); await input(document.querySelector('#agent-file-content')!, 'I am a writing assistant')
   await click('Models'); await click('Customize'); await click('Soul')
   expect((document.querySelector('#agent-file-content') as HTMLTextAreaElement).value).toBe('Speak concisely')
   await click('Save')
-  expect(update).toHaveBeenCalledWith('alpha', { systemFiles: { 'SOUL.md': 'Speak concisely', 'IDENTITY.md': 'I am a writing assistant' } })
+  expect(update).toHaveBeenCalledWith('alpha', { systemFiles: { 'SOUL.md': 'Speak concisely', 'IDENTITY.md': 'I am a writing assistant' }, expectedSystemFiles: {} })
   expect(close).not.toHaveBeenCalled()
   expect(document.querySelector('[role="status"]')?.textContent).toBe('Saved')
 })
@@ -52,15 +52,40 @@ it('keeps drafts after a failed save and asks before closing', async () => {
   expect(window.confirm).toHaveBeenCalled(); expect(close).not.toHaveBeenCalled()
   expect((document.querySelector('#agent-file-content') as HTMLTextAreaElement).value).toBe('Draft')
 })
-it('adds and disables a skill without opening another window', async () => {
+it('uploads a skill with a read-only preview and allows disabling it', async () => {
   const open = vi.spyOn(window, 'open')
-  await act(async () => root.render(<AgentSettingsDialog key="skills" initialTab="skills" agent={agent} localAgents={[]} cloudModels={[]} onUpdate={update} onClose={close} onDelete={vi.fn()} onModelSettings={vi.fn()} onCreditsSettings={vi.fn()} />))
-  await click('Add skill')
-  await input(document.querySelector('.agent-skill-editor input')!, 'Review')
-  await input(document.querySelector('#skill-content')!, 'Check edge cases')
+  await click('Skills')
+  expect(document.querySelector('.settings-tabs [aria-current="page"]')?.textContent).toBe('Skills')
+  expect([...document.querySelectorAll('button')].some(button => button.textContent === 'Add skill')).toBe(false)
+  await click('Upload skills')
+  const fileInput = document.querySelector<HTMLInputElement>('.skill-upload-dialog input[type="file"]')!
+  const content = '---\nname: Review\ndescription: Review code\n---\nCheck edge cases'
+  const parseArchive = vi.fn().mockResolvedValue([
+    { id: 'review', name: 'Review', description: 'Review code', content, enabled: true, files: [] },
+    { id: 'writer', name: 'Writer', content: 'Write clearly', enabled: true, files: [] }
+  ])
+  Object.assign(window.douchat, { parseSkillArchive: parseArchive })
+  const file = new File(['zip'], 'skills.zip', { type: 'application/zip' })
+  Object.defineProperty(file, 'arrayBuffer', { value: async () => new Uint8Array([1, 2, 3]).buffer })
+  Object.defineProperty(fileInput, 'files', { configurable: true, value: [file] })
+  await act(async () => fileInput.dispatchEvent(new Event('change', { bubbles: true })))
+  expect(parseArchive).not.toHaveBeenCalled()
+  await click('Upload')
+  expect(parseArchive).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]))
+  expect(document.querySelector('.skill-upload-dialog')).toBeNull()
+  expect(document.querySelectorAll('.agent-skills-list article')).toHaveLength(2)
+  expect(document.querySelector('#skill-content')).toBeNull()
+  expect(document.querySelector('.agent-skill-badge')?.textContent).toBe('skill')
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="View skill Review"]')!.click())
+  expect(document.querySelector('#skill-detail-title')?.textContent).toBe('Skill details')
+  expect(document.querySelector('.skill-source')?.textContent).toContain('name: Review')
+  expect(document.querySelector('.skill-markdown')?.textContent).toContain('Check edge cases')
+  expect(document.querySelector('.skill-detail-dialog textarea')).toBeNull()
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close skill details"]')!.click())
+  expect(document.querySelector('.skill-detail-dialog')).toBeNull()
   await act(async () => document.querySelector<HTMLInputElement>('.agent-skill-toggle input')!.click())
   await click('Save')
-  expect(update).toHaveBeenCalledWith('alpha', { skills: [expect.objectContaining({ name: 'Review', content: 'Check edge cases', enabled: false })] })
+  expect(update).toHaveBeenCalledWith('alpha', { skills: [expect.objectContaining({ name: 'Review', content, enabled: false }), expect.objectContaining({ name: 'Writer', enabled: true })] })
   await click('Permissions'); await click('Channels'); await click('Profile')
   expect(document.querySelectorAll('dialog[open]')).toHaveLength(1)
   expect(open).not.toHaveBeenCalled()
@@ -80,4 +105,26 @@ it('retains channel credentials while switching sections', async () => {
   await input(document.querySelector('.im-setup input')!, 'draft-token')
   await click('Profile'); await click('Channels')
   expect((document.querySelector('.im-setup input') as HTMLInputElement).value).toBe('draft-token')
+})
+
+it('shows only the current agent private profile and memory in read-only tabs', async () => {
+  const getUserMemory = vi.fn().mockResolvedValue({ userId: 'owner', agentId: 'alpha', notes: 'My profile', memoryNotes: 'Our agreement', facts: [
+    { key: 'preference', kind: 'profile', text: 'Enjoy reading' }, { key: 'progress', kind: 'memory', text: 'Finished chapter one' }
+  ] })
+  const getGroupMemory = vi.fn()
+  Object.assign(window.douchat, { getUserMemory, getGroupMemory })
+  await click('Customize')
+  await input(document.querySelector('#agent-file-content')!, 'Unsaved soul')
+  await click('User profile')
+  expect(getUserMemory).toHaveBeenLastCalledWith('alpha')
+  let editor = document.querySelector<HTMLTextAreaElement>('#agent-file-content')!
+  expect(editor.readOnly).toBe(true)
+  expect(editor.value).toBe('My profile\n\nEnjoy reading')
+  await click('Memory')
+  editor = document.querySelector<HTMLTextAreaElement>('#agent-file-content')!
+  expect(editor.value).toBe('Our agreement\n\nFinished chapter one')
+  expect(editor.readOnly).toBe(true)
+  expect(getGroupMemory).not.toHaveBeenCalled()
+  await click('Soul')
+  expect(document.querySelector<HTMLTextAreaElement>('#agent-file-content')!.value).toBe('Unsaved soul')
 })

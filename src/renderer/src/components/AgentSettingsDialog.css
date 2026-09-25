@@ -23,7 +23,7 @@ html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: 
 .agent-settings-panel[hidden] { display: none; }
 .agent-settings-dialog .settings-modal .settings-heading { padding-right: 0; }
 .agent-settings-dialog .agent-settings-panel > .settings-heading { padding-right: 110px; }
-.agent-settings-heading .primary-button, .agent-skills-toolbar button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.agent-settings-heading .primary-button, .agent-skills-header-actions button { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .agent-settings-dialog.messenger .agent-settings-embedded .agent-modal { position: static; width: 100%; max-width: none; max-height: none; border: 0; box-shadow: none; border-radius: 0; background: transparent; padding: 0; animation: none; overflow: visible; }
 .agent-settings-embedded .edit-contact-heading, .agent-settings-embedded .im-heading { display: none; }
 .agent-settings-dialog .agent-settings-embedded .permission-body,
@@ -36,7 +36,9 @@ html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: 
 .agent-settings-dialog .agent-settings-embedded .edit-contact-footer .primary-button { min-width: 84px; min-height: 36px; padding: 8px 16px; }
 .agent-settings-embedded .edit-contact-footer .secondary-button { display: none; }
 .agent-settings-dialog .secondary-button.danger { color: #ce3434; }
-.agent-settings-delete { margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--line); }
+.agent-settings-delete { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; }
+.agent-settings-delete h2 { margin: 0 0 6px; font-size: 14px; font-weight: 550; }
+.agent-settings-delete p, .agent-settings-advanced-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .agent-settings-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-600); margin-left: auto; }
 .agent-settings-saved { color: var(--accent-600); font-size: 13px; margin: 0 0 12px; }
 .agent-file-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
@@ -45,17 +47,20 @@ html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: 
 .agent-file-label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 10px; }
 .agent-markdown-editor { display: block; box-sizing: border-box; width: 100%; min-height: 280px; height: min(48vh, 440px); resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--canvas); color: var(--ink); font: 13px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .agent-settings-dialog :is(button,input,textarea,select):focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
-.agent-skills-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
-.agent-skills-toolbar > label { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 140px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-.agent-skills-toolbar input { min-width: 0; width: 100%; border: 0; background: transparent; color: var(--ink); outline: none; }
 .agent-skills-empty { padding: 60px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; margin-top: 20px; }
-.agent-skills-list { display: grid; gap: 10px; margin-top: 20px; }
-.agent-skills-list article { display: flex; align-items: center; gap: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
-.agent-skills-list article.selected { border-color: var(--accent-500); }
-.agent-skill-name { flex: 1; min-width: 0; text-align: left; background: transparent; border: 0; color: var(--ink); cursor: pointer; overflow-wrap: anywhere; }
-.agent-skill-name small { display: block; color: var(--muted); margin-top: 5px; }
-.agent-skill-toggle { display: flex; gap: 6px; align-items: center; font-size: 12px; white-space: nowrap; }
-.agent-skill-editor { margin-top: 24px; }
+.agent-skills-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); gap: 16px; margin-top: 24px; }
+.agent-skill-card { min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; background: var(--canvas); overflow: hidden; }
+.agent-skill-card:hover, .agent-skill-card:focus-within { border-color: var(--accent-300); }
+.agent-skill-card-main { display: flex; flex: 1; flex-direction: column; gap: 18px; width: 100%; padding: 20px 20px 12px; border: 0; background: transparent; text-align: left; font: inherit; color: var(--ink); cursor: pointer; }
+.agent-skill-card-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.agent-skill-card-title { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 6px; }
+.agent-skill-card-title strong { font-size: 15px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; }
+.agent-skill-badge { display: inline-block; padding: 2px 9px; border: 1px solid var(--line); border-radius: 20px; color: var(--ink); font-size: 11px; font-weight: 400; line-height: 1.4; }
+.agent-skill-description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--muted); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.agent-skill-card-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 16px 12px 20px; }
+.agent-skill-toggle { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
+.agent-skill-toggle input { accent-color: var(--accent-600); }
+.agent-skill-card-main:focus-visible { outline-offset: -3px; }
 @media (max-width: 720px) {
   .agent-settings-dialog { width: calc(100vw - 28px); height: calc(100vh - 28px); }
   .agent-settings-dialog .agent-settings-layout { grid-template-columns: 66px minmax(0, 1fr); }
@@ -64,3 +69,131 @@ html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: 
   .agent-settings-dialog .agent-settings-heading { flex-wrap: wrap; }
 }
 .agent-customize-panel > .settings-note { margin-top: 16px; }
+
+.skill-upload-dialog { box-sizing: border-box; width: min(600px, calc(100vw - 40px)); max-height: calc(100vh - 48px); overflow-y: auto; border: 1px solid var(--line); border-radius: 18px; padding: 24px; background: var(--canvas); color: var(--ink); }
+.skill-upload-dialog::backdrop { background: rgb(0 0 0 / 28%); }
+.skill-upload-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.skill-upload-dialog h2 { margin: 0; font-size: 21px; }
+.skill-upload-dropzone { display: flex; width: 100%; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; border: 2px dashed var(--line); border-radius: 16px; background: var(--surface); color: var(--muted); font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.skill-upload-dropzone span { max-width: 100%; }
+.skill-upload-dropzone:is(:hover, .dragging) { border-color: var(--accent-500); background: var(--accent-050); color: var(--accent-600); }
+.skill-upload-dropzone:disabled { cursor: wait; opacity: .65; }
+.skill-upload-requirements h3 { font-size: 16px; margin: 24px 0 10px; }
+.skill-upload-requirements ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.skill-upload-requirements li + li { margin-top: 6px; }
+.skill-upload-dialog > footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 28px; }
+.skill-upload-dialog > footer button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.messenger.skill-upload-dialog > footer :is(.primary-button, .secondary-button) { box-sizing: border-box; min-width: 80px; min-height: 36px; padding: 9px 18px; border-radius: 9px; font-family: inherit; font-size: calc(13px * var(--font-scale, .92)); font-weight: 550; line-height: 1.4; }
+.skill-upload-dialog > footer .secondary-button { color: var(--ink); }
+.skill-upload-dialog > footer .secondary-button:disabled { opacity: .45; cursor: default; }
+.skill-upload-dialog :is(button,input):focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
+
+.skill-detail-dialog { box-sizing: border-box; width: min(1120px, calc(100vw - 40px)); height: min(820px, calc(100vh - 48px)); max-width: none; max-height: none; overflow: hidden; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--canvas); color: var(--ink); }
+.skill-detail-dialog::backdrop { background: rgb(0 0 0 / 28%); }
+.skill-detail-header { height: 72px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.skill-detail-header > div { display: flex; align-items: center; gap: 14px; }
+.skill-detail-header h2 { margin: 0; font-size: 17px; font-weight: 550; }
+.skill-detail-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); height: calc(100% - 73px); }
+.skill-files { min-width: 0; overflow: auto; padding: 20px 10px; border-right: 1px solid var(--line); }
+.skill-files > p { margin: 0 14px 12px; color: var(--muted); font-size: 14px; }
+.skill-files ul { list-style: none; padding: 0; margin: 0; }
+.skill-file-row { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 34px; padding: 7px 10px; background: transparent; border: 0; border-radius: 6px; font: inherit; font-size: 13px; text-align: left; color: var(--muted); cursor: pointer; }
+.skill-file-row svg { flex-shrink: 0; }
+.skill-file-row span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.skill-file-row:hover, .skill-file-row.active { background: var(--surface); color: var(--ink); }
+.skill-file-preview { min-width: 0; overflow: auto; padding: 32px; }
+.skill-source { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin-bottom: 32px; }
+.skill-source-heading { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--sidebar); font-size: 13px; }
+.skill-source pre { margin: 0; padding: 20px; overflow: auto; background: var(--surface); font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
+.skill-yaml-key { color: #c53f35; }
+.skill-yaml-value { color: #377b3a; }
+:root[data-theme='dark'] .skill-yaml-key { color: #ff938a; }
+:root[data-theme='dark'] .skill-yaml-value { color: #90ce91; }
+.skill-markdown { line-height: 1.75; font-size: 14px; overflow-wrap: anywhere; }
+.skill-markdown h1 { font-size: 23px; line-height: 1.4; margin: 24px 0 14px; font-weight: 600; }
+.skill-markdown h2 { font-size: 19px; line-height: 1.45; margin: 22px 0 12px; font-weight: 600; }
+.skill-markdown h3 { font-size: 16px; line-height: 1.5; margin: 18px 0 10px; font-weight: 600; }
+.skill-markdown :is(h4, h5, h6) { font-size: 14px; line-height: 1.5; margin: 16px 0 8px; font-weight: 600; }
+.skill-markdown > :first-child { margin-top: 0; }
+.skill-markdown p { margin: 10px 0; }
+.skill-markdown blockquote { margin: 16px 0; padding: 4px 14px; border-left: 3px solid var(--line); color: var(--muted); }
+.skill-markdown blockquote > p { margin: 6px 0; }
+.skill-markdown blockquote:has(> h2, > h3, > ul, > ol) { padding: 12px 18px; border-radius: 0 8px 8px 0; background: var(--sidebar); color: var(--ink); }
+.skill-markdown hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line); }
+.skill-markdown li { margin: 4px 0; }
+.skill-markdown ul, .skill-markdown ol { padding-left: 24px; }
+.skill-markdown pre { overflow: auto; padding: 14px 16px; background: var(--surface); border-radius: 8px; font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.skill-markdown :not(pre) > code { background: var(--surface); padding: 2px 5px; border-radius: 4px; }
+.skill-markdown .skill-table-scroll { display: block; width: 100%; overflow-x: auto; margin: 20px 0; }
+.skill-markdown table { display: table; width: 100%; border-collapse: collapse; font-size: 14px; }
+.skill-markdown th, .skill-markdown td { min-width: 140px; vertical-align: top; text-align: left; }
+/* Streamdown utility classes are not loaded in the desktop app. Keep its
+   height-limited code containers scrollable through explicit scoped styles. */
+.skill-markdown [data-streamdown='code-block'] { margin: 16px 0; }
+.skill-markdown [data-streamdown='code-block-header'] { padding: 6px 12px; color: var(--muted); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.skill-markdown [data-streamdown='code-block-header']:is([data-language='plain' i], [data-language='plaintext' i], [data-language='text' i], [data-language='txt' i], [data-language=''], :not([data-language])) { display: none; }
+.skill-markdown [data-streamdown='code-block-body'] { overflow: auto; }
+.skill-markdown [data-streamdown='code-block-body'] pre { margin: 0; }
+.skill-markdown th, .skill-markdown td { border: 1px solid var(--line); padding: 6px 10px; }
+.skill-markdown a { color: var(--accent-600); }
+.skill-file-notice { color: var(--accent-600); font-size: 12px; }
+.skill-file-unavailable { text-align: center; padding: 60px 16px; color: var(--muted); overflow-wrap: anywhere; }
+.skill-detail-dialog button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: -2px; }
+@media (max-width: 640px) {
+  .skill-detail-header { padding: 0 12px; }
+  .skill-detail-header > div { gap: 6px; }
+  .skill-detail-header h2 { font-size: 16px; }
+  .skill-detail-layout { grid-template-columns: 150px minmax(0, 1fr); }
+  .skill-files { padding: 16px 6px; }
+  .skill-file-preview { padding: 18px; }
+}
+
+.agent-skills-header-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+
+.skill-file-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.skill-file-viewer .skill-file-preview { flex: 1; min-height: 0; padding-top: 20px; }
+.skill-file-toolbar { display: flex; align-items: center; gap: 12px; flex-shrink: 0; padding: 14px 24px; border-bottom: 1px solid var(--line); }
+.skill-file-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.skill-view-modes { display: flex; padding: 3px; gap: 2px; background: var(--surface); border-radius: 8px; }
+.skill-view-modes button { border: 0; border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 12px; color: var(--muted); background: transparent; cursor: pointer; white-space: nowrap; }
+.skill-view-modes button[aria-pressed='true'] { color: var(--ink); background: var(--canvas); box-shadow: 0 1px 3px #0001; }
+.skill-view-modes button:disabled { opacity: .45; cursor: default; }
+.skill-image-preview { display: block; max-width: 100%; height: auto; margin: auto; }
+@media (max-width: 640px) { .skill-file-toolbar { padding: 10px; gap: 6px; flex-wrap: wrap; } .skill-file-path { flex-basis: 100%; } }
+
+.skill-file-viewer .skill-file-source { padding: 0; overflow-x: hidden; }
+.skill-file-source > .skill-file-notice { margin: 8px 16px; }
+.skill-code-view { min-width: 0; min-height: 100%; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 4; }
+.skill-code-content { margin: 0; padding: 8px 0; border: 0; border-radius: 0; background: transparent; color: var(--ink); font: inherit; white-space: normal; }
+.skill-code-content code { font: inherit; }
+.skill-code-line { display: grid; grid-template-columns: 44px minmax(0, 1fr); }
+.skill-code-gutter { box-sizing: border-box; padding-right: 10px; border-right: 1px solid var(--line); color: var(--muted); text-align: right; user-select: none; }
+.skill-code-gutter::before { content: attr(data-line); }
+.skill-code-text { min-width: 0; min-height: 1.5em; padding: 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.skill-code-view .hljs-comment, .skill-code-view .hljs-quote { color: #6a737d; }
+.skill-code-view .hljs-keyword, .skill-code-view .hljs-selector-tag, .skill-code-view .hljs-literal, .skill-code-view .hljs-deletion { color: #b42338; }
+.skill-code-view .hljs-string, .skill-code-view .hljs-regexp, .skill-code-view .hljs-addition { color: #267044; }
+.skill-code-view .hljs-number, .skill-code-view .hljs-attr, .skill-code-view .hljs-built_in, .skill-code-view .hljs-variable { color: #075b9a; }
+.skill-code-view .hljs-title, .skill-code-view .hljs-section, .skill-code-view .hljs-type { color: #7252a3; }
+.skill-code-view .hljs-meta, .skill-code-view .hljs-symbol, .skill-code-view .hljs-bullet { color: #975817; }
+.skill-code-view .hljs-strong { font-weight: 700; }
+.skill-code-view .hljs-emphasis { font-style: italic; }
+[data-theme='dark'] .skill-code-view .hljs-comment, [data-theme='dark'] .skill-code-view .hljs-quote { color: #9da8b5; }
+[data-theme='dark'] .skill-code-view :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-deletion) { color: #ff929c; }
+[data-theme='dark'] .skill-code-view :is(.hljs-string, .hljs-regexp, .hljs-addition) { color: #98d8a5; }
+[data-theme='dark'] .skill-code-view :is(.hljs-number, .hljs-attr, .hljs-built_in, .hljs-variable) { color: #8bcaff; }
+[data-theme='dark'] .skill-code-view :is(.hljs-title, .hljs-section, .hljs-type) { color: #c9adff; }
+[data-theme='dark'] .skill-code-view :is(.hljs-meta, .hljs-symbol, .hljs-bullet) { color: #edc087; }
+
+.agent-archive-panel { margin-bottom: 24px; }
+.agent-archive-panel > .agent-settings-delete { margin-bottom: 16px; }
+.agent-archive-panel .agent-settings-delete > div { flex: 1; min-width: min(240px, 100%); }
+.agent-archive-preview { border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin: 16px 0; overflow-wrap: anywhere; }
+.agent-archive-preview h3 { margin: 0 0 12px; font-size: 14px; }
+.agent-archive-preview p { font-size: 13px; line-height: 1.6; color: var(--muted); }
+.agent-archive-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+
+.agent-archive-preview label { display: grid; gap: 10px; font-size: 13px; }
+.agent-archive-preview select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; }
+
+.agent-archive-panel .agent-settings-delete .agent-archive-export-status { margin-top: 8px; color: var(--accent-600); }

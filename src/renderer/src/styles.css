@@ -2629,13 +2629,13 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 .local-agent-row-aside { display: flex; min-width: 92px; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 2px; }
 .local-agent-version { color: var(--muted); font: 11px ui-monospace, SFMono-Regular, monospace; white-space: nowrap; }
 .local-agent-remove { flex-shrink: 0; color: var(--muted); }
-.settings-content .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex-shrink: 0; white-space: nowrap; }
+:is(.settings-content, .skill-upload-dialog, .skill-detail-dialog) .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex-shrink: 0; white-space: nowrap; }
 .settings-content button:disabled { opacity: .45; cursor: default; }
 .local-settings-link { justify-self: start; border: 0; background: none; padding: 0; color: var(--brand-ink); font-size: calc(12px * var(--font-scale, 0.92)); cursor: pointer; }
 .settings-error { font-size: calc(13px * var(--font-scale, 0.92)); color: #b83d32; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .local-agent-row-aside { min-width: 0; } }
-.settings-content .secondary-button { border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 12px; font-size: calc(12px * var(--font-scale, 0.92)); cursor: pointer; }
-.settings-content .secondary-button:hover:not(:disabled) { border-color: var(--accent-300); background: var(--accent-050); }
+:is(.settings-content, .skill-upload-dialog, .skill-detail-dialog) .secondary-button { border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 12px; font-size: calc(12px * var(--font-scale, 0.92)); cursor: pointer; }
+:is(.settings-content, .skill-upload-dialog, .skill-detail-dialog) .secondary-button:hover:not(:disabled) { border-color: var(--accent-300); background: var(--accent-050); }
 .about-card { max-width: 720px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .about-row { display: flex; min-height: 94px; align-items: center; justify-content: space-between; gap: 28px; padding: 20px 0; }
 .about-row + .about-row { border-top: 1px solid var(--line); }
@@ -6343,8 +6343,8 @@ html[data-platform='win32'] .messenger .app-rail {
 .permission-approval-backdrop { z-index: 1200; }
 
 .permission-requester-id { overflow-wrap: anywhere; font-size: 12px; }
-.permission-requester { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
-.permission-requester .user-avatar { flex-shrink: 0; }
+.permission-requester, .permission-actor { display: flex; align-items: center; gap: 10px; margin: 16px 0; }
+.permission-requester .user-avatar, .permission-actor > :first-child { flex-shrink: 0; }
 .permission-requester-copy { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
 .permission-requester-copy strong { font-size: 14px; font-weight: 500; }
 .permission-requester-copy small { font-size: 12px; }

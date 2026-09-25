@@ -10,13 +10,13 @@ vi.mock('./localAgentRuntime', async (original) => ({ ...await original<object>(
 const directories: string[] = []
 afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })) })
 
-function setup(local: boolean) {
+function setup(local: boolean, executor?: import('../shared/agentExecutor').AgentExecutor) {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-concurrency-'))
   directories.push(directory)
   const store = new DouchatStore(join(directory, 'state.json'), { seedDemo: true })
   const runtime = new DouchatRuntime(store, {
     snapshots: () => [], start: vi.fn(), stop: vi.fn(), show: vi.fn(), createTools: () => [], dispose: vi.fn()
-  }, () => undefined)
+  }, () => undefined, undefined, undefined, executor)
   const config = { ...store.agent('dobi')!, ...(local ? { localAgentId: 'codex' } : {}) }
   const internal = runtime as any
   const calls: string[] = []
@@ -124,4 +124,35 @@ it('reuses a shared room session across tasks while keeping other rooms parallel
   expect((replies.mock.calls[0][0] as any).sessionKey).not.toBe((replies.mock.calls[1][0] as any).sessionKey)
   release.get('social:two')!(); await b
   expect(internal.sharedCallers.size).toBe(0)
+})
+
+
+it('uses an injected executor for replies and session lifecycle', async () => {
+  const executor = {
+    run: vi.fn(async () => ({ text: 'Injected executor reply', images: [] })),
+    resetConversation: vi.fn(), disposeAgent: vi.fn()
+  }
+  const { run, runtime, config, store } = setup(true, executor)
+  expect((await run('crew')).text).toBe('Injected executor reply')
+  expect(executor.run).toHaveBeenCalledOnce()
+  expect(runLocalAgent).not.toHaveBeenCalled()
+  runtime.resetConversation('crew', 'main')
+  expect(executor.resetConversation).toHaveBeenCalledWith('crew', 'main', [], store.currentAccountId)
+  runtime.disposeAgent(config.id)
+  expect(executor.disposeAgent).toHaveBeenCalledWith(config.id)
+  store.close()
+})
+
+it('rejects queued turns and stale results after switching away and back to the same account', async () => {
+  const { run, store, calls, finish } = setup(true)
+  const owner = store.currentAccountId
+  const first = run('crew', 'one', 'first'), queued = run('crew', 'one', 'queued')
+  await vi.waitFor(() => expect(calls).toEqual(['first']))
+  store.setCurrentAccountId('other')
+  store.setCurrentAccountId(owner)
+  finish.get('first')!()
+  expect((await first).error).toContain('Account changed')
+  expect((await queued).error).toContain('Account changed')
+  expect(calls).toEqual(['first'])
+  store.close()
 })

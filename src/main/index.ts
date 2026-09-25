@@ -1,3 +1,6 @@
+import { LocalAccountData } from './accountData'
+import { exportAgentArchive, parseAgentArchive } from './agentArchive'
+import { parseSkillArchive } from './skillArchive'
 import { replyToIM } from './imReply'
 import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
@@ -9,6 +12,7 @@ import type { CustomProviderInput, CustomModelTest } from '../shared/customModel
 import { configureManagedNode, ensureManagedNode } from './managedNode'
 import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
 import { mkdirSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { DiagnosticLog } from './diagnostics'
 import { release as osRelease } from 'node:os'
 import { notifyWindows } from './windowNotifications'
@@ -643,19 +647,19 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:get-auth-state', () => auth.getState())
   ipcMain.handle('douchat:user-memory', (event, agentId?: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
-    return store.userMemories.read(agentId)
+    return new LocalAccountData(store).getUserMemory(agentId)
   })
   ipcMain.handle('douchat:save-user-memory', (event, document: import('../shared/userMemory').UserMemoryDocument, agentId?: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
-    return store.userMemories.save(document, agentId)
+    return new LocalAccountData(store).saveUserMemory(document, agentId)
   })
   ipcMain.handle('douchat:group-memory', (event, conversationId: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
-    return store.groupMemories.read(conversationId)
+    return new LocalAccountData(store).getGroupMemory(conversationId)
   })
   ipcMain.handle('douchat:save-group-memory', (event, document: import('../shared/userMemory').UserMemoryDocument, conversationId: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
-    return store.groupMemories.save(document, conversationId)
+    return new LocalAccountData(store).saveGroupMemory(document, conversationId)
   })
   ipcMain.handle('douchat:request-microphone-access', async (event) => {
     if (!isDouchatRenderer(event.sender)) return 'denied'
@@ -759,13 +763,13 @@ app.whenReady().then(() => {
     await removeCustomLocalAgent(id)
     return checkLocalAgentUpdates(await detectLocalAgents())
   })
-  ipcMain.handle('douchat:search-messages', (_event, id: string, query: string) => {
-    if (!store.accountConversations.some((conversation) => conversation.id === id)) throw new Error('Chat not found')
-    return store.searchMessages(id, query)
+  ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return new LocalAccountData(store).searchMessages(id, query)
   })
-  ipcMain.handle('douchat:message-page', (_event, conversationId: string, topicId: string, before?: string) => {
-    if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
-    return store.messagePage(conversationId, topicId, before)
+  ipcMain.handle('douchat:message-page', (event, conversationId: string, topicId: string, before?: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
+    return new LocalAccountData(store).getMessagePage(conversationId, topicId, before)
   })
   ipcMain.handle('douchat:copy-text', (event, text: string) => {
     if (!isDouchatRenderer(event.sender) || typeof text !== 'string') throw new Error('Invalid clipboard request')
@@ -780,7 +784,11 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
   ipcMain.handle('douchat:open-local-file', async (event, path: string) => {
     if (!isDouchatRenderer(event.sender) || typeof path !== 'string') throw new Error('Invalid file request')
-    await computer.openLocalFile(path)
+    const document = await store.ownedDocumentPath(path)
+    if (document) {
+      const error = await shell.openPath(document)
+      if (error) throw new Error(error)
+    } else await computer.openLocalFile(path)
   })
   ipcMain.handle('douchat:get-snapshot', () => runtime.snapshot())
   const push = (): AppSnapshot => {
@@ -868,9 +876,31 @@ app.whenReady().then(() => {
     if (direct) void runtime.greet(direct.id)
     return push()
   })
-  ipcMain.handle('douchat:resolve-agent-permission', (_event, id: string, allow: boolean) => {
+  ipcMain.handle('douchat:resolve-agent-permission', (_event, id: string, allow: import('../shared/agentPermissions').PermissionApproval) => {
     runtime.resolveAgentPermission(id, allow)
     return push()
+  })
+  ipcMain.handle('douchat:export-agent-archive', async (event, agentId: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    const agent = store.accountAgents.find(agent => agent.id === agentId)
+    if (!agent) throw new Error('Agent not found')
+    const data = exportAgentArchive(agent)
+    const filename = agent.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-').replace(/[. ]+$/, '') || 'agent'
+    const options = { defaultPath: join(app.getPath('downloads'), `${filename}.zip`), filters: [{ name: 'ZIP', extensions: ['zip'] }] }
+    const parent = BrowserWindow.fromWebContents(event.sender)
+    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, data)
+    shell.showItemInFolder(result.filePath)
+    return true
+  })
+  ipcMain.handle('douchat:parse-agent-archive', (event, data: Uint8Array, root?: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return parseAgentArchive(data, root)
+  })
+  ipcMain.handle('douchat:parse-skill-archive', async (event, data: Uint8Array) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    return parseSkillArchive(data)
   })
   ipcMain.handle('douchat:update-agent', async (_event, agentId: string, input: UpdateAgentInput) => {
     if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')

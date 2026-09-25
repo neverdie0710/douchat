@@ -1,8 +1,10 @@
+import type { LocalAgentImage, LocalAgentReply, LocalRunOptions } from '../shared/agentExecutor'
+export type { LocalAgentImage, LocalAgentReply, LocalRunOptions } from '../shared/agentExecutor'
 import { appendLocalAgentArguments, customLocalAgentArguments } from '../shared/localAgentArguments'
 import { localAgentSettingsVersion } from './localAgentSettingsVersion'
 import { LocalProcessBudget } from './localProcessBudget'
 import { withLocalModel } from '../shared/localModels'
-import { LocalAgentConnection, killLocalProcess, type ProgressListener, type LocalApprovalHandler } from './localAgentConnection'
+import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { executableCommand } from './windowsCommand'
@@ -163,17 +165,6 @@ export function shouldRetryClaudeWithAccountLogin(
   const exhaustedApiKey = Boolean(env.ANTHROPIC_API_KEY)
     && /^(?:Claude Code:\s*)?Credit balance is too low[.!]?$/i.test(cause.message.trim())
   return connectorConflict || exhaustedApiKey
-}
-
-export interface LocalAgentImage {
-  name: string
-  mimeType: MessageAttachment['mimeType']
-  data: Uint8Array
-}
-
-export interface LocalAgentReply {
-  text: string
-  images: LocalAgentImage[]
 }
 
 export function localAgentReply(agentName: string, text: string, images: LocalAgentImage[]): LocalAgentReply {
@@ -457,24 +448,6 @@ async function executeLocalAgent(
 }
 
 
-export interface LocalRunOptions {
-  /** Validated, unsaved settings used only by the connection test. */
-  agentOverride?: LocalAgent
-  /** Read-only controllers must not gain image generation through MCP. */
-  imageToolsAllowed?: boolean
-  sessionKey?: string
-  /** Internal planning/probes must not retain workspace or thread history. */
-  transient?: boolean
-  /** Full transcript is needed only when a connection is cold. */
-  continuationPrompt?: string
-  onProgress?: ProgressListener
-  onApproval?: LocalApprovalHandler
-  /** Internal retry for the specific Claude account-login configuration conflict. */
-  claudeAccountLogin?: boolean
-  /** Retry only a rejected resume, before any model turn can have executed. */
-  freshSessionRetry?: boolean
-  /** Tools exposed to Codex app-server as client-side dynamic tools. */
-}
 interface ConnectedSession {
   evicted?: boolean
   persistent?: boolean
@@ -533,19 +506,20 @@ export function resetLocalAgentConversation(conversationId: string, topicId?: st
 async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
   images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
   signal?.throwIfAborted()
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
+  if (config.localAgentId === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
   const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
   let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient)])
   if (config.localAgentId === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
     const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, true, Boolean(options.onApproval), Boolean(options.transient)])
-    if (connections.has(accountKey)) key = accountKey
+    if (connections.has(accountKey)) { key = accountKey; options = { ...options, claudeAccountLogin: true } }
   }
   let entry = connections.get(key)
   if (entry && !entry.connection.alive) { evictConnection(key, entry); entry = undefined }
   if (entry?.busy) throw new Error('This local agent conversation is already working')
   if (!entry) {
     const connection = new LocalAgentConnection(config.localAgentId as 'codex' | 'claude')
-    const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
     const directory = workspace ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
     const ready = (async () => {
       const release = await processBudget.acquire(signal, evictIdleConnection)
@@ -584,17 +558,19 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     const effective = paths.length ? `${text}\n\nInspect these attached image files before answering:\n${paths.join('\n')}` : text
     const started = Date.now()
     const reply = await current.connection.turn(effective, signal, options.onProgress, options.onApproval)
+    if (config.localAgentId === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
     const outputImages = agent.id === 'codex' ? await generatedImages(current.connection.thread, env, started) : []
     return localAgentReply(agent.name, reply, outputImages)
   } catch (error) {
-    // Never replay a failed turn automatically: tools may already have caused side effects.
+    // Authentication-only failures can retry once before any model work in this turn.
+    // Existing conversation history is not evidence of side effects in the current turn.
     evictConnection(key, current)
     if (config.localAgentId === 'claude' && current.persistent && !options.freshSessionRetry
       && /No conversation found with session ID/i.test(String(error))) {
       localWorkspace(config, options.sessionKey)?.remember(undefined)
       return runConnectedAgent(config, prompt, signal, images, { ...options, freshSessionRetry: true })
     }
-    if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !current.connection.hasHistory
+    if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !signal?.aborted && current.connection.canRetryAuthentication
       && shouldRetryClaudeWithAccountLogin(config.localAgentId!, error, await spawnEnvironment())) {
       return runConnectedAgent(config, prompt, signal, images, { ...options, claudeAccountLogin: true })
     }

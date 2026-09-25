@@ -55,3 +55,13 @@ it('manages group memory through its own API and shows speaker attribution', asy
   expect(saveGroup).toHaveBeenCalledWith(expect.objectContaining({ groupId: 'reading', notes: 'Read together every week', autoRemember: false }), 'reading')
   expect(save).not.toHaveBeenCalled()
 })
+
+it('edits long-term summary and moves a fact into the user profile', async () => {
+  await act(async () => root.render(<UserMemoryPanel agentId="agent-one" />))
+  const notes = container.querySelectorAll<HTMLTextAreaElement>('.user-memory-notes textarea')
+  await input(notes[1], 'Long-term project agreement')
+  const category = container.querySelector<HTMLSelectElement>('[aria-label="Memory category"]')!
+  await act(async () => { category.value = 'profile'; category.dispatchEvent(new Event('change', { bubbles: true })) })
+  await click('Save')
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ memoryNotes: 'Long-term project agreement', facts: [expect.objectContaining({ key: 'name', kind: 'profile' })] }), 'agent-one')
+})

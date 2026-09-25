@@ -9,10 +9,17 @@ For externally initiated cloud-agent tasks, the owner separately controls local 
 - The service validates membership and the target's published interaction rule. Only the target owner's authenticated device can claim or finish the task, regardless of its author.
 - The owner's main process checks the locally stored rule again. External callers cannot submit permission overrides.
 - Cloud tools are wrapped at their execution boundary. Approvals contain the requester identity, group, actual operation and arguments; results may be public. No tool starts before approval.
-- Approvals are one-shot, account-bound and expire after ten minutes. Cancellation, agent disposal and account changes reject pending requests. Cloud model execution timeouts exclude time spent awaiting a human. Tool cancellation signals and task lifetime are checked before executing an approved operation.
+- Approvals default to one-shot and expire unanswered after ten minutes. Recognized bounded operations also offer **Allow for this task**, with the actual resource scope displayed. Grants are bound to the account, executing agent, requester and active reply task, and removed when that task completes or is cancelled. Later messages and delegated tasks start fresh. Current Deny rules still override grants. Matching parallel pending requests are released together only after explicit task approval.
+- Reusable scopes cover a website origin for navigation, an exact path for file reads/listing, a mailbox account and folder for email search/read, and new artifacts in task output storage. Other paths, origins and mailboxes ask again. Sending, deletion, modification of existing files, browser clicks, scheduling, script execution and unknown operations remain one-shot. Enabled packaged skill listing/reading is handled by its bounded package reader and does not require personal-file approval; script execution does.
+- Cloud model execution timeouts exclude tools and approval waits and reset on model progress. Tool cancellation signals and task lifetime are checked before executing an approved operation.
 - Permissions persist in the owner's agent configuration. Interaction rules sync with the shared appearance metadata. Detailed sensitive rules and pending approvals stay on the owner's device.
 
 ## Local agents
+
+For native approval protocols, structured Claude `Read` and `WebFetch` requests
+can use the same exact-path/origin task grants. Free-form commands, Computer Use,
+scripts and unrecognized native tools still require individual confirmation.
+The system does not infer safe privileges from a tool's human-readable description.
 
 Local CLIs own their internal tool harness. Douchat cannot truthfully enforce the same per-tool categories inside every supported executable. The UI therefore shows an explicit **Run the local agent program** policy instead of pretending that individual local tools are intercepted. It defaults to Ask for external requests. Approving it authorizes this invocation under the CLI's existing filesystem, command and network privileges. No external invocation begins without this grant. Deny disables external local execution even when group interaction is allowed. This is not a tool-free local chat sandbox or fine-grained ACP approval implementation.
 

@@ -12,6 +12,27 @@ const signal = new AbortController().signal
 const response = (value: unknown) => new Response(JSON.stringify(value), { status: 200 })
 
 describe('decision provider', () => {
+  it.each(['ordinary', 'typesafe/jev-1.13'])('routes a semantic follow-up to the conversational partner with %s', async model => {
+    const followup: GroupDecisionContext = { ...context, requestMessageId: 'followup', messages: [
+      { id: 'previous', role: 'user', content: '@工程师 最近有什么待办事项' },
+      { id: 'answer', role: 'assistant', sender: group.members[1], content: '要不要建立待办清单？' },
+      { id: 'followup', role: 'user', content: '你知道我是谁？' }
+    ] }
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(init!.body as string)
+      if (model.startsWith('typesafe')) {
+        expect(body.state.conversationContinuity.memberId).toBe('eng')
+        expect(body.questions.route.instructions).toContain('你知道我是谁')
+        return response({ answers: { route: { choice: 'followup', probabilities: { followup: .99 } },
+          leader: { choice: 'lead', probabilities: { lead: .99 } }, worker: { choice: 'lead', probabilities: { lead: .99 } } } })
+      }
+      expect(body.messages[0].content).toContain('"conversationContinuity":{"memberId":"eng"')
+      return response({ choices: [{ message: { content: JSON.stringify({ continueConversation: true, mode: 'single', memberIds: ['lead'], leaderMemberId: 'lead', waitForHuman: false }) } }] })
+    })
+    const result = await new GroupDecisionService(request).decide({ ...settings, model }, { ...provider, apiBase: 'https://fixture.invalid/v1' }, group, followup, signal)
+    expect(result).toMatchObject({ addressedMemberId: 'eng', memberIds: ['eng'], leaderMemberId: 'lead' })
+    expect(request).toHaveBeenCalledOnce()
+  })
   it('uses a compact member-provider plan for default personal participation', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(init!.body as string)

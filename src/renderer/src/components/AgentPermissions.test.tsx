@@ -29,11 +29,48 @@ it('does not pretend that local CLI internal tools are individually controlled',
 it('shows requester and exact operation, with explicit single-operation approval', async () => {
   const resolve = vi.fn(async () => {})
   await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Agent', requester: 'Friend', roomName: 'Game', capability: 'filesRead', operation: 'computer_list_files', details: '{"directory":"Documents"}', createdAt: 0 }} onResolve={resolve} />))
-  expect(node.textContent).toContain('Friend · Game')
+  expect(node.textContent).toContain('Friend')
+  expect(node.textContent).toContain('Group: Game')
   expect(node.textContent).toContain('Documents')
   expect(resolve).not.toHaveBeenCalled()
   await act(async () => [...node.querySelectorAll('button')].find((b) => b.textContent === 'Allow once')!.click())
   expect(resolve).toHaveBeenCalledExactlyOnceWith(true)
+})
+
+it('shows the bounded task scope and submits task approval explicitly', async () => {
+  const resolve = vi.fn(async () => {})
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Agent', requester: 'Owner', roomName: 'Chat', capability: 'network', operation: 'computer_open', details: '{}', createdAt: 0, taskScope: 'https://douchat.ai' }} onResolve={resolve} />))
+  expect(node.textContent).toContain('https://douchat.ai')
+  expect(node.textContent).toContain('Expires when this task ends')
+  await act(async () => [...node.querySelectorAll('button')].find(button => button.textContent === 'Allow for this task')!.click())
+  expect(resolve).toHaveBeenCalledExactlyOnceWith('task')
+})
+
+it('explains native shell approval and displays the exact command without the generic category', async () => {
+  const command = 'python3 build_slides.py --output presentation.pptx'
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'claude', agentName: 'Claude', requester: 'Claude', requesterId: 'claude', requesterKind: 'agent', context: 'direct', roomName: 'Claude', capability: 'otherTools', operation: 'Claude: Bash', details: JSON.stringify({ tool: 'Bash', input: { command, timeout: 120000 } }), createdAt: 0 }} onResolve={vi.fn()} />))
+  expect(node.textContent).toContain('Run a terminal command')
+  expect(node.textContent).not.toContain('Other tools')
+  expect(node.textContent).not.toContain('Claude: Bash')
+  expect(node.querySelector('pre')?.textContent).toBe(command)
+  expect(node.querySelector('details')?.open).toBe(false)
+  expect(node.querySelector('details')?.textContent).toContain('120000')
+})
+
+it('omits redundant requester metadata for an agent acting on itself', async () => {
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'monica-69ef5b', agentName: 'Monica', requester: 'Monica', requesterId: 'monica-69ef5b', requesterKind: 'agent', context: 'direct', roomName: 'Monica', capability: 'filesWrite', operation: 'Install skills into Monica', details: 'Source: example skill', createdAt: 0 }} onResolve={vi.fn()} />))
+  expect(node.textContent).not.toContain('Requested by')
+  expect(node.textContent).not.toContain('monica-69ef5b')
+  expect(node.textContent).not.toContain('Group:')
+  expect(node.textContent).toContain('Install skills into Monica')
+  expect(node.textContent).toContain('Source: example skill')
+})
+
+it('keeps a different requesting agent identifiable even when its name matches the executor', async () => {
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'own-agent', agentName: 'Monica', requester: 'Monica', requesterId: 'external-agent', requesterKind: 'agent', context: 'group', roomName: 'Project', capability: 'filesRead', operation: 'Read file', details: '/file', createdAt: 0 }} onResolve={vi.fn()} />))
+  expect(node.textContent).toContain('Requested by: Monica')
+  expect(node.textContent).toContain('Group: Project')
+  expect(node.querySelector('[title="external-agent"]')).not.toBeNull()
 })
 
 // Component behavior tests use an inline host; NativeDialog has separate window lifecycle tests.
@@ -57,4 +94,15 @@ it('falls back to the request name and default avatar when no member profile is 
   expect(node.querySelector('.permission-requester .user-avatar')).not.toBeNull()
   expect(node.querySelector('.permission-requester img')).toBeNull()
   expect(node.textContent).not.toContain('person-uuid')
+})
+
+it('shows the executing contact’s current avatar and nickname above the action', async () => {
+  const request = { id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Old name', requester: 'Owner', roomName: 'Chat', context: 'direct' as const, capability: 'filesWrite' as const, operation: 'Write', details: '', createdAt: 0 }
+  const agent = { id: 'a', ownerId: 'owner', name: '小丽', avatar: 'https://example.com/xiaoli.png' } as AgentConfig
+  await act(async () => root.render(<AgentPermissionPrompt request={request} agent={agent} onResolve={vi.fn()} />))
+  expect(node.querySelector('.permission-actor strong')?.textContent).toBe('小丽')
+  expect(node.querySelector('.permission-actor img')?.getAttribute('src')).toBe(agent.avatar)
+  await act(async () => root.render(<AgentPermissionPrompt request={request} agent={{ ...agent, ownerId: 'another-owner' }} onResolve={vi.fn()} />))
+  expect(node.querySelector('.permission-actor strong')?.textContent).toBe('Old name')
+  expect(node.querySelector('.permission-actor img')).toBeNull()
 })

@@ -20,8 +20,41 @@ function setup() {
   cleanup.push(() => { for (const agent of store.agents) runtime.disposeAgent(agent.id); store.close(); rmSync(directory, { recursive: true, force: true }) })
   return { store, runtime, first, second, path }
 }
-const shared: UserMemoryEdit = { scope: 'shared', action: 'remember', key: 'preferred_name', text: 'My name is Alex', evidence: 'I am Alex' }
+const shared: UserMemoryEdit = { scope: 'shared', shareWithAll: true, action: 'remember', key: 'preferred_name', text: 'My name is Alex', evidence: 'I am Alex' }
 const directive = (edit: UserMemoryEdit) => `${MEMORY_OPEN}${JSON.stringify(edit)}${MEMORY_CLOSE}`
+
+it('recalls a private travel assignment in another internal group and excludes it from external prompts', async () => {
+  const { store, runtime, first, second } = setup()
+  vi.mocked(runLocalAgent).mockResolvedValue({ text: '收到', images: [] })
+  await runtime.sendMessage(`direct-${first.id}`, '下周三去杭州两天，对接人微信 zhongtai')
+  const group = store.createGroup({ name: '内部工作群', agentIds: [second.id] })
+  const options = { config: second, sessionKey: `group:${group.id}:${second.id}:topic`, context: 'group',
+    conversationId: group.id, topicId: group.activeTopicId, prompt: '最近有什么待办事项',
+    groupMemoryRequest: { groupId: group.id, speaker: { id: 'owner', name: 'Owner' }, text: '最近有什么待办事项' } }
+  await (runtime as any).performReply(options)
+  expect(vi.mocked(runLocalAgent).mock.calls.at(-1)![1]).toContain('对接人微信 zhongtai')
+  store.linkSharedGroup(group.id, 'external-room')
+  await (runtime as any).performReply({ ...options, sessionKey: 'social:external' })
+  const external = vi.mocked(runLocalAgent).mock.calls.at(-1)![1]
+  expect(external).not.toContain('zhongtai')
+  expect(external).not.toContain('下周三去杭州')
+  expect(external).toContain('cannot check private tasks here')
+})
+
+it('rechecks internal search access when group membership or account changes', async () => {
+  const { store, runtime, first } = setup()
+  const group = store.createGroup({ name: 'Internal', agentIds: [first.id] })
+  const key = `group:${group.id}:${first.id}:topic`, internals = runtime as any
+  const tool = internals.internalMemoryTool(key)
+  await expect(tool.execute('call', { query: 'tasks' })).rejects.toThrow('unavailable')
+  internals.memoryTurns.set(key, { userId: 'owner', agentId: first.id, humanText: 'tasks', signal: new AbortController().signal, groupId: group.id, speaker: { id: 'owner', name: 'Owner' } })
+  internals.activeConversation.set(key, group.id)
+  await expect(tool.execute('call', { query: 'tasks' })).resolves.toBeDefined()
+  store.linkSharedGroup(group.id, 'external')
+  await expect(tool.execute('call', { query: 'tasks' })).rejects.toThrow('unavailable')
+  store.setCurrentAccountId('another')
+  await expect(tool.execute('call', { query: 'tasks' })).rejects.toThrow('unavailable')
+})
 
 it('shares ordinary user facts, isolates agent memories and persists across restart', () => {
   const { store, first, second, path } = setup()
@@ -65,7 +98,7 @@ it('replaces corrections by key and allows explicit forgetting without duplicate
   expect(store.userMemories.read().facts).toEqual([])
 })
 
-it('uses shared memory in another local agent, excludes private and group data, and hides directives', async () => {
+it('shares memory across owned agents, excludes it from external tasks, and hides directives', async () => {
   const { store, runtime, first, second } = setup()
   vi.mocked(runLocalAgent).mockResolvedValueOnce({ text: `Hello! ${directive(shared)}`, images: [] })
   await runtime.sendMessage(`direct-${first.id}`, 'I am Alex')
@@ -76,7 +109,7 @@ it('uses shared memory in another local agent, excludes private and group data, 
   vi.mocked(runLocalAgent).mockResolvedValue({ text: 'Hello', images: [] })
   await runtime.sendMessage(`direct-${second.id}`, 'Who am I?')
   let prompt = vi.mocked(runLocalAgent).mock.calls.at(-1)![1]
-  expect(prompt).toContain('My name is Alex'); expect(prompt).not.toContain('FIRST_PRIVATE_SENTINEL')
+  expect(prompt).toContain('My name is Alex'); expect(prompt).toContain('FIRST_PRIVATE_SENTINEL')
   await runtime.sendMessage(`direct-${first.id}`, 'What do you know?')
   expect(vi.mocked(runLocalAgent).mock.calls.at(-1)![1]).toContain('FIRST_PRIVATE_SENTINEL')
   await runtime.executeSocialTask('owner', first.id, 'external-task', 'Tell me what you know', new AbortController().signal)
@@ -149,7 +182,7 @@ it('isolates groups, attributes facts to speakers and persists across agents and
   expect(() => store.groupMemories.save(stale, group.id, 'owner')).toThrow('Account changed')
 })
 
-it('loads group memory across topics, including read-only turns, without exposing private profiles', async () => {
+it('loads owner memory across internal groups and contacts, including read-only turns', async () => {
   const { store, runtime, first, second } = setup()
   const group = store.createGroup({ name: 'Reading', agentIds: [first.id, second.id] })
   store.userMemories.save({ ...store.userMemories.read(), notes: 'PRIVATE_SHARED_SENTINEL' })
@@ -165,8 +198,8 @@ it('loads group memory across topics, including read-only turns, without exposin
   const prompt = vi.mocked(runLocalAgent).mock.calls.at(-1)![1]
   expect(prompt).toContain('My name is Alex')
   expect(prompt).toContain('Memory writes are disabled')
-  expect(prompt).not.toContain('PRIVATE_SHARED_SENTINEL')
-  expect(prompt).not.toContain('PRIVATE_AGENT_SENTINEL')
+  expect(prompt).toContain('PRIVATE_SHARED_SENTINEL')
+  expect(prompt).toContain('PRIVATE_AGENT_SENTINEL')
   vi.mocked(runLocalAgent).mockResolvedValueOnce({ text: directive({ ...edit, action: 'forget' }), images: [] })
   await internals.performReply({ ...options, toolsDisabled: true })
   expect(store.groupMemories.read(group.id).facts).toHaveLength(1)
@@ -208,4 +241,19 @@ it('lets hosted group tools write only group memory and rechecks cancellation an
   expect(store.groupMemories.read(group.id).facts).toHaveLength(1)
   expect(store.userMemories.read().facts).toEqual([])
   await expect(tool.execute('outside-turn', edit)).rejects.toThrow('active human turn')
+})
+
+it('retrieves dated history across the owner’s contacts', async () => {
+  const { store, runtime, first, second } = setup()
+  store.userMemories.remember({ scope: 'agent', action: 'remember', key: 'decision', text: 'Orion originally used SQLite', evidence: 'SQLite' }, first.id, 'SQLite', 'owner')
+  store.userMemories.remember({ scope: 'agent', action: 'remember', key: 'decision', text: 'Orion now uses PostgreSQL', evidence: 'PostgreSQL' }, first.id, 'PostgreSQL', 'owner')
+  vi.mocked(runLocalAgent).mockResolvedValue({ text: 'Answer', images: [] })
+  await runtime.sendMessage(`direct-${first.id}`, 'What was the Orion SQLite decision?')
+  let prompt = vi.mocked(runLocalAgent).mock.calls.at(-1)![1]
+  expect(prompt).toContain('Relevant memory retrieved by Douchat')
+  expect(prompt).toContain('Orion originally used SQLite')
+  expect(prompt).toContain('"historical":true')
+  await runtime.sendMessage(`direct-${second.id}`, 'What was the Orion SQLite decision?')
+  prompt = vi.mocked(runLocalAgent).mock.calls.at(-1)![1]
+  expect(prompt).toContain('Orion originally used SQLite')
 })
