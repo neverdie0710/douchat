@@ -1208,9 +1208,14 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 .toast {
   position: fixed;
   z-index: 50;
+  inset: auto;
   bottom: 24px;
   left: 50%;
-  max-width: 420px;
+  width: max-content;
+  height: auto;
+  max-width: min(420px, calc(100vw - 32px));
+  margin: 0;
+  overflow: visible;
   padding: 9px 13px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
