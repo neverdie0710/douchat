@@ -1,5 +1,6 @@
 import { mediaName, MAX_IM_FILE_BYTES, IMMediaError } from './imMedia'
 import { pathToFileURL } from 'node:url'
+import { thinkingLevel } from '../shared/thinkingLevels'
 import { GameRuleError } from '../shared/gameText'
 import { agentPermissions } from '../shared/agentPermissions'
 import { validateAgentFiles, validateAgentSkills } from '../shared/agentCustomization'
@@ -1263,6 +1264,7 @@ export class DouchatStore {
           color: definition.color,
           provider: overrides.modelBinding?.provider ?? binding.provider,
           model: overrides.modelBinding?.model ?? model,
+          thinkingLevel: overrides.thinkingLevel,
           systemRole: definition.systemRole,
           systemKey: definition.systemKey,
           cloudAgentId,
@@ -1498,8 +1500,11 @@ export class DouchatStore {
       ...safeInput
     } = input as ResolvedCreateAgentInput & Partial<AgentConfig>
     const avatar = validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : ''
+    const thinking = thinkingLevel(safeInput.thinkingLevel)
+    delete safeInput.thinkingLevel
     const agent: AgentConfig = {
       ...safeInput,
+      ...(thinking ? { thinkingLevel: thinking } : {}),
       ownerId,
       avatar,
       avatarEmoji: avatar ? '' : normalizeAgentEmoji(input.avatarEmoji),
@@ -1554,6 +1559,9 @@ export class DouchatStore {
       delete next.localAgentId
     }
     if (next.permissions !== undefined) next.permissions = agentPermissions(next.permissions)
+    const thinkingChanged = 'thinkingLevel' in next
+    const nextThinking = thinkingChanged ? thinkingLevel(next.thinkingLevel) : undefined
+    if (thinkingChanged) next.thinkingLevel = nextThinking
     if (next.systemFiles !== undefined) next.systemFiles = { ...agent.systemFiles, ...validateAgentFiles(next.systemFiles) }
     if (next.skills !== undefined) next.skills = validateAgentSkills(next.skills)
     if (next.avatar !== undefined) {
@@ -1578,6 +1586,10 @@ export class DouchatStore {
       }
       for (const key of ['name', 'avatar', 'avatarEmoji', 'instructions', 'labels'] as const) {
         if (next[key] !== undefined) overrides[key] = next[key]
+      }
+      if (thinkingChanged) {
+        if (nextThinking) overrides.thinkingLevel = nextThinking
+        else delete overrides.thinkingLevel
       }
       agent.userOverrides = overrides
     }
@@ -1753,6 +1765,16 @@ export class DouchatStore {
       createdAt: now,
       updatedAt: now
     }
+    this.putConversation(conversation)
+    return conversation
+  }
+
+  /** Callers must validate the folder and eligibility first. */
+  setConversationWorkspace(conversationId: string, workspacePath: string | undefined): Conversation | undefined {
+    const conversation = this.conversation(conversationId)
+    if (!conversation) return undefined
+    if (workspacePath) conversation.workspacePath = workspacePath
+    else delete conversation.workspacePath
     this.putConversation(conversation)
     return conversation
   }
