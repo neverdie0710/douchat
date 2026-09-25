@@ -18,7 +18,8 @@ export function validateCustomProvider(input: CustomProviderInput): CustomProvid
   const models = Array.isArray(input.models) ? [...new Set(input.models.filter((m): m is string => typeof m === 'string').map(m => m.trim()).filter(Boolean))] : []
   if (!models.length || models.length > 100 || models.some(m => m.length > 200)) throw new Error("Enter valid model names, one per line.")
   const modelLabels = Object.fromEntries(models.map(model => [model, typeof input.modelLabels?.[model] === 'string' ? input.modelLabels[model].trim().slice(0, 200) : '']).filter(([, label]) => label))
-  return { id: input.id, name: input.name.trim(), kind: input.kind, apiBase: input.apiBase.trim(), apiKey: input.apiKey?.trim(), models, ...(Object.keys(modelLabels).length ? { modelLabels } : {}) }
+  const reasoningModels = Array.isArray(input.reasoningModels) ? models.filter(model => input.reasoningModels!.includes(model)) : []
+  return { id: input.id, name: input.name.trim(), kind: input.kind, apiBase: input.apiBase.trim(), apiKey: input.apiKey?.trim(), models, ...(Object.keys(modelLabels).length ? { modelLabels } : {}), ...(reasoningModels.length ? { reasoningModels } : {}) }
 }
 export class CustomModelStore {
   constructor(private directory: string, private codec: SecretCodec) {}
@@ -80,8 +81,8 @@ export function customModelProvider(p: CustomProviderRecord): Provider {
   const endpoint = customEndpoint(p.apiBase, p.kind)
   const baseUrl = endpoint.slice(0, -(p.kind === 'anthropic' ? '/v1/messages'.length : '/chat/completions'.length))
   const models = p.models.map(model => ({ id: model, name: model, provider: id, baseUrl,
-    api: p.kind === 'anthropic' ? 'anthropic-messages' : 'openai-completions', reasoning: false, input: ['text', 'image'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192,
+    api: p.kind === 'anthropic' ? 'anthropic-messages' : 'openai-completions', reasoning: Boolean(p.reasoningModels?.includes(model)), input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: p.reasoningModels?.includes(model) ? 32000 : 8192,
     compat: { maxTokensField: 'max_tokens' }
   })) as Model<any>[]
   return createProvider({ id, name: p.name, baseUrl, models,

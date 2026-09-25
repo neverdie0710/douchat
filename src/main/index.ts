@@ -3,9 +3,10 @@ import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
+import { thinkingLevel } from '../shared/thinkingLevels'
 import { authorizeTokenDance } from './tokenDanceAuth'
 import { CustomModelStore } from './customModels'
-import type { CustomProviderInput, CustomModelTest } from '../shared/customModels'
+import { CUSTOM_PROVIDER_PREFIX, type CustomProviderInput, type CustomModelTest } from '../shared/customModels'
 import { configureManagedNode, ensureManagedNode } from './managedNode'
 import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
 import { mkdirSync } from 'node:fs'
@@ -47,7 +48,8 @@ import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUr
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
-import { configureLocalWorkspaces } from './localWorkspaces'
+import { configureLocalWorkspaces, validateWorkspaceFolder } from './localWorkspaces'
+import { canAssignConversationWorkspace } from '../shared/conversationWorkspace'
 import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
 import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLauncher'
 
@@ -853,9 +855,11 @@ app.whenReady().then(() => {
     const binding = input.localAgentId
       ? { provider: 'local', model: 'default' }
       : input.customModel ? runtime.customAgentModel(input.customModel.providerId, input.customModel.model) : input.cloudModel ? runtime.cloudAgentModel(input.cloudModel.model) : runtime.defaultCloudAgentModel()
-    const { customModel: _selection, cloudModel: _cloudSelection, ...agentInput } = input
+    const { customModel: _selection, cloudModel: _cloudSelection, thinkingLevel: requestedThinking, ...agentInput } = input
     const agent = store.createAgent({
       ...agentInput,
+      // Douchat cloud models do not take a per-agent thinking level.
+      thinkingLevel: binding.provider === 'local' || binding.provider.startsWith(CUSTOM_PROVIDER_PREFIX) ? thinkingLevel(requestedThinking) : undefined,
       avatar: agentInput.avatar || (agentInput.avatarEmoji ? undefined : localAgent?.avatar),
       localAgentName: localAgent?.custom ? localAgent.name : undefined,
       ...binding,
@@ -877,9 +881,14 @@ app.whenReady().then(() => {
     const existing = store.accountAgents.find(agent => agent.id === agentId)!
     const { customModel, cloudModel, ...update } = input
     if (customModel && cloudModel) throw new Error("Select one model source.")
+    // Whitelist before storing; 'default' clears the override.
+    if ('thinkingLevel' in update) (update as UpdateAgentInput).thinkingLevel = thinkingLevel(update.thinkingLevel) ?? 'default'
     if ((customModel || cloudModel) && (existing.localAgentId || input.localAgentId)) throw new Error("Select one execution mode.")
     const selectedBinding = customModel ? runtime.customAgentModel(customModel.providerId, customModel.model) : cloudModel ? runtime.cloudAgentModel(cloudModel.model) : undefined
     input = { ...update, ...selectedBinding, followDefaultModel: customModel?.providerId === '@default' ? true : selectedBinding || input.localAgentId ? false : existing.followDefaultModel }
+    // Douchat cloud models do not take a per-agent thinking level; clear any stale override.
+    const finalProvider = input.localAgentId || existing.localAgentId ? 'local' : input.provider ?? existing.provider
+    if (finalProvider !== 'local' && !finalProvider.startsWith(CUSTOM_PROVIDER_PREFIX) && (existing.thinkingLevel || 'thinkingLevel' in input)) input.thinkingLevel = 'default'
     if (input.model !== undefined && (input.localAgentId || existing.localAgentId)) {
       const model = localModelId(input.model)
       if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
@@ -929,6 +938,35 @@ app.whenReady().then(() => {
     }
     store.updateConversation(conversationId, input)
     if (input.agentIds || input.leadAgentId) runtime.resetConversation(conversationId)
+    return push()
+  })
+  ipcMain.handle('douchat:choose-conversation-workspace', async (event, conversationId: unknown) => {
+    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
+    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
+    if (!target) throw new Error('Chat not found')
+    if (!canAssignConversationWorkspace(target, store.accountAgents, store.currentAccountId)) throw new Error('Only chats whose members are all your own local agents can use a custom workspace.')
+    const options: Electron.OpenDialogOptions = { title: '选择工作区文件夹', buttonLabel: '使用此文件夹', properties: ['openDirectory', 'createDirectory'], ...(target.workspacePath ? { defaultPath: target.workspacePath } : {}) }
+    if (process.platform === 'darwin') app.focus({ steal: true })
+    BrowserWindow.fromWebContents(event.sender)?.focus()
+    const result = await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return runtime.snapshot()
+    const folder = validateWorkspaceFolder(result.filePaths[0])
+    const current = store.accountConversations.find((conversation) => conversation.id === conversationId)
+    if (!current || !canAssignConversationWorkspace(current, store.accountAgents, store.currentAccountId)) throw new Error('Chat members changed. Try again.')
+    if (current.workspacePath !== folder) {
+      store.setConversationWorkspace(conversationId, folder)
+      runtime.workspaceChanged(conversationId)
+    }
+    return push()
+  })
+  ipcMain.handle('douchat:clear-conversation-workspace', (event, conversationId: unknown) => {
+    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
+    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
+    if (!target) throw new Error('Chat not found')
+    if (target.workspacePath) {
+      store.setConversationWorkspace(conversationId, undefined)
+      runtime.workspaceChanged(conversationId)
+    }
     return push()
   })
   ipcMain.handle('douchat:open-conversation-window', (_event, conversationId: string) => {

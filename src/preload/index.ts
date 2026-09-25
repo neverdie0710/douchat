@@ -86,6 +86,8 @@ const api: DouchatApi = {
   createGroup: (input: CreateGroupInput) => ipcRenderer.invoke('douchat:create-group', input),
   updateConversation: (conversationId: string, input: UpdateConversationInput) =>
     ipcRenderer.invoke('douchat:update-conversation', conversationId, input),
+  chooseConversationWorkspace: (conversationId: string) => ipcRenderer.invoke('douchat:choose-conversation-workspace', conversationId),
+  clearConversationWorkspace: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation-workspace', conversationId),
   openConversationWindow: (conversationId: string) => ipcRenderer.invoke('douchat:open-conversation-window', conversationId),
   openCodeArtifact: (input: CodeArtifactInput) => ipcRenderer.invoke('douchat:open-code-artifact', input),
   getCodeArtifact: (artifactId: string) => ipcRenderer.invoke('douchat:get-code-artifact', artifactId),

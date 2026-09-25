@@ -1,6 +1,8 @@
 /** Provider editor and endpoint conventions adapted from Termany ModelSettings. */
 export type CustomModelKind = 'openai' | 'anthropic'
-export interface CustomProviderInput { id: string; name: string; kind: CustomModelKind; apiBase: string; apiKey?: string; models: string[]; modelLabels?: Record<string, string> }
+export interface CustomProviderInput { id: string; name: string; kind: CustomModelKind; apiBase: string; apiKey?: string; models: string[]; modelLabels?: Record<string, string>
+  /** Models that accept a thinking/reasoning parameter. Others always run with thinking off. */
+  reasoningModels?: string[] }
 export interface CustomProviderView extends Omit<CustomProviderInput, 'apiKey'> { hasKey: boolean }
 export interface CustomModelConfig { providers: CustomProviderView[]; defaultModel: string }
 export interface CustomModelTest { provider: CustomProviderInput; model: string }
