@@ -22,14 +22,14 @@ it('uses creation model selection for cloud agents and switches to a saved custo
     expect(host.querySelector('.local-model-search')).toBeNull()
     expect(host.textContent).toContain('Douchat Cloud')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenLastCalledWith('douchat-default', 'cloud')
+    expect(save).toHaveBeenLastCalledWith('douchat-default', 'cloud', 'default')
     const provider = host.querySelector<HTMLSelectElement>('[aria-label="Model source"]')!
     await act(async () => { provider.value = 'custom'; provider.dispatchEvent(new Event('change', { bubbles: true })) })
     const model = host.querySelector<HTMLSelectElement>('[aria-label="Custom model"]')!
     await act(async () => { model.value = JSON.stringify(['mine', 'org/model']); model.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(host.textContent).toContain('mine/org/model')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenLastCalledWith('org/model', 'custom:mine')
+    expect(save).toHaveBeenLastCalledWith('org/model', 'custom:mine', 'default')
   } finally { await act(async () => root.unmount()) }
 })
 it('loads models and saves the selected ID, only closing after success', async () => {
@@ -43,7 +43,7 @@ it('loads models and saves the selected ID, only closing after success', async (
     const select = host.querySelector<HTMLSelectElement>('[aria-label="Model"]')!
     await act(async () => { select.value = 'provider/test'; select.dispatchEvent(new Event('change', { bubbles: true })) })
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenCalledWith('provider/test'); expect(close).toHaveBeenCalledTimes(1)
+    expect(save).toHaveBeenCalledWith('provider/test', undefined, 'default'); expect(close).toHaveBeenCalledTimes(1)
   } finally { await act(async () => root.unmount()); host.remove() }
 })
 it('keeps the current model when discovery fails and does not close on save failure', async () => {
@@ -54,7 +54,7 @@ it('keeps the current model when discovery fails and does not close on save fail
     await act(async () => root.render(<LocalModelDialog agent={{ ...agent, model: 'provider/existing' }} onSave={save} onClose={close} />))
     expect(host.textContent).toContain('Could not load models')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenCalledWith('provider/existing'); expect(close).not.toHaveBeenCalled()
+    expect(save).toHaveBeenCalledWith('provider/existing', undefined, 'default'); expect(close).not.toHaveBeenCalled()
     expect(host.textContent).toContain('Save failed')
   } finally { await act(async () => root.unmount()) }
 })
@@ -75,10 +75,10 @@ it('allows manual model entry and switching back to the local default', async ()
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenLastCalledWith('org/manual')
+    expect(save).toHaveBeenLastCalledWith('org/manual', undefined, 'default')
     await act(async () => { select.value = ''; select.dispatchEvent(new Event('change', { bubbles: true })) })
     expect(host.querySelector('.local-model-custom')).toBeNull()
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-    expect(save).toHaveBeenLastCalledWith('default')
+    expect(save).toHaveBeenLastCalledWith('default', undefined, 'default')
   } finally { await act(async () => root.unmount()) }
 })

@@ -4,12 +4,13 @@ import { appendLocalAgentArguments, customLocalAgentArguments } from '../shared/
 import { localAgentSettingsVersion } from './localAgentSettingsVersion'
 import { LocalProcessBudget } from './localProcessBudget'
 import { withLocalModel } from '../shared/localModels'
+import { withLocalThinking } from '../shared/thinkingLevels'
 import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { executableCommand } from './windowsCommand'
 import { spawn } from 'node:child_process'
-import { access, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import type { AgentConfig, LocalAgent, MessageAttachment } from '../shared/types'
@@ -337,16 +338,20 @@ async function executeLocalAgent(
   const agent = options.agentOverride ?? await validateLocalAgent(config.localAgentId!)
   const env = await spawnEnvironment()
   signal?.throwIfAborted()
-  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory) : undefined
   const directory = workspace?.directory ?? await mkdtemp(join(tmpdir(), 'douchat-agent-'))
+  // Never leave Douchat's scratch files in a user's project folder.
+  const scratch = workspace?.custom ? await mkdtemp(join(tmpdir(), 'douchat-scratch-')) : directory
+  const inputDirectory = workspace?.custom && inputImages.length ? join(directory, `.douchat-input-${randomUUID()}`) : directory
   let geminiPolicyFile: string | undefined
-  const output = join(directory, `reply-${randomUUID()}.txt`)
+  const output = join(scratch, `reply-${randomUUID()}.txt`)
   try {
     const extensions: Record<MessageAttachment['mimeType'], string> = {
       'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'
     }
+    if (inputDirectory !== directory) await mkdir(inputDirectory, { mode: 0o700 })
     const imagePaths = await Promise.all(inputImages.map(async (image, index) => {
-      const path = join(directory, `input-image-${randomUUID()}.${extensions[image.mimeType]}`)
+      const path = join(inputDirectory, `input-image-${randomUUID()}.${extensions[image.mimeType]}`)
       await writeFile(path, image.data)
       return path
     }))
@@ -363,7 +368,7 @@ async function executeLocalAgent(
     let grokStream: GrokStream | undefined
     let geminiStream: GeminiStream | undefined
     const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
+      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, withLocalThinking(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.thinkingLevel), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
         cwd: directory, env: childEnvironment, windowsHide: true, detached: process.platform !== 'win32',
         stdio: ['pipe', 'pipe', 'pipe']
       })
@@ -443,6 +448,8 @@ async function executeLocalAgent(
   } finally {
     await rm(output, { force: true })
     if (geminiPolicyFile) await rm(geminiPolicyFile, { force: true })
+    if (inputDirectory !== directory) await rm(inputDirectory, { recursive: true, force: true })
+    if (scratch !== directory) await rm(scratch, { recursive: true, force: true })
     if (!workspace) await rm(directory, { recursive: true, force: true })
   }
 }
@@ -484,35 +491,37 @@ export function disposeLocalAgentSessions(agentId: string): void {
   for (const run of activeLocalRuns) if (run.agentId === agentId) run.abort.abort(new Error('Stopped'))
   for (const [key, entry] of connections) if (entry.config.id === agentId) evictConnection(key, entry)
 }
-export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = [], owner = ''): void {
+function conversationMatcher(conversationId: string, topicId?: string, directAgentIds: string[] = []): (sessionKey: string) => boolean {
   const prefixes = [`direct:${conversationId}:`, `group:${encodeURIComponent(conversationId)}:`, `handoff:${conversationId}:`]
-  resetLocalWorkspaces(owner, (sessionKey) => {
+  return (sessionKey) => {
     const incoming = sessionKey.startsWith('a2a:') && directAgentIds.some(id => sessionKey.includes(`:bot:${encodeURIComponent(id)}:topic:`))
     return (incoming || prefixes.some(prefix => sessionKey.startsWith(prefix))) && (!topicId || sessionKey.includes(encodeURIComponent(topicId)))
-  })
-  for (const run of activeLocalRuns) {
-    const key = run.sessionKey
-    if (!key) continue
-    const incoming = key.startsWith('a2a:') && directAgentIds.some(id => key.includes(`:bot:${encodeURIComponent(id)}:topic:`))
-    if ((incoming || prefixes.some(prefix => key.startsWith(prefix))) && (!topicId || key.includes(encodeURIComponent(topicId)))) run.abort.abort(new Error('Stopped'))
   }
-  for (const [key, entry] of connections) {
-    const incoming = entry.sessionKey.startsWith('a2a:') && directAgentIds.some(id => entry.sessionKey.includes(`:bot:${encodeURIComponent(id)}:topic:`))
-    if ((incoming || prefixes.some((prefix) => entry.sessionKey.startsWith(prefix)))
-      && (!topicId || entry.sessionKey.includes(encodeURIComponent(topicId)))) evictConnection(key, entry)
-  }
+}
+/** Close idle processes for this chat after its folder changes. Running turns
+ * finish undisturbed; the connection key includes the folder, so later turns
+ * never reuse a process started in the old folder. */
+export function releaseIdleLocalAgentConnections(conversationId: string, directAgentIds: string[] = []): void {
+  const matches = conversationMatcher(conversationId, undefined, directAgentIds)
+  for (const [key, entry] of connections) if (!entry.busy && matches(entry.sessionKey)) evictConnection(key, entry)
+}
+export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = [], owner = ''): void {
+  const matches = conversationMatcher(conversationId, topicId, directAgentIds)
+  resetLocalWorkspaces(owner, (sessionKey) => matches(sessionKey))
+  for (const run of activeLocalRuns) if (run.sessionKey && matches(run.sessionKey)) run.abort.abort(new Error('Stopped'))
+  for (const [key, entry] of connections) if (matches(entry.sessionKey)) evictConnection(key, entry)
 }
 
 async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
   images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
   signal?.throwIfAborted()
-  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey) : undefined
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory) : undefined
   if (config.localAgentId === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
   const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
-  let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient)])
+  let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
   if (config.localAgentId === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
-    const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, true, Boolean(options.onApproval), Boolean(options.transient)])
+    const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, true, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
     if (connections.has(accountKey)) { key = accountKey; options = { ...options, claudeAccountLogin: true } }
   }
   let entry = connections.get(key)
@@ -528,7 +537,7 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
         signal?.throwIfAborted()
         const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
         signal?.throwIfAborted()
-        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args)
+        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args, config.thinkingLevel)
         return { agent, env, directory: cwd }
       } catch (error) { connection.close(); throw error }
     })()
@@ -545,12 +554,18 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
   if (signal?.aborted) abort()
   const connectingAt = Date.now()
   const connectingTimer = setInterval(() => options.onProgress?.({ phase: 'connecting', elapsedSeconds: Math.floor((Date.now() - connectingAt) / 1000), silentSeconds: 0 }), 15_000)
+  let inputDirectory: string | undefined
   try {
     const { agent, env, directory } = await current.ready
     clearInterval(connectingTimer)
     signal?.throwIfAborted()
+    // In a user's project folder, keep inputs in a removable hidden folder.
+    if (options.workspaceDirectory && images.length) {
+      inputDirectory = join(directory, `.douchat-input-${randomUUID()}`)
+      await mkdir(inputDirectory, { mode: 0o700 })
+    }
     const paths = await Promise.all(images.map(async (image) => {
-      const path = join(directory, `input-${randomUUID()}.${image.mimeType.split('/')[1]}`)
+      const path = join(inputDirectory ?? directory, `input-${randomUUID()}.${image.mimeType.split('/')[1]}`)
       await writeFile(path, image.data)
       return path
     }))
@@ -567,7 +582,7 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     evictConnection(key, current)
     if (config.localAgentId === 'claude' && current.persistent && !options.freshSessionRetry
       && /No conversation found with session ID/i.test(String(error))) {
-      localWorkspace(config, options.sessionKey)?.remember(undefined)
+      localWorkspace(config, options.sessionKey, options.workspaceDirectory)?.remember(undefined)
       return runConnectedAgent(config, prompt, signal, images, { ...options, freshSessionRetry: true })
     }
     if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !signal?.aborted && current.connection.canRetryAuthentication
@@ -577,6 +592,7 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     throw error
   } finally {
     clearInterval(connectingTimer)
+    if (inputDirectory) await rm(inputDirectory, { recursive: true, force: true }).catch(() => {})
     signal?.removeEventListener('abort', abort)
     current.busy = false
     if (connections.get(key) === current && (options.transient || processBudget.hasWaiters)) evictConnection(key, current)

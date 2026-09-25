@@ -43,3 +43,28 @@ other requests without a stable conversation key use temporary directories and
 non-persistent threads; their files/processes are removed after the request.
 Application-created reply/policy scratch files are removed after one-shot calls.
 User inputs, generated assets, and memory files in persistent chats remain intact.
+
+## Custom chat workspace
+
+A direct chat with one of your own local agents, or a group whose members are
+all your own local agents, can use a folder you choose (chat details →
+Workspace). Shared rooms, person chats and any chat that includes a cloud agent
+are not eligible.
+
+- Every local CLI (Codex, Claude, Gemini, Grok, custom) runs with that folder as
+  its working directory. Douchat does not create or recreate it; if it is moved
+  or deleted, replies fail with an "unavailable" error until you pick another
+  folder or restore the default.
+- Agents sharing one folder run one at a time (a per-folder lock across chats).
+  A stopped waiter releases its turn without blocking later runs.
+- If a chat later stops being eligible (for example a cloud agent joins), runs
+  fall back to the managed folder while the setting is kept; it applies again
+  once the chat becomes eligible.
+- Internal controllers, attendance checks and handoffs never use the folder.
+- Reply/policy scratch files live in a temporary directory; input images are
+  written to a `.douchat-input-*` folder inside the workspace and removed after
+  the run.
+- Native thread bindings are tied to the folder. Changing or clearing the
+  folder starts a new thread and releases idle connections.
+- Folders are rejected if they are the disk root, your home folder itself, a
+  system location, Douchat's data folder, or not readable and writable.

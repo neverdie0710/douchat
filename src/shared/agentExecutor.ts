@@ -26,6 +26,8 @@ export interface LocalRunOptions {
   agentOverride?: LocalAgent
   /** Read-only controllers must not gain image generation through MCP. */
   imageToolsAllowed?: boolean
+  /** Validated user-selected folder for this chat. */
+  workspaceDirectory?: string
   sessionKey?: string
   /** Internal planning/probes must not retain workspace or thread history. */
   transient?: boolean
@@ -42,6 +44,7 @@ export interface LocalRunOptions {
  * Transport, authentication and routing remain responsibilities of the host. */
 export interface AgentExecutor {
   run(config: AgentConfig, prompt: string, signal?: AbortSignal, images?: LocalAgentImage[], options?: LocalRunOptions): Promise<LocalAgentReply>
+  releaseIdleConnections?(conversationId: string, directAgentIds?: string[]): void
   disposeAgent(agentId: string): void
   resetConversation(conversationId: string, topicId?: string, directAgentIds?: string[], ownerId?: string): void
 }

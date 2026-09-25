@@ -2,6 +2,7 @@ import type { LocalProgress, ProgressListener, LocalToolApproval, LocalApprovalH
 export type { LocalProgress, ProgressListener, LocalToolApproval, LocalApprovalHandler } from '../shared/agentExecutor'
 import { appendLocalAgentArguments } from '../shared/localAgentArguments'
 import { localModelId, withLocalModel } from '../shared/localModels'
+import { clampThinking, localThinkingLevels, withLocalThinking, type ThinkingLevel } from '../shared/thinkingLevels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
 
@@ -49,7 +50,7 @@ export class LocalAgentConnection {
   get hasHistory(): boolean { return this.turnCount > 0 }
   get thread(): string | undefined { return this.threadId }
 
-  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false, resume?: { thread?: string; remember: (thread?: string) => void }, toolApprovals = false, extraArgs: string[] = []): Promise<void> {
+  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false, resume?: { thread?: string; remember: (thread?: string) => void }, toolApprovals = false, extraArgs: string[] = [], thinking?: ThinkingLevel): Promise<void> {
     const command = await executableCommand(path)
     if (this.failure) throw this.failure
     const args = this.kind === 'codex'
@@ -57,7 +58,7 @@ export class LocalAgentConnection {
       : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(resume ? resume.thread ? ['--resume', resume.thread] : [] : ['--no-session-persistence']), '--allowedTools', 'WebSearch,WebFetch', ...(toolApprovals ? ['--permission-prompt-tool', 'stdio'] : ['--permission-mode', 'dontAsk'])]
     this.rememberThread = resume?.remember
     if (this.kind === 'claude' && resume?.thread) { this.threadId = resume.thread; this.turnCount = 1 }
-    this.child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', args, model) : args, extraArgs)], {
+    this.child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', withLocalThinking('claude', args, thinking), model) : args, extraArgs)], {
       cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout.setEncoding('utf8')
@@ -81,7 +82,8 @@ export class LocalAgentConnection {
         cwd, approvalPolicy: toolApprovals
           ? { granular: { sandbox_approval: false, rules: false, skill_approval: false, request_permissions: false, mcp_elicitations: true } }
           : 'never', sandbox: 'workspace-write',
-        config: { 'sandbox_workspace_write.network_access': true, web_search: 'live' }
+        config: { 'sandbox_workspace_write.network_access': true, web_search: 'live',
+          ...(thinking ? { model_reasoning_effort: clampThinking(thinking, localThinkingLevels('codex')) } : {}) }
       }
       let response: any
       if (resume?.thread) {

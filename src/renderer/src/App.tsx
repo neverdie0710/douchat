@@ -9,7 +9,7 @@ import { AddFriendModal } from './components/AddFriendModal'
 import { SocialWorkspace } from './components/SocialWorkspace'
 import { X } from 'lucide-react'
 import { resolveInterfaceLanguage, t, tr, usePreferences } from './preferences'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -722,7 +722,21 @@ function WorkspaceApp(): ReactElement {
         />
       )}
       </DialogErrorBoundary>
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <ToastNotice message={toast} />}
     </div>
   )
+}
+
+function ToastNotice({ message }: { message: string }): ReactElement {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const element = ref.current
+    if (!element || typeof element.showPopover !== 'function') return
+    try {
+      if (!element.matches(':popover-open')) element.showPopover()
+    } catch {
+      element.removeAttribute('popover')
+    }
+  }, [message])
+  return <div ref={ref} className="toast" popover="manual" role="status">{message}</div>
 }

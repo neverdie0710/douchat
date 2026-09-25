@@ -1,6 +1,7 @@
 import type { DesktopDeviceApi } from './deviceApi'
 import type { AccountDataApi } from './accountData'
 import type { CustomModelConfig, CustomProviderInput, CustomModelTest } from './customModels'
+import type { ThinkingLevel } from './thinkingLevels'
 import type { AgentPermissions, PermissionRequest } from './agentPermissions'
 import type { SocialAction, SocialResult, SocialSnapshot } from './social'
 export type AgentStatus = 'idle' | 'thinking' | 'offline'
@@ -77,6 +78,8 @@ export interface AgentConfig {
   color: string
   provider: string
   model: string
+  /** Reasoning depth; unset follows the default for the execution mode. */
+  thinkingLevel?: ThinkingLevel
   /** Free-form labels that colour a bot's greeting and personality. */
   labels?: string
   createdAt: number
@@ -88,6 +91,7 @@ export interface BuiltInAgentUserOverrides {
   /** Explicit model selection, validated and resolved by the main process. */
   modelBinding?: Pick<AgentConfig, 'provider' | 'model'>
   role?: string
+  thinkingLevel?: ThinkingLevel
   name?: string
   avatar?: string
   avatarEmoji?: string
@@ -144,6 +148,8 @@ export interface Conversation {
   leadAgentId?: string
   topics: Topic[]
   activeTopicId: string
+  /** User-selected folder for local CLI agents. Used only while every member is the owner's local agent. */
+  workspacePath?: string
   savedToContacts?: boolean
   muted?: boolean
   hidden?: boolean
@@ -473,6 +479,7 @@ export interface AppSnapshot {
 }
 
 export interface CreateAgentInput {
+  thinkingLevel?: ThinkingLevel | 'default'
   customModel?: { providerId: string; model: string }
   cloudModel?: { model: string }
   localAgentId?: string
@@ -489,12 +496,14 @@ export interface CreateAgentInput {
 
 /** Provider/model bindings are resolved by the main process. Built-in cloud contacts
  * remain service-owned; custom selections are validated against saved providers. */
-export type ResolvedCreateAgentInput = CreateAgentInput & Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel'>
+export type ResolvedCreateAgentInput = Omit<CreateAgentInput, 'thinkingLevel'> & Pick<AgentConfig, 'provider' | 'model' | 'followDefaultModel' | 'thinkingLevel'>
 
 export interface UpdateAgentInput {
   /** Reject a stale edit when a caller supplies its last observed version. */
   expectedRevision?: number
   expectedSystemFiles?: import('./agentCustomization').AgentFiles
+  /** 'default' clears the override. */
+  thinkingLevel?: ThinkingLevel | 'default'
   systemFiles?: import('./agentCustomization').AgentFiles
   skills?: import('./agentCustomization').AgentSkill[]
   followDefaultModel?: boolean
@@ -640,6 +649,9 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
+  /** Opens a folder picker; resolves unchanged if cancelled. */
+  chooseConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
+  clearConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
   openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
   getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
   testEmailConnector: (input: EmailConnectorInput) => Promise<EmailConnectionTestResult>

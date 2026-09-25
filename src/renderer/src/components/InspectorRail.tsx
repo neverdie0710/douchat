@@ -1,6 +1,7 @@
 import { NativeDialog } from './NativeDialog'
 import { GroupInviteDialog } from './GroupInviteDialog'
 import { ContactKindBadge } from './ContactKindBadge'
+import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
 import type { SocialPerson } from '../../../shared/social'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { t } from '../preferences'
@@ -167,6 +168,7 @@ export function InspectorRail({
                   <span>{conversation.name}</span><Pencil size={15} />
                 </button>}
               </section>
+              <ConversationWorkspaceSetting conversation={conversation} agents={snapshot.agents} />
               <button className="detail-search-button" onClick={() => setRecordsDialog('invite')}>{t('Invite to group')} <ChevronRight size={16} /></button>
               <div className="detail-toggles">
                 <label>{t('Save to contacts')}<button type="button" className="detail-switch" role="switch" aria-label={t('Save to contacts')} aria-checked={!!conversation.savedToContacts} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { savedToContacts: !conversation.savedToContacts }))} /></label>
@@ -175,6 +177,7 @@ export function InspectorRail({
               </div>
             </div>}
             {conversation.type === 'direct' ? <div className="direct-chat-options">
+              <ConversationWorkspaceSetting conversation={conversation} agents={snapshot.agents} />
               <button className="detail-search-button" onClick={() => { setError(''); setQuery(''); setRecordsDialog('history') }}>{t('Search chat history')} <ChevronRight size={16} /></button>
               <button className="detail-search-button" onClick={() => { setError(''); setRecordsDialog('routines') }}>{t('View scheduled tasks')} <ChevronRight size={16} /></button>
               <div className="detail-toggles">

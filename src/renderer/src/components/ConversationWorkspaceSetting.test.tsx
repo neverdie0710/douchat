@@ -1,0 +1,27 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { expect, it, vi } from 'vitest'
+import type { AgentConfig, Conversation } from '../../../shared/types'
+vi.mock('../preferences', () => ({ t: (s: string) => s }))
+import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
+;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const agents = [{ id: 'codex', ownerId: 'me', localAgentId: 'codex' }] as AgentConfig[]
+const conversation = { id: 'direct-codex', type: 'direct', name: 'Codex', agentIds: ['codex'], topics: [], activeTopicId: '', unread: 0, readAt: 0, createdAt: 0, updatedAt: 0, ownerId: 'me' } as Conversation
+
+it('requests the folder picker and clear without an onSnapshot callback, showing only the folder name', async () => {
+  const choose = vi.fn().mockResolvedValue({}), clear = vi.fn().mockResolvedValue({})
+  Object.defineProperty(window, 'douchat', { configurable: true, value: { chooseConversationWorkspace: choose, clearConversationWorkspace: clear } })
+  const host = document.createElement('div'); const root = createRoot(host)
+  try {
+    await act(async () => root.render(<ConversationWorkspaceSetting conversation={conversation} agents={agents} />))
+    await act(async () => host.querySelector('button')!.click())
+    expect(choose).toHaveBeenCalledWith('direct-codex')
+    await act(async () => root.render(<ConversationWorkspaceSetting conversation={{ ...conversation, workspacePath: '/Users/me/code/project' }} agents={agents} />))
+    expect(host.querySelector('.conversation-workspace-path span')!.textContent).toBe('project')
+    expect(host.querySelector('.conversation-workspace-path')!.getAttribute('title')).toBe('/Users/me/code/project')
+    await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === 'Use default')!.click())
+    expect(clear).toHaveBeenCalledWith('direct-codex')
+  } finally { await act(async () => root.unmount()) }
+})
