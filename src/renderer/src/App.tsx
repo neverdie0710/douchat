@@ -428,7 +428,7 @@ function WorkspaceApp(): ReactElement {
   }
 
   if (authState.status !== 'signed-in') {
-    return <LoginScreen state={authState} onLogin={() => void window.douchat.startLogin().then(setAuthState)} />
+    return <LoginScreen state={authState} onLogin={() => void window.douchat.startLogin().then(setAuthState)} onCancel={() => void window.douchat.cancelLogin().then(setAuthState)} />
   }
 
   if (!snapshot) {

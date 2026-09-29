@@ -617,6 +617,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   setInterfaceLanguage: (language: string) => Promise<void>
   getAuthState: () => Promise<DesktopAuthState>
   startLogin: () => Promise<DesktopAuthState>
+  cancelLogin: () => Promise<DesktopAuthState>
   retryAuth: () => Promise<DesktopAuthState>
   signOut: () => Promise<DesktopAuthState>
   refreshProfile: () => Promise<DesktopAuthState>

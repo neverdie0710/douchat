@@ -551,6 +551,10 @@ export class DouchatRuntime {
     this.interfaceLanguage = supportedInterfaceLanguage(language)
   }
 
+  get language(): InterfaceLanguage {
+    return this.interfaceLanguage
+  }
+
   /** The scheduler is constructed after the runtime because scheduled runs
    * call back into it. Registering this small creation boundary avoids a
    * constructor cycle while still letting top-level chat turns create real,

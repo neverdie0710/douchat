@@ -17,9 +17,14 @@
 </p>
 
 Douchat is an Electron desktop workspace where independent AI agents can work
-alone or collaborate in a shared conversation. Cloud agents use an authenticated
-Douchat account; local agents use supported command-line tools already installed
-on the computer.
+alone or collaborate in a shared conversation. You sign in with a
+[douchat.ai](https://douchat.ai) account; cloud agents run on Douchat's hosted
+models, and local agents use supported command-line tools already installed on
+your computer.
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Chatting with Dr. Dou, who creates an English tutor agent and a study group" width="880">
+</p>
 
 ## Highlights
 
@@ -27,8 +32,105 @@ on the computer.
 - Use direct chats, group chats, topics, `@` mentions and lead-agent dispatch.
 - Hand work between agents with private and agent-to-agent messages.
 - Connect supported local agent CLIs without copying their credentials into Douchat.
+- Bring your own models through any OpenAI- or Anthropic-compatible provider.
 - Run isolated browser sessions, local file tools and persistent scheduled routines.
-- Keep conversations, topics and agent configuration in Electron's local user-data directory.
+- Add friends and share group chats where each member brings their own agents.
+- Reach an agent from WeChat, Feishu or Telegram through IM channels.
+- Keep agent chats, memories and configuration on your computer.
+- Use the interface in English or Simplified Chinese.
+
+## Tour
+
+### Contacts
+
+Keep friends, cloud agents and local agents in one contact list. Open any agent
+to see how it runs, which model it uses and which groups you share, then message
+or edit it.
+
+<p align="center">
+  <img src="docs/screenshots/contacts.png" alt="Contacts list with built-in, cloud agent and friend entries, showing the details of the agent Mary" width="880">
+</p>
+
+### Customize every agent
+
+Shape each agent with editable Markdown files — its soul, identity, bootstrap
+instructions, what it knows about you and its memory — and choose its model,
+skills, permissions and IM channels. Saved changes apply from the next message.
+
+<p align="center">
+  <img src="docs/screenshots/customize-agent.png" alt="Edit agent dialog showing Mary's SOUL.md with tabs for identity, bootstrap, user profile and memory" width="880">
+</p>
+
+### Agents talk to each other
+
+Ask one agent to get help from another. Mary sends Dr. Dou a private message,
+the exchange stays visible in her chat, and Dr. Dou replies to you directly.
+
+<p align="center">
+  <img src="docs/screenshots/agent-messaging.png" alt="Mary privately messages Dr. Dou, who replies and sends the user a joke" width="880">
+</p>
+
+### Group chats
+
+Put cloud agents, local agents and people in one group. Agents take turns, answer
+each other and play along — here Mary runs a word-guessing game and a Claude
+Code–based agent guesses. Use `@` to choose who answers, and give the group its
+own workspace folder.
+
+<p align="center">
+  <img src="docs/screenshots/group-chat.png" alt="A group chat where Mary runs a word game and Claude001 guesses, with the member panel open" width="880">
+</p>
+
+### Local agents
+
+Douchat detects the agent CLIs already installed on your computer — Claude Code,
+Codex, Gemini, Grok Build, OpenClaw, Hermes, OpenCode and more — and shows their
+versions. Create new agents on top of any of them, or update a CLI in one click.
+
+<p align="center">
+  <img src="docs/screenshots/local-agents.png" alt="Settings listing detected local agent CLIs with their versions and Update and Edit actions" width="880">
+</p>
+
+### Chat with local agents
+
+A local agent chats like any other contact while its CLI does the work on your
+computer — here a Codex-based agent draws a picture on request and returns it in
+the conversation.
+
+<p align="center">
+  <img src="docs/screenshots/local-agent-image.png" alt="A Codex-based local agent replies with a generated picture of a girl running with two cats" width="880">
+</p>
+
+### Deep research
+
+Hand an open-ended question to an agent and let it search and read on its own.
+Here a Claude Code–based agent researches Douchat and its author and returns a
+sourced summary with links.
+
+<p align="center">
+  <img src="docs/screenshots/deep-research.png" alt="A Claude Code-based agent answers a research request about douchat.ai and its author with linked sources" width="880">
+</p>
+
+### Scheduled tasks
+
+Ask in chat — "remind me to drink water in 10 minutes" or "remind me to exercise
+every day at 8 AM" — and the agent creates a scheduled task that runs on its own.
+Run, pause or delete tasks from **Settings → Automation**. If Douchat is closed
+when a task is due, it runs once after the next launch.
+
+<p align="center">
+  <img src="docs/screenshots/automation.png" alt="Automation settings listing a one-time drink water reminder from Mary and a daily exercise reminder from Dr. Dou" width="880">
+</p>
+
+### Custom models
+
+Bring your own model provider — anything that speaks the OpenAI Chat Completions
+or Anthropic Messages API, such as OpenRouter — and pick a default model for your
+agents. Billing stays with your provider.
+
+<p align="center">
+  <img src="docs/screenshots/custom-models.png" alt="Models settings with an OpenRouter provider and a default model selected" width="880">
+</p>
 
 ## Download
 
@@ -40,7 +142,8 @@ To build from source instead, follow the quick start below.
 
 - Node.js 22.12 or newer
 - npm 10 or newer
-- A Douchat account for Cloud Agents, or a supported local agent CLI for Local Agents
+- A [douchat.ai](https://douchat.ai) account — signing in is required to open the app
+- Optional: a supported local agent CLI (see [Local agents](#local-agents))
 
 ## Quick start
 
@@ -52,9 +155,12 @@ cp .env.example .env
 npm run dev
 ```
 
-The default development service is `http://localhost:3000`. Change
-`DOUCHAT_SERVICE_URL` in `.env` if the web app runs on another local port. The
-desktop client derives the Chat API URL by appending `/v1` to that origin.
+Click **Get started** and sign in with a [douchat.ai](https://douchat.ai) account
+in your browser; the app returns automatically. Development builds use
+`https://douchat.ai` by default, so no local server is needed. To develop against
+your own Douchat service instead, set `DOUCHAT_SERVICE_URL` in `.env` (for
+example `http://localhost:3000`). The desktop client derives the Chat API URL by
+appending `/v1` to that origin.
 
 ## Configuration
 
@@ -64,7 +170,7 @@ details.
 
 | Variable | Purpose | Required |
 | --- | --- | --- |
-| `DOUCHAT_SERVICE_URL` | Development login and Cloud Chat origin | No; defaults to the local web app |
+| `DOUCHAT_SERVICE_URL` | Development login and Cloud Chat origin | No; defaults to `https://douchat.ai` |
 | `DOUCHAT_WEB_URL` | Backwards-compatible alias for `DOUCHAT_SERVICE_URL` | No |
 | `GATEWAY_BASE_URL` | OpenAI-compatible endpoint for tests or signed-out scripted runtimes | No |
 | `GATEWAY_API_KEY` | Credential for the optional gateway | Only with an authenticated gateway |
@@ -107,6 +213,22 @@ Local file tools are restricted to Downloads, Desktop and Documents. Moves do no
 overwrite existing files, and deletion is not exposed. Local-agent permissions
 are not bypassed: each CLI continues to enforce its own login and approval model.
 
+## Where data is stored
+
+| Data | Location |
+| --- | --- |
+| Agent chats, local groups, topics, memories, skills and agent settings | This computer only |
+| Friends, shared group chats and their messages | Douchat service, synced to each member's device |
+| Account profile and credits | Douchat service |
+| Login token | This computer, encrypted with `safeStorage` |
+
+Local data lives in `~/Library/Application Support/douchat` on macOS
+(`douchat-dev` for development builds). Deleting that folder resets the local
+profile, but friends and shared groups sync back after the next sign-in.
+Clearing a friend or shared-group chat hides its messages on this device only;
+the service keeps them for the other members. Logs are in the `logs`
+subfolder and can be opened from **Settings → About**.
+
 ## Agent collaboration
 
 Each agent has a private chat. Groups add a lead member that opens the conversation,
@@ -123,12 +245,12 @@ dispatches work and consolidates the result:
 
 ## Local agents
 
-Open **Settings → Agents**, or choose **Manage local agents** in Contacts, then
+Open **Settings → Local agents**, or choose **Manage local agents** in Contacts, then
 refresh the catalog. Detection uses the login-shell `PATH`, including tools
 installed through nvm, pnpm or `~/.local/bin`.
 
-Claude Code, Codex, Gemini, Grok Build, OpenCode, Cursor and Kimi currently have headless chat
-adapters. Install and sign in to a CLI in the terminal before creating a contact.
+Claude Code, Codex, Gemini, Grok Build, OpenCode, Cursor, Kimi, OpenClaw and
+Hermes currently have headless chat adapters. Install and sign in to a CLI in the terminal before creating a contact.
 Several contacts may use the same CLI while retaining separate topic histories.
 Detection confirms that an executable exists; it cannot guarantee login state or
 compatibility with every CLI version.
@@ -163,10 +285,15 @@ src/main/          Electron main process, auth, storage and agent runtime
 src/preload/       typed IPC bridge exposed to sandboxed renderer windows
 src/renderer/      React application and UI assets
 src/shared/        shared data types and collaboration protocol helpers
-resources/icons/   development and production application icons
+resources/icons/   development and production application icons (SVG sources)
+scripts/           dev-host preparation and icon generation
 resources/entitlements.mac.plist  hardened-runtime permissions for signed macOS builds
 docs/              design notes for agents, groups, permissions and releases
 ```
+
+Development builds keep their data separate from an installed Douchat, show a
+`DEV` badge on the app icon and hot-reload the renderer. To start from a clean
+profile, quit the dev app and delete `~/Library/Application Support/douchat-dev`.
 
 Before committing a change, run `npm run typecheck`, `npm test` and `npm run build`.
 

@@ -242,6 +242,15 @@ export class DesktopAuth {
     }
   }
 
+  /** Abandon a browser login that has not returned yet. A late callback then
+   * finds no pending flow and is rejected as expired. */
+  async cancelLogin(): Promise<DesktopAuthState> {
+    if (this.state.status !== 'waiting') return this.state
+    this.stopLoopbackCallback()
+    await this.removeFile(this.pendingPath)
+    return this.setState({ status: 'signed-out' })
+  }
+
   /** End the desktop session without touching the user's local conversations. */
   async signOut(): Promise<DesktopAuthState> {
     this.stopLoopbackCallback()

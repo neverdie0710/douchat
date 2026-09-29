@@ -1,6 +1,7 @@
 import { groupMemberSessionId } from '../shared/bot/group'
 import type { SelectedMention } from '../shared/bot/mentions'
 import { ConnanyManager } from './connany'
+import { supportedInterfaceLanguage } from '../shared/language'
 import { CONNECTORS_ENABLED } from '../shared/connany'
 import { LocalAccountData } from './accountData'
 import { exportAgentArchive, parseAgentArchive } from './agentArchive'
@@ -118,12 +119,17 @@ function clearSettingsTimer(id: number): void {
   clearTimeout(settingsTimers.get(id))
   settingsTimers.delete(id)
 }
+/** Native dialogs follow the renderer's interface language; before the runtime
+ * exists (early crashes) they fall back to the system locale. */
+function ui(en: string, zh: string): string {
+  return (runtime ? runtime.language : supportedInterfaceLanguage(app.getLocale())) === 'zh-CN' ? zh : en
+}
 async function openDiagnosticLogs(): Promise<void> {
   diagnostics.write('logs.open')
   const error = await shell.openPath(diagnostics.directory)
   if (error) {
     diagnostics.write('logs.open-failed', error)
-    dialog.showErrorBox('Douchat', `无法打开日志目录：${diagnostics.directory}\n${error}`)
+    dialog.showErrorBox('Douchat', `${ui('Could not open the log folder:', '无法打开日志目录：')} ${diagnostics.directory}\n${error}`)
   }
 }
 app.on('browser-window-created', (_event, window) => {
@@ -141,9 +147,9 @@ app.on('browser-window-created', (_event, window) => {
     showingCrashDialog = true
     // Native UI remains usable after the renderer (including its React boundaries) exits.
     void dialog.showMessageBox(window, {
-      type: 'error', title: 'Douchat', message: '界面进程意外退出',
-      detail: `请将日志目录中的 diagnostics.log 和 crashes 文件夹发给开发者。\n错误：${details.reason} (${details.exitCode})`,
-      buttons: ['打开日志目录并重新加载', '重新加载', '关闭窗口'], defaultId: 0, cancelId: 2
+      type: 'error', title: 'Douchat', message: ui('The interface stopped unexpectedly', '界面进程意外退出'),
+      detail: `${ui('Please send diagnostics.log and the crashes folder from the log folder to the developers.', '请将日志目录中的 diagnostics.log 和 crashes 文件夹发给开发者。')}\n${ui('Error:', '错误：')} ${details.reason} (${details.exitCode})`,
+      buttons: [ui('Open log folder and reload', '打开日志目录并重新加载'), ui('Reload', '重新加载'), ui('Close window', '关闭窗口')], defaultId: 0, cancelId: 2
     }).then(async ({ response }) => {
       if (response === 0) await openDiagnosticLogs()
       if (window.isDestroyed() || contents.isDestroyed()) return
@@ -238,7 +244,7 @@ async function openPendingGroup(): Promise<void> {
     if (conversation.hidden) store.updateConversation(conversation.id, { hidden: false })
     openChatWindow(conversation.id)
   } catch (error) {
-    await dialog.showMessageBox({ type: 'info', message: '无法打开群聊', detail: error instanceof Error ? error.message : '请稍后重试。' })
+    await dialog.showMessageBox({ type: 'info', message: ui('Could not open the group chat', '无法打开群聊'), detail: error instanceof Error ? error.message : ui('Please try again later.', '请稍后重试。') })
   } finally {
     if (pendingGroupRoom === roomId) pendingGroupRoom = ''
     openingGroupRoom = false
@@ -597,7 +603,7 @@ app.whenReady().then(() => {
   }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: id => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id) : [])] })
   imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
     encrypt: value => {
-      if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error('系统钥匙串不可用，请启用后重试')
+      if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error(ui('The system keychain is unavailable. Enable it and try again.', '系统钥匙串不可用，请启用后重试'))
       return safeStorage.encryptString(value).toString('base64')
     },
     decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64'))
@@ -692,6 +698,7 @@ app.whenReady().then(() => {
     }
   })
   ipcMain.handle('douchat:start-login', () => auth.startLogin())
+  ipcMain.handle('douchat:cancel-login', () => auth.cancelLogin())
   ipcMain.handle('douchat:retry-auth', () => auth.initialize())
   ipcMain.handle('douchat:sign-out', () => auth.signOut())
   ipcMain.handle('douchat:refresh-profile', () => auth.refreshProfile())
@@ -714,10 +721,10 @@ app.whenReady().then(() => {
     if (!agent) throw new Error('Unknown local agent')
     const plan = await prepareNpmMaintenance(await resolveMaintenancePlan(agent))
     if (!plan.command) {
-      await dialog.showMessageBox({ type: 'info', message: '请按该工具原有的安装方式安装或更新。', detail: '自定义工具或未确认来源的工具不会自动运行安装命令。' })
+      await dialog.showMessageBox({ type: 'info', message: ui('Install or update this tool the way it was originally installed.', '请按该工具原有的安装方式安装或更新。'), detail: ui('Douchat does not run install commands for custom tools or tools from unconfirmed sources.', '自定义工具或未确认来源的工具不会自动运行安装命令。') })
       return false
     }
-    const result = await dialog.showMessageBox({ type: 'question', message: `${agent.installed ? '更新' : '安装'} ${agent.name}`, detail: `${plan.needsDownload ? '首次使用，需要先下载并校验运行环境，可能需要几分钟。\n\n' : ''}将在系统终端执行以下命令。请在终端完成提示，返回后会自动检测。\n\n${plan.command}`, buttons: ['取消', '在终端执行'], defaultId: 1, cancelId: 0 })
+    const result = await dialog.showMessageBox({ type: 'question', message: `${agent.installed ? ui('Update', '更新') : ui('Install', '安装')} ${agent.name}`, detail: `${plan.needsDownload ? ui('First use: Douchat will download and verify a runtime first. This may take a few minutes.', '首次使用，需要先下载并校验运行环境，可能需要几分钟。') + '\n\n' : ''}${ui('The following command will run in your system terminal. Finish any prompts there; Douchat checks again when you return.', '将在系统终端执行以下命令。请在终端完成提示，返回后会自动检测。')}\n\n${plan.command}`, buttons: [ui('Cancel', '取消'), ui('Run in Terminal', '在终端执行')], defaultId: 1, cancelId: 0 })
     if (result.response !== 1) return false
     if (plan.needsDownload) await ensureManagedNode()
     resetShellPath()
@@ -1001,7 +1008,7 @@ app.whenReady().then(() => {
     const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
     if (!target) throw new Error('Chat not found')
     if (!canAssignConversationWorkspace(target, store.accountAgents, store.currentAccountId)) throw new Error('Only chats whose members are all your own agents can use a custom workspace.')
-    const options: Electron.OpenDialogOptions = { title: '选择工作区文件夹', buttonLabel: '使用此文件夹', properties: ['openDirectory', 'createDirectory'], ...(target.workspacePath ? { defaultPath: target.workspacePath } : {}) }
+    const options: Electron.OpenDialogOptions = { title: ui('Choose a workspace folder', '选择工作区文件夹'), buttonLabel: ui('Use this folder', '使用此文件夹'), properties: ['openDirectory', 'createDirectory'], ...(target.workspacePath ? { defaultPath: target.workspacePath } : {}) }
     if (process.platform === 'darwin') app.focus({ steal: true })
     BrowserWindow.fromWebContents(event.sender)?.focus()
     const result = await dialog.showOpenDialog(options)
@@ -1067,7 +1074,7 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string' || typeof messageId !== 'string') throw new Error('Invalid message request')
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     const parent = BrowserWindow.fromWebContents(event.sender)
-    const options = { type: 'warning' as const, message: '删除这条消息？', detail: '消息将从本地聊天记录中删除，无法恢复。此操作不会撤回对方的消息。', buttons: ['取消', '删除'], defaultId: 0, cancelId: 0 }
+    const options = { type: 'warning' as const, message: ui('Delete this message?', '删除这条消息？'), detail: ui('The message will be removed from your local chat history and cannot be recovered. This does not unsend it for others.', '消息将从本地聊天记录中删除，无法恢复。此操作不会撤回对方的消息。'), buttons: [ui('Cancel', '取消'), ui('Delete', '删除')], defaultId: 0, cancelId: 0 }
     const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
     if (result.response !== 1) return false
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
@@ -1079,7 +1086,7 @@ app.whenReady().then(() => {
     const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
     if (!target) return runtime.snapshot()
     const parent = BrowserWindow.fromWebContents(event.sender)
-    const options = { type: 'warning' as const, message: `删除与“${target.name}”的聊天？`, detail: '聊天记录会被删除，此操作无法撤销。', buttons: ['取消', '删除'], defaultId: 0, cancelId: 0 }
+    const options = { type: 'warning' as const, message: ui(`Delete the chat with “${target.name}”?`, `删除与“${target.name}”的聊天？`), detail: ui('The chat history will be deleted. This cannot be undone.', '聊天记录会被删除，此操作无法撤销。'), buttons: [ui('Cancel', '取消'), ui('Delete', '删除')], defaultId: 0, cancelId: 0 }
     const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
     if (result.response !== 1) return runtime.snapshot()
     chatWindows.get(conversationId)?.close()

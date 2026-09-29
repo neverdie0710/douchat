@@ -21,7 +21,9 @@ describe('desktop auth protocol', () => {
 
   it('uses the Douchat scheme and environment-specific web origin', () => {
     expect(desktopAuthScheme()).toBe('douchat')
-    expect(normalizeWebAppUrl(undefined, true)).toBe('http://localhost:3000')
+    expect(normalizeWebAppUrl(undefined, true)).toBe('https://douchat.ai')
+    expect(normalizeWebAppUrl('', true)).toBe('https://douchat.ai')
+    expect(normalizeWebAppUrl('ftp://example.com', true)).toBe('https://douchat.ai')
     expect(normalizeWebAppUrl(undefined, false)).toBe('https://douchat.ai')
     expect(normalizeWebAppUrl('https://staging.example.com', false)).toBe('https://douchat.ai')
     expect(normalizeWebAppUrl('http://example.com', false)).toBe('https://douchat.ai')

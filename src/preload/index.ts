@@ -46,6 +46,7 @@ const api: DouchatApi = {
   setInterfaceLanguage: (language: string) => ipcRenderer.invoke('douchat:set-interface-language', language),
   getAuthState: () => ipcRenderer.invoke('douchat:get-auth-state'),
   startLogin: () => ipcRenderer.invoke('douchat:start-login'),
+  cancelLogin: () => ipcRenderer.invoke('douchat:cancel-login'),
   retryAuth: () => ipcRenderer.invoke('douchat:retry-auth'),
   signOut: () => ipcRenderer.invoke('douchat:sign-out'),
   refreshProfile: () => ipcRenderer.invoke('douchat:refresh-profile'),

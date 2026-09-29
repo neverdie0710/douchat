@@ -14,8 +14,9 @@ export function desktopAuthScheme(): 'douchat' {
 }
 
 export function normalizeWebAppUrl(value: string | undefined, development: boolean): string {
-  const fallback = development ? 'http://localhost:3000' : DOUCHAT_PRODUCTION_ORIGIN
-  // Local development may point auth and Chat API traffic at another origin.
+  // Development also defaults to douchat.ai so a fresh source checkout can sign
+  // in without running the service; set DOUCHAT_SERVICE_URL to use another one.
+  const fallback = DOUCHAT_PRODUCTION_ORIGIN
   // Packaged builds deliberately ignore ambient environment variables so a
   // shell-level override cannot redirect account tokens away from douchat.ai.
   if (!development) return fallback

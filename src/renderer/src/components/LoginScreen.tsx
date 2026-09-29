@@ -1,8 +1,8 @@
-import { ArrowUpRight, Check, LoaderCircle, Maximize2, Minus, ShieldCheck, X } from 'lucide-react'
+import { Globe, LoaderCircle, Maximize2, Minus, X } from 'lucide-react'
 import type { ReactElement } from 'react'
 import type { DesktopAuthState } from '../../../shared/types'
-import logo from '../assets/douchat.svg'
-import { t } from '../preferences'
+import logo from '../../../../resources/icons/douchat.png'
+import { setPreferences, t, usePreferences, type LanguagePreference } from '../preferences'
 
 function WindowControls(): ReactElement | null {
   if (window.douchat.platform !== 'darwin') return null
@@ -13,38 +13,41 @@ function WindowControls(): ReactElement | null {
   </div>
 }
 
-export function LoginScreen({ state, onLogin }: { state: DesktopAuthState; onLogin: () => void }): ReactElement {
+function LanguageSwitch(): ReactElement {
+  const { language } = usePreferences()
+  return <label className="login-language no-drag">
+    <Globe size={15} aria-hidden="true" />
+    <select aria-label={t('Language')} value={language} onChange={(event) => setPreferences({ language: event.target.value as LanguagePreference })}>
+      <option value="system">{t('Follow system')}</option>
+      <option value="en">English</option>
+      <option value="zh-CN">简体中文</option>
+    </select>
+  </label>
+}
+
+export function LoginScreen({ state, onLogin, onCancel }: { state: DesktopAuthState; onLogin: () => void; onCancel: () => void }): ReactElement {
+  usePreferences()
   const waiting = state.status === 'waiting'
   const error = state.status === 'error' ? state.error : ''
 
   return <main className="login-screen window-drag">
     <WindowControls />
+    <LanguageSwitch />
     <section className="login-card no-drag" aria-labelledby="login-title">
-      <div className="login-brand">
-        <img src={logo} alt="" />
-        <span>DOUCHAT</span>
-      </div>
-      <div className="login-heading">
-        <h1 id="login-title">{t('Meet Douchat')}</h1>
-        <p className="login-positioning">{t('Keep every AI conversation in one calm, clear desktop workspace. Mix models and agents freely, while your conversation history stays in your control.')}</p>
-      </div>
-
-      <div className="login-action-panel">
-        <button type="button" className="login-primary" onClick={onLogin}>
-          {waiting ? <LoaderCircle className="login-spinner" size={20} /> : <ArrowUpRight size={20} />}
-          <span>{t(waiting ? 'Open login page again' : 'Continue in browser')}</span>
-        </button>
-
-        <div className={`login-status ${error ? 'has-error' : ''}`} role={error ? 'alert' : 'status'}>
-          <span>{waiting ? <LoaderCircle className="login-spinner" size={18} /> : error ? <X size={18} /> : <Check size={18} />}</span>
-          <div>
-            <strong>{error ? t('Login could not be completed') : waiting ? t('Waiting for browser login…') : t('Secure browser login')}</strong>
-            <small>{error ? t(error) : t(waiting ? 'Finish signing in in your browser. Douchat will return automatically.' : 'Your password stays in the browser. Douchat only receives a one-time authorization code.')}</small>
-          </div>
-        </div>
-      </div>
-
-      <footer className="login-footnote"><ShieldCheck size={15} />{t('Encrypted session storage on this device')}</footer>
+      <img className="login-logo" src={logo} alt="" />
+      <h1 id="login-title">{t('Sign in to Douchat')}</h1>
+      <p className={`login-positioning ${error ? 'has-error' : ''}`} role={error ? 'alert' : 'status'}>
+        {error ? `${t('Login could not be completed')}: ${t(error)}` : t(waiting ? 'Finish signing in in your browser. Douchat will return automatically.' : 'Continue in your browser to securely sign in and get started.')}
+      </p>
+      <button type="button" className="login-primary" disabled={waiting} onClick={onLogin}>
+        {waiting && <LoaderCircle className="login-spinner" size={17} />}
+        <span>{t(waiting ? 'Continue in your browser' : 'Get started')}</span>
+      </button>
+      {waiting && <div className="login-secondary">
+        <button type="button" className="login-reopen" onClick={onLogin}>{t('Reopen browser')}</button>
+        <span aria-hidden="true">•</span>
+        <button type="button" onClick={onCancel}>{t('Cancel')}</button>
+      </div>}
     </section>
   </main>
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -35,6 +35,21 @@ describe('desktop authentication', () => {
     expect(page).toContain('返回 Douchat 官网')
     expect(page).toContain('href="https://douchat.ai"')
     expect(page).not.toContain('douchat://')
+  })
+
+  it('cancels a pending browser login and rejects its late callback', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-auth-'))
+    directories.push(directory)
+    const auth = new DesktopAuth('https://douchat.ai', 'douchat', false, directory, vi.fn())
+
+    expect(await auth.startLogin()).toEqual({ status: 'waiting' })
+    const flow = JSON.parse(readFileSync(join(directory, 'auth-flow.json'), 'utf8')) as { state: string }
+    expect(await auth.cancelLogin()).toEqual({ status: 'signed-out' })
+    expect(existsSync(join(directory, 'auth-flow.json'))).toBe(false)
+
+    const late = await auth.handleCallback(`douchat://auth/callback?state=${flow.state}&code=${'c'.repeat(43)}`)
+    expect(late.status).toBe('error')
+    expect(auth.getAccessToken()).toBeFalsy()
   })
 
   it('keeps the current session in memory when secure persistence is declined', async () => {
