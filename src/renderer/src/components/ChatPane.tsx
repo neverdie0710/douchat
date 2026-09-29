@@ -22,7 +22,7 @@ import type {
   MessageSource,
   Topic
 } from '../../../shared/types'
-import { MessageMarkdown, QuoteMarkdown } from './MessageMarkdown'
+import { MessageMarkdown, QuoteMarkdown, FileConversationContext } from './MessageMarkdown'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, updateSelectedMentions, type MentionQuery } from '../../../shared/bot/mentions'
@@ -1587,7 +1587,7 @@ export function ChatPane({
   )
 
   return (
-    <main className="workspace">
+    <FileConversationContext.Provider value={conversation.id}><main className="workspace">
       <header className="workspace-header window-drag">
         <div className="workspace-identity">
           <div>
@@ -1823,6 +1823,6 @@ export function ChatPane({
           </div>
         </div>
       </div>
-    </main>
+    </main></FileConversationContext.Provider>
   )
 }

@@ -29,3 +29,14 @@ it('requests the folder picker and clear without an onSnapshot callback, showing
     expect(clear).toHaveBeenCalledWith('direct-codex')
   } finally { await act(async () => root.unmount()) }
 })
+
+
+it('keeps folder authorization out of workspace settings', async () => {
+  const host = document.createElement('div'), root = createRoot(host)
+  try {
+    await act(async () => root.render(<ConversationWorkspaceSetting conversation={{ ...conversation, allowedFolders: ['/Users/me/assets'] }} agents={agents} />))
+    expect(host.textContent).not.toContain('Authorized folders')
+    expect(host.textContent).not.toContain('Authorize folder')
+    expect(host.textContent).not.toContain('/Users/me/assets')
+  } finally { await act(async () => root.unmount()) }
+})

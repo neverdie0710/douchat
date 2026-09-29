@@ -25,6 +25,7 @@ import { CLOUD_DECISION_PROVIDER_ID, desktopDecisionSettings, validateDecisionSe
 import { CloudDecisionClient } from './cloudDecision'
 import { customModelProvider, type CustomProviderRecord } from './customModels'
 import { withReplyDeadline } from './replyDeadline'
+import { agentPermissions } from '../shared/agentPermissions'
 import { AgentPermissionBroker, nativeReadPermission, toolCapability } from './agentPermissions'
 import type { SocialImage, SocialFile, SocialTaskReply } from '../shared/social'
 import type { AgentExecutor } from '../shared/agentExecutor'
@@ -33,11 +34,11 @@ import { createWorkspaceTools } from './workspaceTools'
 import { resolveSavedWorkspace, localWorkspace } from './localWorkspaces'
 import { canAssignConversationWorkspace } from '../shared/conversationWorkspace'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, dirname, isAbsolute } from 'node:path'
 import { Agent, type AgentTool } from '@earendil-works/pi-agent-core'
 import { DEFAULT_CLOUD_THINKING_LEVEL } from '../shared/thinkingLevels'
 import { Type, type ImageContent } from '@earendil-works/pi-ai'
@@ -549,6 +550,8 @@ export class DouchatRuntime {
 
   setInterfaceLanguage(language: string): void {
     this.interfaceLanguage = supportedInterfaceLanguage(language)
+    this.store.setInterfaceLanguage(this.interfaceLanguage)
+    this.emit()
   }
 
   get language(): InterfaceLanguage {
@@ -863,7 +866,7 @@ export class DouchatRuntime {
             context === 'group'
               ? 'You are replying inside a group chat. Other members see your public text; use the private transport described in the request when a message is meant for one recipient.'
               : 'You are replying in your private chat with the human. When asked to speak, introduce yourself, announce or post IN A GROUP, use list_groups to identify the group and send_group_message to publish there as yourself. Do not substitute message_agent, an A2A private message, or text in this private chat. Resolve “the group just created” from the create_group tool receipt; ask if multiple groups fit. Claim delivery only after a successful tool result.',
-            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, and Documents with computer_list_files, computer_make_directory, and computer_move_file. Only access local files when the human explicitly asks in the current task; otherwise ask for permission before calling a local-file tool. For local file discovery, first call computer_list_files without a path, then use only absolute paths returned by that tool; never guess the user’s home path, use ~, or pass a relative path. Whenever your reply mentions a local file returned by computer_list_files, including alternative matches, make its visible filename a Markdown link using the exact absolute path in this form: [filename](<douchat-file:///absolute/path>). Do not create a local-file link for an unverified path. When the human explicitly asks to open, view, listen to, or play a listed local file, use computer_open_file to open it in the operating system’s default app; do not try to navigate the web browser to a local path. File moves never overwrite and deletion is unavailable. You may also receive explicitly authorized connector tools such as email_search and email_read; the actual tool list is the source of truth for what is connected. Never claim a computer or connector action happened without calling its tool. Group public handoffs and private deliveries use the message transport described in the request; they do not require a tool call.'
+            'You have a private browser computer. Use computer_open to navigate, computer_snapshot before interacting, and only use refs from the latest snapshot. You may inspect and organize Downloads, Desktop, Documents, and the folders authorized for this conversation with computer_list_files, computer_make_directory, and computer_move_file. Only access local files when the human explicitly asks in the current task; otherwise ask for permission before calling a local-file tool. For local file discovery, first call computer_list_files without a path, then use only absolute paths or allowedFolders returned by that tool; if the human supplies a path outside those folders, call the file tool with that path and it will request folder authorization automatically; never guess the user’s home path, use ~, or pass a relative path. Whenever your reply mentions a local file returned by computer_list_files, including alternative matches, make its visible filename a Markdown link using the exact absolute path in this form: [filename](<douchat-file:///absolute/path>). Do not create a local-file link for an unverified path. When the human explicitly asks to open, view, listen to, or play a listed local file, use computer_open_file to open it in the operating system’s default app; do not try to navigate the web browser to a local path. File moves never overwrite and deletion is unavailable. You may also receive explicitly authorized connector tools such as email_search and email_read; the actual tool list is the source of truth for what is connected. Never claim a computer or connector action happened without calling its tool. Group public handoffs and private deliveries use the message transport described in the request; they do not require a tool call.'
           ].join('\n')
     const agentManagement = context === 'direct' && this.isSystemAdmin(config)
       ? [
@@ -913,8 +916,8 @@ export class DouchatRuntime {
       context === 'controller' || toolsDisabled
         ? []
         : context === 'group'
-          ? [this.userMemoryTool(sessionKey), this.internalMemoryTool(sessionKey), ...routineTools, ...managementTools, ...this.skillTools(config.id), ...this.skillInstallationTools(config.id, sessionKey), ...this.artifactTools(config.id, sessionKey), ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
-          : [this.messageAgentTool(config, sessionKey), ...this.groupMessagingTools(config, sessionKey), ...(sessionKey.startsWith('direct:') ? [this.userMemoryTool(sessionKey), this.internalMemoryTool(sessionKey), ...this.memoryRetrievalTools(sessionKey), ...this.agentFileTools(sessionKey)] : []), ...routineTools, ...managementTools, ...this.skillTools(config.id), ...this.skillInstallationTools(config.id, sessionKey), ...this.artifactTools(config.id, sessionKey), ...this.computer.createTools(config.id), ...this.connectors.createTools(config.id)]
+          ? [this.userMemoryTool(sessionKey), this.internalMemoryTool(sessionKey), ...routineTools, ...managementTools, ...this.skillTools(config.id), ...this.skillInstallationTools(config.id, sessionKey), ...this.artifactTools(config.id, sessionKey), ...this.computer.createTools(config.id, () => this.conversationFileRoots(config.id, sessionKey), (path, operation, signal) => this.requestConversationFolder(config.id, sessionKey, path, operation, signal)), ...this.connectors.createTools(config.id)]
+          : [this.messageAgentTool(config, sessionKey), ...this.groupMessagingTools(config, sessionKey), ...(sessionKey.startsWith('direct:') ? [this.userMemoryTool(sessionKey), this.internalMemoryTool(sessionKey), ...this.memoryRetrievalTools(sessionKey), ...this.agentFileTools(sessionKey)] : []), ...routineTools, ...managementTools, ...this.skillTools(config.id), ...this.skillInstallationTools(config.id, sessionKey), ...this.artifactTools(config.id, sessionKey), ...this.computer.createTools(config.id, () => this.conversationFileRoots(config.id, sessionKey), (path, operation, signal) => this.requestConversationFolder(config.id, sessionKey, path, operation, signal)), ...this.connectors.createTools(config.id)]
 
     const sharedSession = this.sharedCallers.has(sessionKey)
     const guardedTools = tools.map((tool) => ({ ...tool, execute: async (...args: Parameters<typeof tool.execute>) => {
@@ -922,6 +925,12 @@ export class DouchatRuntime {
       if (sharedSession && !caller) throw new Error('No active shared task')
       const toolSignal = caller?.signal && args[2] ? AbortSignal.any([caller.signal, args[2]]) : caller?.signal ?? args[2]
       toolSignal?.throwIfAborted()
+      if (!caller && ['computer_list_files', 'computer_open_file', 'computer_make_directory', 'computer_move_file'].includes(tool.name)) {
+        const agent = this.store.agent(config.id)
+        if (!agent || agent.ownerId !== this.store.currentAccountId) throw new Error('Agent account changed')
+        const capability = ['computer_list_files', 'computer_open_file'].includes(tool.name) ? 'filesRead' : 'filesWrite'
+        if (agentPermissions(agent.permissions).sensitive[capability] === 'deny') throw new Error('The owner has disabled this permission')
+      }
       const packagedSkillRead = tool.name === 'read_skill_file' || tool.name === 'list_skill_files'
       if (!packagedSkillRead && caller && (caller.requesterId !== config.ownerId || caller.requesterAgentId)) {
         const currentConfig = this.store.agent(config.id)
@@ -1093,6 +1102,58 @@ export class DouchatRuntime {
       if (!agent || !this.store.currentAccountId || agent.ownerId !== this.store.currentAccountId) throw new Error('Skill agent account changed')
       return agent.skills ?? []
     })
+  }
+
+  private async requestConversationFolder(agentId: string, sessionKey: string, path: string, operation: string, signal?: AbortSignal): Promise<void> {
+    const conversationId = this.activeConversation.get(sessionKey)
+    const owner = this.store.currentAccountId
+    const current = () => {
+      const agent = this.store.agent(agentId)
+      const conversation = conversationId ? this.store.conversation(conversationId) : undefined
+      if (!agent || agent.ownerId !== owner || owner !== this.store.currentAccountId
+        || !this.replyCancels.has(sessionKey) || this.activeConversation.get(sessionKey) !== conversationId
+        || this.sharedCallers.has(sessionKey) || !conversation?.agentIds.includes(agentId)
+        || !canAssignConversationWorkspace(conversation, this.store.accountAgents, owner)) throw new Error('Folder authorization unavailable in this conversation')
+      return { agent, conversation }
+    }
+    const { agent, conversation } = current()
+    if (!isAbsolute(path)) throw new Error('An absolute folder path is required')
+    let candidate = path
+    for (;;) {
+      try {
+        if (!statSync(candidate).isDirectory()) candidate = dirname(candidate)
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(candidate) === candidate) throw error
+        candidate = dirname(candidate)
+      }
+    }
+    const folder = resolveSavedWorkspace(realpathSync(candidate))
+    const activeSignal = this.replyCancels.get(sessionKey)?.abort.signal
+    const combinedSignal = signal && activeSignal ? AbortSignal.any([signal, activeSignal]) : signal ?? activeSignal
+    await this.permissions.authorize(agent, {
+      requester: agent.name, requesterId: agent.id, requesterKind: 'agent', roomName: conversation.name,
+      context: conversation.type === 'group' ? 'group' : 'direct', capability: toolCapability(operation),
+      operation: this.interfaceLanguage === 'zh-CN' ? '授权此对话访问文件夹' : 'Authorize folder access for this conversation',
+      details: JSON.stringify({ folder, operation, scope: this.interfaceLanguage === 'zh-CN' ? '仅当前对话；同意后继续操作' : 'This conversation only; continue the operation after approval' })
+    }, combinedSignal, true)
+    combinedSignal?.throwIfAborted()
+    const latest = current().conversation
+    if (resolveSavedWorkspace(candidate) !== folder) throw new Error('Folder changed during authorization')
+    this.store.setConversationAllowedFolders(latest.id, [...(latest.allowedFolders ?? []), folder])
+    this.emit()
+  }
+
+  private conversationFileRoots(agentId: string, sessionKey: string): string[] {
+    const conversationId = this.activeConversation.get(sessionKey)
+    const conversation = conversationId ? this.store.conversation(conversationId) : undefined
+    if (!this.replyCancels.has(sessionKey) || this.sharedCallers.has(sessionKey) || !conversation?.agentIds.includes(agentId)
+      || !canAssignConversationWorkspace(conversation, this.store.accountAgents, this.store.currentAccountId)) return []
+    const roots = (conversation.allowedFolders ?? []).flatMap(path => {
+      try { return [resolveSavedWorkspace(path)] } catch { return [] }
+    })
+    try { roots.push(this.hostedWorkspace(agentId, sessionKey)) } catch { /* Missing workspace must not disable other authorized folders. */ }
+    return [...new Set(roots)]
   }
 
   private hostedWorkspace(agentId: string, sessionKey: string): string {

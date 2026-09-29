@@ -610,7 +610,23 @@ export class DesktopAuth {
       if (!systemRole || !Number.isInteger(templateVersion) || templateVersion < 1) {
         throw new Error('Built-in agent service returned invalid data.')
       }
+      const localizations: BuiltInAgentDefinition['localizations'] = {}
+      if (agent.localizations !== undefined) {
+        if (!agent.localizations || typeof agent.localizations !== 'object' || Array.isArray(agent.localizations)) throw new Error('Invalid built-in agent translations.')
+        for (const locale of ['en', 'zh-CN'] as const) {
+          const value = (agent.localizations as Record<string, unknown>)[locale]
+          if (value === undefined) continue
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid built-in agent translation.')
+          const fields = value as Record<string, unknown>
+          const translated = (key: string, max: number) => {
+            if (typeof fields[key] !== 'string' || !fields[key].trim() || fields[key].length > max) throw new Error('Invalid built-in agent translation.')
+            return fields[key].trim()
+          }
+          localizations[locale] = { role: translated('role', 100), instructions: translated('instructions', 12000), labels: translated('labels', 1000) }
+        }
+      }
       return {
+        ...(Object.keys(localizations).length ? { localizations } : {}),
         id: identifier('id', 160),
         systemKey: identifier('systemKey', 80),
         systemRole,

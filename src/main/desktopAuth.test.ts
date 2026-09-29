@@ -28,6 +28,16 @@ afterEach(() => {
 })
 
 describe('desktop authentication', () => {
+  it('retains validated template translations and rejects oversized translated prompts', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-auth-')); directories.push(directory)
+    const auth = new DesktopAuth('https://douchat.ai', 'douchat', false, directory, vi.fn())
+    const translation = { role: '助手', instructions: '帮助用户', labels: '豆博士' }
+    const manifest = { version: 1, agents: [{ id: 'admin', systemKey: 'dr-dou', systemRole: 'admin', capabilities: ['manage_agents'], templateVersion: 2, name: 'Dr. Dou', role: 'Assistant', instructions: 'Help the user', labels: 'Dr. Dou', color: '#14B8A6', modelRoute: 'default', localizations: { 'zh-CN': translation } }] }
+    expect((auth as any).requireBuiltInManifest(manifest).agents[0].localizations['zh-CN']).toEqual(translation)
+    translation.instructions = 'x'.repeat(12001)
+    expect(() => (auth as any).requireBuiltInManifest(manifest)).toThrow('translation')
+  })
+
   it('offers a safe way back to the Douchat website after loopback login', () => {
     const page = createLoopbackSuccessPage()
 

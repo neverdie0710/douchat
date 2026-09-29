@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
-import { access, mkdir, readdir, realpath, rename, stat } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { access, mkdir, readdir, realpath, rename, stat, lstat } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { BrowserWindow } from 'electron'
 import { Type } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
@@ -30,12 +30,15 @@ interface ManagedComputer {
   lastFrame?: Buffer
 }
 
+export type RequestFolderAccess = (path: string, operation: string, signal?: AbortSignal) => Promise<void>
+class FolderAccessRequired extends Error {}
+
 export interface ComputerProvider {
   snapshots(): ComputerSession[]
   start(agentId: string): Promise<ComputerSession>
   stop(agentId: string): Promise<void>
   show(agentId: string): Promise<void>
-  createTools(agentId: string): AgentTool[]
+  createTools(agentId: string, extraRoots?: () => string[], requestAccess?: RequestFolderAccess): AgentTool[]
   dispose(): void
 }
 
@@ -196,8 +199,9 @@ export class LocalComputerProvider implements ComputerProvider {
 
   /** Open a renderer-selected history reference after applying the same path
    *  and symlink checks as the agent tool. */
-  async openLocalFile(input: string): Promise<{ path: string; size: number }> {
-    const { target, size } = await this.existingAllowedFile(input)
+  async openLocalFile(input: string, extraRoots: () => string[] = () => []): Promise<{ path: string; size: number }> {
+    const { target, size } = await this.existingAllowedFile(input, extraRoots())
+    this.resolveAllowedPath(target, extraRoots())
     const error = await this.openPath(target)
     if (error) throw new Error(`Could not open ${basename(target)}: ${error}`)
     return { path: target, size }
@@ -298,7 +302,16 @@ export class LocalComputerProvider implements ComputerProvider {
     })
   }
 
-  createTools(agentId: string): AgentTool[] {
+  createTools(agentId: string, extraRoots: () => string[] = () => [], requestAccess?: RequestFolderAccess): AgentTool[] {
+    const allowedPath = (path: string) => this.resolveAllowedPath(path, extraRoots())
+    const preparePath = async (path: string, operation: string, signal?: AbortSignal): Promise<string> => {
+      try { return allowedPath(path) } catch (error) {
+        if (!(error instanceof FolderAccessRequired) || !requestAccess) throw error
+        await requestAccess(path, operation, signal)
+        signal?.throwIfAborted()
+        return allowedPath(path)
+      }
+    }
     const openParameters = Type.Object({ url: Type.String({ description: 'The http(s) URL to open' }) })
     const snapshotParameters = Type.Object({})
     const clickParameters = Type.Object({ ref: Type.String({ description: 'Element ref from computer_snapshot' }) })
@@ -317,10 +330,10 @@ export class LocalComputerProvider implements ComputerProvider {
       }))
     })
     const openFileParameters = Type.Object({
-      path: Type.String({ description: 'The absolute path of an existing file inside Downloads, Desktop, or Documents' })
+      path: Type.String({ description: 'The absolute path of an existing file inside Downloads, Desktop, Documents, or folders authorized for this conversation' })
     })
     const makeDirectoryParameters = Type.Object({
-      path: Type.String({ description: 'The absolute directory path to create inside Downloads, Desktop, or Documents' })
+      path: Type.String({ description: 'The absolute directory path to create inside Downloads, Desktop, Documents, or folders authorized for this conversation' })
     })
     const moveFileParameters = Type.Object({
       source: Type.String({ description: 'Absolute source path inside an allowed folder' }),
@@ -386,27 +399,28 @@ export class LocalComputerProvider implements ComputerProvider {
     const listFilesTool: AgentTool<typeof listFilesParameters> = {
       name: 'computer_list_files',
       label: 'List local files',
-      description: 'List files and folders in Downloads, Desktop, or Documents only after the human explicitly asks to inspect local files. Otherwise ask for permission first. Start by omitting path to inspect Downloads, then reuse absolute paths returned by this tool for subfolders. Never invent a local path. This tool only reads metadata.',
+      description: 'List files and folders in Downloads, Desktop, Documents, or folders authorized for this conversation only after the human explicitly asks to inspect local files. Otherwise ask for permission first. Omit path to inspect Downloads and discover allowedFolders (including this conversation’s workspace), then reuse returned absolute paths for subfolders. Never invent a local path. This tool only reads metadata.',
       parameters: listFilesParameters,
-      execute: async (_id, params) => {
-        const target = this.resolveAllowedPath(params.path ?? this.allowedRoots[0])
+      execute: async (_id, params, signal) => {
+        const target = await preparePath(params.path ?? this.allowedRoots[0], 'computer_list_files', signal)
         this.setFileActivity(agentId, `Reading ${basename(target) || target}`, true)
         try {
           const entries = await readdir(target, { withFileTypes: true })
           const details = await Promise.all(entries.slice(0, 300).map(async (entry) => {
             const entryPath = join(target, entry.name)
-            const metadata = await stat(entryPath)
+            const metadata = await lstat(entryPath)
             return {
               name: entry.name,
               path: entryPath,
-              kind: entry.isDirectory() ? 'directory' : 'file',
+              kind: entry.isSymbolicLink() ? 'link' : entry.isDirectory() ? 'directory' : 'file',
               size: metadata.size,
               modifiedAt: metadata.mtime.toISOString()
             }
           }))
+          allowedPath(target)
           this.setFileActivity(agentId, `Listed ${details.length} items`, false)
           return {
-            content: [{ type: 'text' as const, text: JSON.stringify({ path: target, entries: details }, null, 2) }],
+            content: [{ type: 'text' as const, text: JSON.stringify({ path: target, allowedFolders: [...this.allowedRoots, ...extraRoots()], entries: details }, null, 2) }],
             details: { path: target, count: details.length, truncated: entries.length > details.length }
           }
         } catch (error) {
@@ -418,12 +432,13 @@ export class LocalComputerProvider implements ComputerProvider {
     const openFileTool: AgentTool<typeof openFileParameters> = {
       name: 'computer_open_file',
       label: 'Open local file',
-      description: 'Open an existing file from Downloads, Desktop, or Documents in the operating system’s default app. Use this to play a video or audio file, view a document, or reveal other local content only when the human explicitly asks to open it.',
+      description: 'Open an existing file from Downloads, Desktop, Documents, or folders authorized for this conversation in the operating system’s default app. Use this to play a video or audio file, view a document, or reveal other local content only when the human explicitly asks to open it.',
       parameters: openFileParameters,
-      execute: async (_id, params) => {
+      execute: async (_id, params, signal) => {
+        await preparePath(params.path, 'computer_open_file', signal)
         this.setFileActivity(agentId, `Opening ${basename(params.path)}`, true)
         try {
-          const { path: target, size } = await this.openLocalFile(params.path)
+          const { path: target, size } = await this.openLocalFile(params.path, extraRoots)
           this.setFileActivity(agentId, `Opened ${basename(target)}`, false)
           return {
             content: [{ type: 'text' as const, text: `Opened in the default desktop app: ${target}` }],
@@ -440,10 +455,10 @@ export class LocalComputerProvider implements ComputerProvider {
     const makeDirectoryTool: AgentTool<typeof makeDirectoryParameters> = {
       name: 'computer_make_directory',
       label: 'Create folder',
-      description: 'Create a folder inside Downloads, Desktop, or Documents. Existing folders are left unchanged.',
+      description: 'Create a folder inside Downloads, Desktop, Documents, or folders authorized for this conversation. Existing folders are left unchanged.',
       parameters: makeDirectoryParameters,
-      execute: async (_id, params) => {
-        const target = this.resolveAllowedPath(params.path)
+      execute: async (_id, params, signal) => {
+        const target = await preparePath(params.path, 'computer_make_directory', signal)
         this.setFileActivity(agentId, `Creating ${basename(target)}`, true)
         await mkdir(target, { recursive: true })
         this.setFileActivity(agentId, `Created ${basename(target)}`, false)
@@ -456,11 +471,11 @@ export class LocalComputerProvider implements ComputerProvider {
     const moveFileTool: AgentTool<typeof moveFileParameters> = {
       name: 'computer_move_file',
       label: 'Move local file',
-      description: 'Move or rename one file or folder inside Downloads, Desktop, or Documents. Never overwrites an existing item and never deletes.',
+      description: 'Move or rename one file or folder inside Downloads, Desktop, Documents, or folders authorized for this conversation. Never overwrites an existing item and never deletes.',
       parameters: moveFileParameters,
-      execute: async (_id, params) => {
-        const source = this.resolveAllowedPath(params.source)
-        const requestedDestination = this.resolveAllowedPath(params.destination)
+      execute: async (_id, params, signal) => {
+        const source = await preparePath(params.source, 'computer_move_file', signal)
+        const requestedDestination = await preparePath(params.destination, 'computer_move_file', signal)
         const destinationMetadata = await stat(requestedDestination).catch((error: unknown) => {
           if (isMissingFile(error)) return undefined
           throw error
@@ -468,7 +483,7 @@ export class LocalComputerProvider implements ComputerProvider {
         const destination = destinationMetadata?.isDirectory()
           ? join(requestedDestination, basename(source))
           : requestedDestination
-        this.resolveAllowedPath(destination)
+        allowedPath(destination)
         try {
           await access(destination)
           throw new Error(`Destination already exists: ${destination}`)
@@ -476,6 +491,7 @@ export class LocalComputerProvider implements ComputerProvider {
           if (!isMissingFile(error)) throw error
         }
         this.setFileActivity(agentId, `Moving ${basename(source)}`, true)
+        allowedPath(source); allowedPath(destination)
         await rename(source, destination)
         this.setFileActivity(agentId, `Moved ${basename(source)}`, false)
         return {
@@ -585,23 +601,38 @@ export class LocalComputerProvider implements ComputerProvider {
     this.notifyChange()
   }
 
-  private resolveAllowedPath(input: string): string {
+  private resolveAllowedPath(input: string, extraRoots: string[] = []): string {
+    const realRoots = [...this.allowedRealRoots, ...extraRoots.map(root => realpathSync(root))]
+    const roots = [...this.allowedRoots, ...extraRoots, ...realRoots]
     if (!input?.trim()) throw new Error('A path is required')
-    if (!isAbsolute(input)) throw new Error('Use an absolute path inside Downloads, Desktop, or Documents')
+    if (!isAbsolute(input)) throw new Error('Use an absolute path inside Downloads, Desktop, Documents, or folders authorized for this conversation')
     const target = resolve(input)
-    if (!this.isWithinRoots(target, this.allowedRoots)) {
-      throw new Error(`Path is outside the allowed folders: ${this.allowedRoots.join(', ')}`)
+    if (!this.isWithinRoots(target, roots)) {
+      throw new FolderAccessRequired(`Path is outside the allowed folders: ${[...this.allowedRoots, ...extraRoots].join(', ')}`)
+    }
+    // Resolve the nearest existing parent as well, including for mkdir/move.
+    // A link inside an allowed folder must not grant access outside it.
+    let parent = target
+    for (;;) {
+      try {
+        const canonical = realpathSync(parent)
+        if (!this.isWithinRoots(canonical, realRoots)) throw new FolderAccessRequired('Path is outside the allowed folders.')
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || dirname(parent) === parent) throw error
+        parent = dirname(parent)
+      }
     }
     return target
   }
 
-  private async existingAllowedFile(input: string): Promise<{ target: string; size: number }> {
-    const requestedPath = this.resolveAllowedPath(input)
+  private async existingAllowedFile(input: string, extraRoots: string[] = []): Promise<{ target: string; size: number }> {
+    const requestedPath = this.resolveAllowedPath(input, extraRoots)
     // Follow the path before opening so a symlink inside an allowed root cannot
     // escape into another part of the machine.
     const target = await realpath(requestedPath)
-    if (!this.isWithinRoots(target, this.allowedRealRoots)) {
-      throw new Error(`Path is outside the allowed folders: ${this.allowedRoots.join(', ')}`)
+    if (!this.isWithinRoots(target, [...this.allowedRealRoots, ...extraRoots.map(root => realpathSync(root))])) {
+      throw new FolderAccessRequired(`Path is outside the allowed folders: ${[...this.allowedRoots, ...extraRoots].join(', ')}`)
     }
     const metadata = await stat(target)
     if (!metadata.isFile()) throw new Error('Choose a file, not a folder')

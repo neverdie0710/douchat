@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -95,4 +95,62 @@ it('suppresses late activity callbacks after disposal while a file action comple
   provider.dispose()
   expect(onChange).not.toHaveBeenCalled()
   await expect(provider.start('agent')).rejects.toThrow('Computer provider is closed')
+})
+
+
+it('scopes extra folders per tool session and immediately honors revocation', async () => {
+  const { root, openPath } = await setup()
+  const extra = await mkdtemp(join(tmpdir(), 'douchat-extra-')); directories.push(extra)
+  const file = join(extra, 'asset.txt'); await writeFile(file, 'asset')
+  const provider = new LocalComputerProvider(() => {}, [root], openPath)
+  let roots = [extra]
+  const allowed = provider.createTools('agent', () => roots)
+  const isolated = provider.createTools('agent')
+  const tool = (items: typeof allowed, name: string) => items.find(item => item.name === name)!
+  await expect(tool(isolated, 'computer_open_file').execute('denied', { path: file })).rejects.toThrow('outside the allowed folders')
+  await tool(allowed, 'computer_open_file').execute('open', { path: file })
+  expect(openPath).toHaveBeenCalledWith(await realpath(file))
+  expect(JSON.stringify(await tool(allowed, 'computer_list_files').execute('list', { path: extra }))).toContain('asset.txt')
+  roots = []
+  await expect(tool(allowed, 'computer_list_files').execute('revoked', { path: extra })).rejects.toThrow('outside the allowed folders')
+})
+
+it('rejects symlink escapes for listing, creating and moving files', async () => {
+  const { root, openPath } = await setup()
+  const outside = await mkdtemp(join(tmpdir(), 'douchat-outside-')); directories.push(outside)
+  const link = join(root, 'escape'); await symlink(outside, link)
+  await writeFile(join(root, 'source.txt'), 'source')
+  const tools = new LocalComputerProvider(() => {}, [root], openPath).createTools('agent')
+  const execute = (name: string, params: object) => tools.find(tool => tool.name === name)!.execute('test', params)
+  await expect(execute('computer_list_files', { path: link })).rejects.toThrow('outside the allowed folders')
+  await expect(execute('computer_make_directory', { path: join(link, 'nested') })).rejects.toThrow('outside the allowed folders')
+  await expect(execute('computer_move_file', { source: join(root, 'source.txt'), destination: join(link, 'moved.txt') })).rejects.toThrow('outside the allowed folders')
+})
+
+
+it('waits for folder approval before accessing files and resumes the original operation', async () => {
+  const { root, openPath } = await setup()
+  const extra = await mkdtemp(join(tmpdir(), 'douchat-prompt-')); directories.push(extra)
+  await writeFile(join(extra, 'approved.txt'), 'hello')
+  let roots: string[] = [], approve!: () => void
+  const request = vi.fn(async () => { await new Promise<void>(resolve => { approve = resolve }); roots = [extra] })
+  const tools = new LocalComputerProvider(() => {}, [root], openPath).createTools('agent', () => roots, request)
+  const list = tools.find(tool => tool.name === 'computer_list_files')!
+  let completed = false
+  const pending = list.execute('list', { path: extra }).then(result => { completed = true; return result })
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce())
+  expect(completed).toBe(false)
+  approve()
+  expect(JSON.stringify(await pending)).toContain('approved.txt')
+  await list.execute('again', { path: extra })
+  expect(request).toHaveBeenCalledOnce()
+})
+
+it('does not perform the operation when folder permission is declined', async () => {
+  const { root, openPath } = await setup()
+  const extra = await mkdtemp(join(tmpdir(), 'douchat-denied-')); directories.push(extra)
+  const path = join(extra, 'file.txt'); await writeFile(path, 'hello')
+  const tools = new LocalComputerProvider(() => {}, [root], openPath).createTools('agent', () => [], async () => { throw new Error('declined') })
+  await expect(tools.find(tool => tool.name === 'computer_open_file')!.execute('open', { path })).rejects.toThrow('declined')
+  expect(openPath).not.toHaveBeenCalled()
 })

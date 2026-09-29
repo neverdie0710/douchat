@@ -1,3 +1,5 @@
+import { drDouLocalizations, localizedBuiltInAgent, builtInDefaultValues } from '../shared/builtInAgentLocalization'
+import { supportedInterfaceLanguage, type InterfaceLanguage } from '../shared/language'
 import type { AccountContext } from '../shared/accountData'
 import { AgentProfileFiles } from './profileFiles'
 import { UserMemoryFiles } from './userMemoryFile'
@@ -92,12 +94,10 @@ export const EMBEDDED_BUILT_IN_AGENT_MANIFEST: BuiltInAgentManifest = {
     systemKey: 'dr-dou',
     systemRole: 'admin',
     capabilities: ['manage_agents'],
-    templateVersion: 1,
+    templateVersion: 2,
     name: 'Dr. Dou',
-    role: '豆博士',
-    instructions:
-      '你是豆博士（Dr. Dou），Douchat 的云端智能助手。友好、可靠、简洁地帮助用户解决问题、完成任务，默认使用用户正在使用的语言回复。',
-    labels: 'Douchat',
+    ...drDouLocalizations.en,
+    localizations: drDouLocalizations,
     color: '#14B8A6',
     modelRoute: 'default'
   }]
@@ -259,6 +259,14 @@ const defaultAgents = (): AgentConfig[] => {
 }
 
 export class DouchatStore {
+  private interfaceLanguage: InterfaceLanguage = 'en'
+  setInterfaceLanguage(language: string): void {
+    this.interfaceLanguage = supportedInterfaceLanguage(language)
+    const record = this.accountDefaultContacts().find(item => item.accountId === this.currentAccountId)
+    const agent = record && this.agent(record.agentId)
+    if (agent) this.ensureDefaultCloudContact(this.currentAccountId, { provider: agent.provider, model: agent.model })
+  }
+
   readonly userMemories: UserMemoryStore
   readonly groupMemories: GroupMemoryStore
   private readonly db: DatabaseSync
@@ -1338,10 +1346,11 @@ export class DouchatStore {
   ): DefaultCloudContactResult {
     const normalizedAccountId = accountId.trim()
     if (!normalizedAccountId) return { created: false }
+    const previousDefinition = defaultBuiltInAgent(this.builtInManifest(normalizedAccountId))
     if (remoteManifest) {
       this.setMeta(`${BUILT_IN_MANIFEST_META_PREFIX}${normalizedAccountId}`, JSON.stringify(remoteManifest))
     }
-    const definition = defaultBuiltInAgent(remoteManifest ?? this.builtInManifest(normalizedAccountId))
+    const definition = localizedBuiltInAgent(defaultBuiltInAgent(remoteManifest ?? this.builtInManifest(normalizedAccountId)), this.interfaceLanguage)
     const records = this.accountDefaultContacts()
     const existingIndex = records.findIndex((record) => record.accountId === normalizedAccountId)
     const existing = records[existingIndex]
@@ -1352,8 +1361,7 @@ export class DouchatStore {
         // Older profile forms submitted untouched defaults as user overrides.
         // Empty values are deliberate clears and must survive template refreshes.
         for (const key of ['role', 'instructions', 'labels'] as const) {
-          if (overrides[key] && (overrides[key] === definition[key]
-            || overrides[key] === EMBEDDED_BUILT_IN_AGENT_MANIFEST.agents[0][key])) delete overrides[key]
+          if (overrides[key] && [...builtInDefaultValues(definition, key), ...builtInDefaultValues(previousDefinition, key)].includes(overrides[key])) delete overrides[key]
         }
         const model = definition.modelRoute === 'default' ? binding.model : definition.modelRoute
         const cloudAgentId = definition.id === 'system-admin-fallback' ? agent.cloudAgentId : definition.id
@@ -1925,6 +1933,13 @@ export class DouchatStore {
   }
 
   /** Callers must validate the folder and eligibility first. */
+  setConversationAllowedFolders(conversationId: string, folders: string[]): void {
+    const conversation = this.conversation(conversationId)
+    if (!conversation) throw new Error('Chat not found')
+    conversation.allowedFolders = [...new Set(folders)]
+    this.putConversation(conversation)
+  }
+
   setConversationWorkspace(conversationId: string, workspacePath: string | undefined): Conversation | undefined {
     const conversation = this.conversation(conversationId)
     if (!conversation) return undefined

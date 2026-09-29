@@ -134,3 +134,50 @@ it('lets cloud agents read and write the selected folder while enforcing permiss
   internal.sharedCallers.set(session, { requesterId: 'another-person' })
   await expect(tools.find((tool: any) => tool.name === 'read_workspace_file').execute('read', { path: 'hello.md' })).rejects.toThrow('unavailable')
 })
+
+
+it('refreshes file roots from the active conversation and excludes shared tasks', () => {
+  const { store, runtime, project, cloud } = setup()
+  const { conversation } = store.ensureDirectConversation(cloud.id)
+  const extra = join(project, 'assets'); mkdirSync(extra)
+  store.setConversationWorkspace(conversation.id, project)
+  store.setConversationAllowedFolders(conversation.id, [extra])
+  const internal = runtime as any, session = `direct:${conversation.id}:main`
+  internal.activeConversation.set(session, conversation.id)
+  expect(internal.conversationFileRoots(cloud.id, session)).toEqual([])
+  internal.replyCancels.set(session, { abort: new AbortController() })
+  expect(internal.conversationFileRoots(cloud.id, session)).toEqual([extra, project])
+  expect(internal.conversationFileRoots('other-agent', session)).toEqual([])
+  store.setConversationAllowedFolders(conversation.id, [])
+  expect(internal.conversationFileRoots(cloud.id, session)).toEqual([project])
+  internal.sharedCallers.set(session, { requesterId: 'other-person' })
+  expect(internal.conversationFileRoots(cloud.id, session)).toEqual([])
+  internal.sharedCallers.delete(session)
+  store.setCurrentAccountId('another-account')
+  expect(internal.conversationFileRoots(cloud.id, session)).toEqual([])
+})
+
+
+it.each(['allow', 'decline', 'cancel', 'account-change'])('handles on-demand folder approval: %s', async decision => {
+  const { store, runtime, project, cloud } = setup()
+  const { conversation } = store.ensureDirectConversation(cloud.id)
+  const internal = runtime as any, session = `direct:${conversation.id}:main`
+  const abort = new AbortController()
+  internal.activeConversation.set(session, conversation.id)
+  internal.replyCancels.set(session, { conversationId: conversation.id, abort })
+  const permissions = agentPermissions(); permissions.sensitive.filesRead = 'allow'
+  store.updateAgent(cloud.id, { permissions })
+  const pending = internal.requestConversationFolder(cloud.id, session, project, 'computer_list_files')
+  const result = pending.then(() => 'allowed', () => 'denied')
+  const request = runtime.snapshot().permissionRequests![0]
+  expect(request).toBeDefined()
+  expect(JSON.parse(request.details).folder).toBe(project)
+  expect(store.conversation(conversation.id)?.allowedFolders).toBeUndefined()
+  if (decision === 'cancel') abort.abort()
+  else {
+    runtime.resolveAgentPermission(request.id, decision !== 'decline')
+    if (decision === 'account-change') store.setCurrentAccountId('another-account')
+  }
+  expect(await result).toBe(decision === 'allow' ? 'allowed' : 'denied')
+  expect(store.conversation(conversation.id)?.allowedFolders ?? []).toEqual(decision === 'allow' ? [project] : [])
+})

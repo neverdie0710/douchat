@@ -1,3 +1,4 @@
+import { drDouLocalizations, legacyDrDouDefaults } from '../shared/builtInAgentLocalization'
 import { agentPermissions } from '../shared/agentPermissions'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -281,6 +282,32 @@ describe('DouchatStore', () => {
     restored.close()
   })
 
+  it('localizes default fields on creation and language switches while preserving edits and clears', () => {
+    const store = createStore()
+    store.setInterfaceLanguage('zh-CN')
+    const { agent } = store.ensureDefaultCloudContact('locale-user', { provider: 'gateway', model: 'default' })
+    expect(agent).toMatchObject(drDouLocalizations['zh-CN'])
+    store.setInterfaceLanguage('en')
+    expect(store.agent(agent!.id)).toMatchObject(drDouLocalizations.en)
+    store.updateAgent(agent!.id, { instructions: 'My custom instructions', labels: '' })
+    store.setInterfaceLanguage('zh-CN')
+    expect(store.agent(agent!.id)).toMatchObject({ role: '豆博士', instructions: 'My custom instructions', labels: '' })
+    store.setInterfaceLanguage('en')
+    expect(store.agent(agent!.id)).toMatchObject({ role: 'Douchat assistant', instructions: 'My custom instructions', labels: '' })
+  })
+
+  it('migrates legacy Chinese template values and cached overrides without changing the contact id', () => {
+    const store = createStore(), binding = { provider: 'gateway', model: 'default' }
+    const legacy: BuiltInAgentManifest = { version: 1, agents: [{
+      id: 'old-admin', systemKey: 'dr-dou', systemRole: 'admin', capabilities: ['manage_agents'],
+      templateVersion: 1, name: 'Dr. Dou', ...legacyDrDouDefaults, color: '#14B8A6', modelRoute: 'default'
+    }] }
+    const { agent } = store.ensureDefaultCloudContact('locale-user', binding, legacy)
+    store.updateAgent(agent!.id, { ...legacyDrDouDefaults })
+    store.setInterfaceLanguage('en')
+    expect(store.agent(agent!.id)).toMatchObject({ id: 'old-admin', ...drDouLocalizations.en })
+  })
+
   it('creates one Dr. Dou Cloud contact per newly signed-in account', () => {
     const store = createStore()
     const binding = { provider: 'gateway', model: 'default' }
@@ -292,8 +319,8 @@ describe('DouchatStore', () => {
       systemRole: 'admin',
       systemKey: 'dr-dou',
       capabilities: ['manage_agents'],
-      role: '豆博士',
-      labels: 'Douchat',
+      role: 'Douchat assistant',
+      labels: 'Dr. Dou, Douchat',
       provider: 'gateway',
       model: 'default'
     })

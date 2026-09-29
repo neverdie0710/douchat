@@ -75,7 +75,7 @@ it('replaces built-in identity after customization and preserves it across manif
   const internals = runtime as unknown as { systemPrompt: (config: NonNullable<ReturnType<DouchatStore['agent']>>, context: 'direct' | 'group', routineAllowed: boolean) => string }
   try {
     const agent = store.ensureDefaultCloudContact('owner', { provider: 'gateway', model: 'default' }).agent!
-    expect(internals.systemPrompt(agent, 'direct', false)).toContain('豆博士')
+    expect(internals.systemPrompt(agent, 'direct', false)).toContain('Dr. Dou')
     store.updateAgent(agent.id, { name: '拽姐', instructions: agent.instructions, labels: agent.labels })
     for (const context of ['direct', 'group'] as const) {
       const renamed = internals.systemPrompt(store.agent(agent.id)!, context, false)

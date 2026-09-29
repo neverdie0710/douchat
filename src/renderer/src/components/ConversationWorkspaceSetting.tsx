@@ -14,7 +14,7 @@ export function ConversationWorkspaceSetting({ conversation, agents, onSnapshot 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const eligible = canAssignConversationWorkspace(conversation, agents)
-  if (!eligible && !conversation.workspacePath) return null
+  if (!eligible && !conversation.workspacePath && !conversation.allowedFolders?.length) return null
   const run = async (action: () => Promise<AppSnapshot | void>): Promise<void> => {
     setBusy(true); setError('')
     try {

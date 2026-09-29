@@ -1,5 +1,5 @@
 import { ChatErrorBoundary } from './ChatErrorBoundary'
-import { memo, useState, type ReactElement, type ReactNode } from 'react'
+import { memo, useState, createContext, useContext, type ReactElement, type ReactNode } from 'react'
 import { Streamdown, type Components, type ControlsConfig, type MermaidErrorComponentProps, type PluginConfig } from 'streamdown'
 import { cjk } from '@streamdown/cjk'
 import { mermaid } from '@streamdown/mermaid'
@@ -7,6 +7,8 @@ import { FileText, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { SvgPreview } from './SvgPreview'
 import { CodeArtifact, codeArtifactLanguages } from './CodeArtifact'
 import { t } from '../preferences'
+
+export const FileConversationContext = createContext<string | undefined>(undefined)
 
 export function localFilePathFromHref(href: string | undefined, platform?: string): string | undefined {
   if (!href?.toLowerCase().startsWith('douchat-file:')) return undefined
@@ -23,6 +25,7 @@ export function localFilePathFromHref(href: string | undefined, platform?: strin
 }
 
 function LocalFileLink({ href, children }: { href: string; children: ReactNode }): ReactElement {
+  const conversationId = useContext(FileConversationContext)
   const path = localFilePathFromHref(href)
   const [state, setState] = useState<'idle' | 'opening' | 'failed'>('idle')
   if (!path) return <span>{children}</span>
@@ -31,7 +34,7 @@ function LocalFileLink({ href, children }: { href: string; children: ReactNode }
     if (state === 'opening') return
     setState('opening')
     try {
-      await window.douchat.openLocalFile(path)
+      await window.douchat.openLocalFile(path, conversationId)
       setState('idle')
     } catch {
       setState('failed')

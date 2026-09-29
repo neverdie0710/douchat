@@ -12,6 +12,6 @@ export interface DesktopDeviceApi {
   windowAction: (action: 'close' | 'minimize' | 'fullscreen') => void
   requestMicrophoneAccess: () => Promise<'granted' | 'denied' | 'unsupported'>
   openMicrophoneSettings: () => Promise<void>
-  openLocalFile: (path: string) => Promise<void>
+  openLocalFile: (path: string, conversationId?: string) => Promise<void>
   openConversationWindow: (conversationId: string) => Promise<void>
 }

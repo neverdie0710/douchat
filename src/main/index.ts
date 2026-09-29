@@ -799,13 +799,27 @@ app.whenReady().then(() => {
     clipboard.writeImage(image)
   })
   ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
-  ipcMain.handle('douchat:open-local-file', async (event, path: string) => {
-    if (!isDouchatRenderer(event.sender) || typeof path !== 'string') throw new Error('Invalid file request')
+  ipcMain.handle('douchat:open-local-file', async (event, path: string, conversationId?: string) => {
+    if (!isDouchatRenderer(event.sender) || typeof path !== 'string' || (conversationId !== undefined && typeof conversationId !== 'string')) throw new Error('Invalid file request')
     const document = await store.ownedDocumentPath(path)
     if (document) {
       const error = await shell.openPath(document)
       if (error) throw new Error(error)
-    } else await computer.openLocalFile(path)
+    } else await computer.openLocalFile(path, () => {
+      const conversation = store.accountConversations.find(item => item.id === conversationId)
+      if (!conversation || !canAssignConversationWorkspace(conversation, store.accountAgents, store.currentAccountId)) return []
+      const roots = [...(conversation.allowedFolders ?? []), ...(conversation.workspacePath ? [conversation.workspacePath] : [])]
+      if (!conversation.workspacePath) {
+        const topic = store.activeTopicId(conversation.id)
+        for (const id of conversation.agentIds) {
+          const agent = store.accountAgents.find(item => item.id === id)!
+          const key = conversation.type === 'direct' ? `direct:${conversation.id}:${topic}` : groupMemberSessionId(conversation.id, id, topic)
+          const workspace = openableWorkspace(agent, key, conversation.type === 'group')
+          if (workspace) roots.push(workspace.directory)
+        }
+      }
+      return roots.flatMap(root => { try { return [resolveSavedWorkspace(root)] } catch { return [] } })
+    })
   })
   ipcMain.handle('douchat:get-snapshot', () => runtime.snapshot())
   const push = (): AppSnapshot => {

@@ -100,7 +100,10 @@ export interface BuiltInAgentUserOverrides {
   labels?: string
 }
 
+export type BuiltInAgentLocalization = Pick<BuiltInAgentDefinition, 'role' | 'instructions' | 'labels'>
+
 export interface BuiltInAgentDefinition {
+  localizations?: Partial<Record<'en' | 'zh-CN', BuiltInAgentLocalization>>
   id: string
   systemKey: string
   systemRole: 'admin'
@@ -151,6 +154,7 @@ export interface Conversation {
   activeTopicId: string
   /** User-selected folder for local CLI agents. Used only while every member is the owner's local agent. */
   workspacePath?: string
+  allowedFolders?: string[]
   savedToContacts?: boolean
   muted?: boolean
   hidden?: boolean

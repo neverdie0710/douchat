@@ -13,7 +13,8 @@ vi.mock('../preferences', () => ({
   )
 }))
 
-vi.mock('./MessageMarkdown', () => ({
+vi.mock('./MessageMarkdown', async () => ({
+  FileConversationContext: (await import('react')).createContext<string | undefined>(undefined),
   QuoteMarkdown: ({ text }: { text: string }) => <span>{text}</span>,
   MessageMarkdown: ({ text }: { text: string }) => <div data-testid="private-message-content">{text}</div>
 }))
