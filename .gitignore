@@ -11,6 +11,10 @@ build/
 *.dmg
 *.exe
 *.AppImage
+*.deb
+*.rpm
+*.snap
+*.msi
 *.blockmap
 
 # Local environment and credentials
@@ -28,6 +32,7 @@ credentials*.json
 *.r2-credentials
 electron-builder.env
 dev-app-update.yml
+*.local.json
 
 # Logs and diagnostic output
 logs/
@@ -51,9 +56,11 @@ src/routeTree.gen.ts
 .npm/
 .pnpm-store/
 
-# Editor and operating-system files
+# Editor, AI-assistant and operating-system files
 .idea/
 .vscode/
+.claude/settings.local.json
+.claude/worktrees/
 *.swp
 *.swo
 *~
@@ -66,3 +73,6 @@ douchat-data/
 data/
 tmp/
 temp/
+
+# Private backend hand-off patches (keep them in the backend repository)
+patches/connany-*/

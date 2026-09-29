@@ -250,7 +250,9 @@ describe('usage and billing settings', () => {
     ))
 
     expect(container.textContent).toContain('0.1.6')
-    expect(container.textContent).toContain('Douchat website')
+    expect(container.textContent).toContain('Software update')
+    expect(container.querySelector<HTMLAnchorElement>('a[href="https://github.com/thinkany-ai/douchat"]')?.textContent).toBe('Source code')
+    expect(container.textContent).toContain('AGPL-3.0-only license')
     expect(container.querySelector<HTMLAnchorElement>('a.about-website-button')?.href).toBe('https://douchat.ai/?utm_source=douchat-desktop')
     const logs = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === 'Open log folder')!
     await act(async () => logs.click())

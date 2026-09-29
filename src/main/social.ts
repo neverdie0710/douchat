@@ -1,12 +1,14 @@
+import type { SelectedMention } from '../shared/bot/mentions'
+import { decodeSocialFiles, exportSocialFiles } from './socialFiles'
 import { agentPermissions } from '../shared/agentPermissions'
-import { addressesEveryone, mentionedMembers } from '../shared/bot/mentions'
+import { addressesEveryone, resolveMentionedMembers } from '../shared/bot/mentions'
 import { socialFollowUpTarget } from '../shared/socialFollowUp'
-import type { AgentConfig, MessageAttachment, MessageImageInput } from '../shared/types'
+import type { AgentConfig, MessageAttachment, MessageImageInput, MessageFileInput } from '../shared/types'
 import { randomUUID } from 'node:crypto'
 import type { DesktopAuth } from './desktopAuth'
 import type { DouchatStore } from './store'
 import type { DouchatRuntime } from './runtime'
-import type { SocialAction, SocialAgent, SocialResult, SocialSnapshot, SocialTask, SocialMessage, SocialImage } from '../shared/social'
+import type { SocialAction, SocialAgent, SocialResult, SocialSnapshot, SocialTask, SocialMessage, SocialImage, SocialFile } from '../shared/social'
 
 interface InboxDelivery {
   snapshot: SocialSnapshot
@@ -34,18 +36,14 @@ export function privacySafeSocialSnapshot(snapshot: SocialSnapshot): SocialSnaps
   }
 }
 
-export function sharedGroupReplyTargets(content: string, agents: SocialAgent[], humans: { id: string; name: string }[] = [], requesterId?: string): string[] {
+export function sharedGroupReplyTargets(content: string, agents: SocialAgent[], humans: { id: string; name: string }[] = [], requesterId?: string, selections?: SelectedMention[]): string[] {
   if (addressesEveryone(content)) {
     if (!requesterId || humans[0]?.id !== requesterId) throw new Error('Only the group owner can mention everyone.')
     return agents.filter(agent => agent.ownerId === requesterId || agent.interactionHumans === 'allow' || agent.interactionHumans === 'ask').map(agent => agent.id)
   }
   // Explicit mentions take priority over any eligible follow-up recipient.
   const members = [...humans, ...agents]
-  const addressed = mentionedMembers(content, members)
-  const nameKey = (name: string) => name.normalize('NFKC').toLocaleLowerCase()
-  if (addressed.some(member => members.filter(other => nameKey(other.name) === nameKey(member.name)).length > 1)) {
-    throw new Error('This mention matches multiple members. Use a unique member name or select a task recipient.')
-  }
+  const addressed = resolveMentionedMembers(content, members, selections)
   return addressed.filter(member => agents.some(agent => agent.id === member.id)).map(member => member.id)
 }
 
@@ -190,7 +188,14 @@ export class SocialClient {
           else pending.delete(message.id)
         }
         const attachments = new Map<string, MessageAttachment[]>()
+        const fileLinks = new Map<string, string[]>()
         for (const message of new Map(incoming.map((message) => [message.id, message])).values()) {
+          for (const [id, files, images] of [[message.id, message.files, message.images], [`${message.id}:reply`, message.replyFiles, message.replyImages]] as const) {
+            if (!files?.length || known.has(`${local?.id}:${id}`)) continue
+            const links: string[] = []
+            for (const file of decodeSocialFiles(files, images)) links.push(await this.store.saveIMFile(file, identity.id))
+            fileLinks.set(id, links)
+          }
           for (const [id, images] of [[message.id, message.images], [`${message.id}:reply`, message.replyImages]] as const) {
             if (!images?.length || known.has(`${local?.id}:${id}`)) continue
             const saved: MessageAttachment[] = []
@@ -203,7 +208,7 @@ export class SocialClient {
         }
         if (generation !== this.generation || this.identity().id !== identity.id) throw new Error('Chat account mismatch')
         if (rosterGeneration !== this.rosterGeneration) return
-        this.store.syncFriendConversation(identity.id, room, incoming, attachments)
+        this.store.syncFriendConversation(identity.id, room, incoming, attachments, fileLinks)
         if (snapshot.syncVersion === 1) this.roomSync.set(stateKey, { revision: room.revision, cursor, pending, checkedAt: Date.now(), auditedAt: incremental ? previous.auditedAt : Date.now() })
         this.onInboxChanged()
       }
@@ -227,7 +232,7 @@ export class SocialClient {
     return current
   }
 
-  async sendMessage(conversationId: string, content: string, inputImages?: MessageImageInput[]): Promise<void> {
+  async sendMessage(conversationId: string, content: string, inputImages?: MessageImageInput[], inputFiles?: MessageFileInput[], mentions?: SelectedMention[]): Promise<void> {
     const identity = this.identity()
     const conversation = this.store.accountConversations.find((item) => item.id === conversationId)
     if (!conversation?.remoteRoomId || conversation.ownerId !== identity.id) throw new Error('Chat not found')
@@ -239,11 +244,17 @@ export class SocialClient {
       if (total > 20 * 1024 * 1024) throw new Error('Images must total 20 MB or less.')
       return { name: image.name, mimeType: image.mimeType, base64: Buffer.from(image.data).toString('base64') }
     })
+    const mentionContent = content
+    const portable = await exportSocialFiles(this.store, content, identity.id)
+    content = portable.text
+    const files = [...portable.files, ...(inputFiles ?? []).map(file => ({ name: file.name, base64: Buffer.from(file.data).toString('base64') }))]
+    const decodedFiles = decodeSocialFiles(files, images)
+    if (files.length && (await this.request<SocialSnapshot>(undefined, identity)).filesVersion !== 1) throw new Error('服务器尚未支持文件传输，请更新服务端后重试。')
     const room = conversation.socialRoom
     const explicitIds = room?.kind !== 'group' && addressesEveryone(content) ? []
-      : sharedGroupReplyTargets(content, room?.agents ?? [], room?.members ?? [], identity.id)
+      : sharedGroupReplyTargets(mentionContent, room?.agents ?? [], room?.members ?? [], identity.id, mentions)
     const followUp = explicitIds.length ? undefined : socialFollowUpTarget(conversation, this.store.messagePage(conversationId, conversation.activeTopicId).messages, content)
-    const signature = JSON.stringify([content, images])
+    const signature = JSON.stringify([content, images, files, mentions])
     const key = `${identity.id}:${conversationId}`
     let pending = this.pendingSends.get(key)
     // A lost receipt must retry the same task even after optimistic insertion
@@ -259,14 +270,15 @@ export class SocialClient {
     const existing = this.store.topicMessages(conversationId, conversation.activeTopicId).find((message) => message.id === localId)
     if (!existing) {
       const attachments = await Promise.all((inputImages ?? []).map((image) => this.store.saveImageAttachment(image, identity.id)))
+      const links = await Promise.all(decodedFiles.map(file => this.store.saveIMFile(file, identity.id)))
       if (this.identity().id !== identity.id) throw new Error('Chat account mismatch')
       this.store.addMessage({ id: localId, conversationId, topicId: conversation.activeTopicId,
-        authorId: 'user', authorName: 'You', text: content, kind: 'message',
+        authorId: 'user', authorName: 'You', text: [content, ...links].filter(Boolean).join('\n\n'), kind: 'message',
         deliveryState: 'sending', ...(attachments.length ? { attachments } : {}) })
     } else this.store.setMessageDeliveryState(localId, 'sending')
     this.onInboxChanged()
     try {
-      await this.request({ action: 'send', roomId: conversation.remoteRoomId, content, images, agentId, agentIds, id: pending!.id }, identity)
+      await this.request({ action: 'send', roomId: conversation.remoteRoomId, content, images, ...(files.length ? { files } : {}), agentId, agentIds, id: pending!.id }, identity)
       this.pendingSends.delete(key)
       // A send receipt can arrive before the task snapshot (or after a watch update).
       const confirmedTasks = this.store.topicMessages(conversationId, conversation.activeTopicId).find((message) => message.id === localId)?.socialTasks
@@ -383,13 +395,28 @@ export class SocialClient {
       return this.request({ ...input, ...sharedAgentProfile(agent) })
     }
     if (input.action === 'create-room') {
-      const result = await this.request<SocialResult>(input)
+      const identity = this.identity()
+      const { agentIds = [], ...request } = input
+      // Validate ownership before creating anything remotely.
+      const agents = [...new Set(agentIds)].map(id => this.store.claimSocialAgent(id, identity.id))
+      const result = await this.request<SocialResult>(request, identity)
       if (!result.roomId) throw new Error('Chat could not be created')
-      // An in-flight poll may have fetched its room list before this room existed.
-      await this.syncInbox(true)
-      const conversation = this.store.accountConversations.find((item) => item.remoteRoomId === result.roomId)
+      // Bounded parallel registration keeps latency independent of member count
+      // for ordinary groups and does not overload the service for large selections.
+      for (let offset = 0; offset < agents.length; offset += 4) {
+        const results = await Promise.allSettled(agents.slice(offset, offset + 4).map(agent => this.request({
+          action: 'add-agent', roomId: result.roomId, localId: agent.id,
+          order: (input.memberOrder ?? []).indexOf(`agent:${agent.id}`) + 1,
+          ...sharedAgentProfile(agent)
+        }, identity)))
+        const failed = results.find(item => item.status === 'rejected')
+        if (failed?.status === 'rejected') throw new Error(`The group was created, but some agents could not be added. Open the group and retry adding them. ${failed.reason instanceof Error ? failed.reason.message : ''}`)
+      }
+      // Never wait for unrelated room history or an older long-running inbox poll.
+      const snapshot = await this.refreshRoom(result.roomId)
+      const conversation = this.store.accountConversations.find(item => item.remoteRoomId === result.roomId)
       if (!conversation) throw new Error('Chat could not be synchronized')
-      return { ...result, conversationId: conversation.id }
+      return { ...result, conversationId: conversation.id, snapshot }
     }
     return this.request(input)
   }
@@ -453,20 +480,25 @@ export class SocialClient {
           void (async () => {
             let reply: string
             let images: SocialImage[] | undefined
+            let files: SocialFile[] | undefined
             let failed = false
             try {
               if (signal.aborted || task.ownerId !== identity.id || task.agent.ownerId !== identity.id) throw new Error("Task permission check failed.")
               // A task can arrive before the inbox poll creates this room locally.
               // Materialize its trusted room identity before resolving group memory.
               if (task.roomId && !this.store.accountConversations.some(room => room.remoteRoomId === task.roomId)) await this.refreshRoom(task.roomId)
+              // History attachment metadata alone is not readable. Finish the
+              // inbox download before constructing this agent's file context.
+              if (task.context && /"(?:fileNames|replyFileNames)"/.test(task.context)) await this.syncInbox(true)
               const output = await this.runtime.executeSocialTask(identity.id, task.agent.localId, task.id, task.content, signal, task.context, {
                 roomId: task.roomId, requesterId: task.authorId, requester: task.authorName, requesterAgentId: task.requesterAgentId, roomName: task.roomName ?? '',
                 delegate: async (agentId, content) => { await this.request({ action: 'delegate', taskId: task.id, claim: task.claim, agentId, content }, identity, signal) }
-              }, task.images)
+              }, task.images, task.files)
               reply = output.text
               images = output.images
+              files = output.files
             } catch (error) { failed = true; reply = error instanceof Error ? error.message : '任务执行失败。' }
-            const result = { id: task.id, ownerId: identity.id, claim: task.claim, reply: reply.slice(0, 32000), ...(images?.length ? { images } : {}), failed }
+            const result = { id: task.id, ownerId: identity.id, claim: task.claim, reply: reply.slice(0, 32000), ...(images?.length ? { images } : {}), ...(files?.length ? { files } : {}), failed }
             this.store.saveSocialTaskResult(result)
             if (!signal.aborted) {
               try {

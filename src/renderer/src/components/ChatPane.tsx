@@ -1,10 +1,12 @@
+import type { SelectedMention } from '../../../shared/bot/mentions'
+import { createPortal } from 'react-dom'
 import { legacyGroupNotice } from '../../../shared/groupText'
 import { messageSendError, type QueuedMessage } from '../messageQueue'
 import { mentionableAgents } from './common'
 import type { SocialAgent, SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
-import { AtSign, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
+import { AtSign, FolderOpen, FileText, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
@@ -16,13 +18,14 @@ import type {
   MessageAction,
   MessageDelivery,
   MessageImageInput,
+  MessageFileInput,
   MessageSource,
   Topic
 } from '../../../shared/types'
 import { MessageMarkdown, QuoteMarkdown } from './MessageMarkdown'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
-import { insertMention, mentionQuery, type MentionQuery } from '../../../shared/bot/mentions'
+import { insertMention, mentionQuery, updateSelectedMentions, type MentionQuery } from '../../../shared/bot/mentions'
 import { socialFollowUpTarget } from '../../../shared/socialFollowUp'
 import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
 import {
@@ -44,6 +47,7 @@ const SHOW_MESSAGE_ACTION_RECEIPTS = false
 const SHOW_VOICE_INPUT = false
 
 interface PendingImage {
+  isFile?: boolean
   id: string
   name: string
   mimeType: MessageAttachment['mimeType']
@@ -80,7 +84,31 @@ async function copyMessage(message: ChatMessage): Promise<void> {
   await window.douchat.copyAttachment(message.attachments[0].id)
 }
 
+function ImagePreview({ source, attachment, onClose }: { source: string; attachment: MessageAttachment; onClose: () => void }): ReactElement {
+  const dialog = useRef<HTMLDialogElement>(null)
+  const [copied, setCopied] = useState(false)
+  const [error, setError] = useState('')
+  useLayoutEffect(() => {
+    const element = dialog.current!
+    if (element.showModal) element.showModal()
+    else element.setAttribute('open', '')
+    return () => { element.close?.() }
+  }, [])
+  return createPortal(<dialog ref={dialog} className="chat-image-preview" aria-label={t('Image preview')}
+    onCancel={event => { event.preventDefault(); onClose() }} onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+    <div className="chat-image-preview-panel">
+      <div className="chat-image-preview-toolbar"><span>{attachment.name || t('Image')}</span>
+        <button type="button" onClick={() => { void window.douchat.copyAttachment(attachment.id).then(() => { setCopied(true); setError('') }).catch(() => setError(t('Image could not be copied'))) }}><Copy size={16} />{t(copied ? 'Copied' : 'Copy image')}</button>
+        <button type="button" aria-label={t('Close')} onClick={onClose}><X size={20} /></button>
+      </div>
+      <img src={source} alt={attachment.name || t('Image')} />
+      {error && <div role="alert">{error}</div>}
+    </div>
+  </dialog>, document.body)
+}
+
 function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactElement {
+  const [preview, setPreview] = useState(false)
   const [source, setSource] = useState('')
   const [failed, setFailed] = useState(false)
 
@@ -98,7 +126,9 @@ function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactE
 
   if (failed) return <div className="message-image-state">{t('Image could not be loaded')}</div>
   if (!source) return <div className="message-image-state is-loading" aria-label={t('Loading image')} />
-  return <img className="message-image" src={source} alt={attachment.name || t('Agent generated image')} />
+  return <><button type="button" className="message-image-button" aria-label={t('View image')} onClick={() => setPreview(true)}>
+    <img className="message-image" src={source} alt={attachment.name || t('Agent generated image')} />
+  </button>{preview && <ImagePreview source={source} attachment={attachment} onClose={() => setPreview(false)} />}</>
 }
 
 function MessageAttachments({ attachments }: { attachments?: MessageAttachment[] }): ReactElement | null {
@@ -664,13 +694,6 @@ export function MessageGroupRow({
               ) : null}
               {bubbleMessages.map((message) => message.source?.kind !== 'group' ? (
                 <div className="bubble-reply-segment" key={message.id} data-message-id={message.id}>
-                  {message.text ? (
-                    <div className="bubble-primary-content">
-                      <MessageMarkdown text={message.error && message.text.trim() === message.error.trim() ? t(message.error) : message.text} />
-                    </div>
-                  ) : null}
-                  <MessageAttachments attachments={message.attachments} />
-                  {message.error && message.text.trim() !== message.error.trim() ? <span className="bubble-error">{t(message.error)}</span> : null}
                   {message.deliveries?.length ? (
                     <MessageDeliveries
                       deliveries={message.deliveries}
@@ -682,6 +705,14 @@ export function MessageGroupRow({
                       relatedMessages={relatedMessages}
                     />
                   ) : null}
+                  {message.text ? (
+                    <div className="bubble-primary-content">
+                      <MessageMarkdown text={message.error && message.text.trim() === message.error.trim() ? t(message.error) : message.text} />
+                    </div>
+                  ) : null}
+                  <MessageAttachments attachments={message.attachments} />
+                  {message.error && message.text.trim() !== message.error.trim() ? <span className="bubble-error">{t(message.error)}</span> : null}
+
                 </div>
               ) : null)}
               {SHOW_MESSAGE_ACTION_RECEIPTS ? <MessageActions actions={actions} /> : null}
@@ -812,18 +843,19 @@ export function SystemMessage({ message, onOpenCredits }: { message: ChatMessage
   )
 }
 
-function MessageQuote({ author, text, onCancel }: { author: string; text: string; onCancel?: () => void }): ReactElement {
+function MessageQuote({ author, text, attachments, onCancel }: { author: string; text: string; attachments?: MessageAttachment[]; onCancel?: () => void }): ReactElement {
   return <div className={`message-quote${onCancel ? ' composer-quote' : ''}`}>
     <div className="message-quote-text" title={`${author}: ${text}`}><span>{author}: </span><QuoteMarkdown text={text} /></div>
+    <MessageAttachments attachments={attachments} />
     {onCancel && <button type="button" aria-label={t('Cancel quote')} onClick={onCancel}><X size={11} strokeWidth={2.5} /></button>}
   </div>
 }
 
-function UserMessageText({ text }: { text: string }): ReactElement {
+function UserMessageText({ text, attachments }: { text: string; attachments?: MessageAttachment[] }): ReactElement {
   // Existing replies store their quote as an author line followed by quoted lines.
   const quote = /^> ([^\r\n]+):\r?\n((?:>[^\r\n]*(?:\r?\n|$))+)\r?\n?/.exec(text)
-  if (!quote) return text.startsWith('> ') ? <MessageMarkdown text={text} /> : <span>{text}</span>
-  return <><MessageQuote author={quote[1]} text={quote[2].replace(/^> ?/gm, '').trim()} /><span>{text.slice(quote[0].length)}</span></>
+  if (!quote) return text.startsWith('> ') || /\]\(<douchat-file:/.test(text) ? <MessageMarkdown text={text} /> : <span>{text}</span>
+  return <><MessageQuote author={quote[1]} text={quote[2].replace(/^> ?/gm, '').trim()} attachments={attachments} />{/\]\(<douchat-file:/.test(text.slice(quote[0].length)) ? <MessageMarkdown text={text.slice(quote[0].length)} /> : <span>{text.slice(quote[0].length)}</span>}</>
 }
 
 function usePresenceTime(): number {
@@ -895,6 +927,10 @@ export function MessageRow({
   if (message.kind === 'system') return <SystemMessage message={message} onOpenCredits={onOpenCredits} />
   if (message.authorId === 'user') {
     const hasAttachments = Boolean(message.attachments?.length)
+    const hasQuote = /^> [^\r\n]+:\r?\n>/.test(message.text)
+    const legacyQuote = hasQuote && message.attachments?.every(image => image.quoted === undefined)
+    const quoteImages = hasQuote ? message.attachments?.filter(image => legacyQuote || image.quoted) : undefined
+    const ownImages = message.attachments?.filter(image => !quoteImages?.includes(image))
     const channel = message.sourceChannel && {
       wechat: { name: t('WeChat'), icon: 'wechat.svg' },
       feishu: { name: t('Feishu'), icon: 'feishu.png' },
@@ -906,12 +942,10 @@ export function MessageRow({
           <img src={`./channels/${channel.icon}`} alt="" />
         </span>}
         <div className={`message-bubble user-bubble ${hasAttachments ? 'has-attachments' : ''} ${!message.text && hasAttachments ? 'image-only' : ''}`}>
-          {message.text && (message.sourceChannel && /\]\(<douchat-file:/.test(message.text)
-            ? <MessageMarkdown text={message.text} />
-            : <UserMessageText text={message.text} />)}
+          {message.text && <UserMessageText text={message.text} attachments={quoteImages} />}
           {message.socialTasks && <SocialTaskStatus tasks={message.socialTasks} agents={socialAgents ?? []} />}
           {message.deliveryState && <small className="message-delivery-state" role="status">{message.deliveryState === 'sending' ? '发送中…' : message.deliveryState === 'confirming' ? '已发送，正在同步接单状态…' : '发送未确认，请在队列中重试'}</small>}
-          <MessageAttachments attachments={message.attachments} />
+          <MessageAttachments attachments={ownImages} />
         </div>
         {onOpenUserProfile ? (
           <button
@@ -962,10 +996,26 @@ export function visibleConversationMessages(
   if (conversation?.socialRoom?.kind === 'group') return groupInvitationMessages(messages)
   if (!conversation || conversation.type !== 'direct') return messages
   const participantIds = new Set(conversation.agentIds)
-  return messages.filter((message) =>
+  const visible = messages.filter((message) =>
     message.kind !== 'handoff' &&
     (message.authorId === 'user' || message.authorId === 'system' || message.authorId === conversation.person?.id || participantIds.has(message.authorId))
   )
+  // Fold only adjacent delivery-only receipts into the next answer by the same
+  // agent. Keep stored messages intact and preserve standalone receipts while
+  // waiting, on failure, or when a user/another speaker starts a new turn.
+  const folded: ChatMessage[] = []
+  for (const message of visible) {
+    const previous = folded.at(-1)
+    const receiptOnly = previous?.kind === 'message' && !previous.text.trim()
+      && previous.deliveries?.length && !previous.source && !previous.error
+      && !previous.attachments?.length && !previous.actions?.length
+    if (receiptOnly && message.kind === 'message' && !message.source
+      && message.authorId === previous.authorId && message.topicId === previous.topicId
+      && message.conversationId === previous.conversationId) {
+      folded[folded.length - 1] = { ...message, deliveries: [...previous.deliveries!, ...(message.deliveries ?? [])] }
+    } else folded.push(message)
+  }
+  return folded
 }
 
 /** Keep public replies in the transcript, and fold internal invitation bodies
@@ -1077,7 +1127,7 @@ export function ChatPane({
   queuedMessages?: QueuedMessage[]
   onPromoteQueued?: (id: number) => void
   onRemoveQueued?: (id: number) => void
-  onSend: (text: string, images?: MessageImageInput[]) => Promise<void>
+  onSend: (text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) => Promise<void>
   onStop: () => void
 }): ReactElement {
   const [history, setHistory] = useState(() => ({ source: recentMessages, messages: loadMessagePage ? recentMessages : recentMessages.slice(-50) }))
@@ -1127,7 +1177,15 @@ export function ChatPane({
       window.removeEventListener('resize', close)
     }
   }, [messageMenu])
-  const [draft, setDraft] = useState('')
+  const [draft, setDraftValue] = useState('')
+  const selectedMentions = useRef<SelectedMention[]>([])
+  const draftValue = useRef('')
+  const setDraft = (update: string | ((value: string) => string)): void => {
+    const value = typeof update === 'function' ? update(draftValue.current) : update
+    selectedMentions.current = updateSelectedMentions(draftValue.current, value, selectedMentions.current)
+    draftValue.current = value
+    setDraftValue(value)
+  }
   const followUpTime = usePresenceTime()
   const followUpTarget = socialFollowUpTarget(conversation, messages, draft, Math.max(followUpTime, Date.now()))
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
@@ -1142,6 +1200,10 @@ export function ChatPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [readingFiles, setReadingFiles] = useState(false)
+  const selectedConversationRef = useRef(conversation?.id)
+  selectedConversationRef.current = conversation?.id
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const voiceAttemptRef = useRef(0)
   const voiceEndTimerRef = useRef<number | null>(null)
@@ -1243,10 +1305,12 @@ export function ChatPane({
 
   useEffect(() => setMentionIndex(0), [mention?.query])
 
-  const applyMention = (name: string): void => {
+  const applyMention = (option: { id: string; name: string }): void => {
+    const { name, id } = option
     if (!mention) return
     const next = insertMention(draft, mention, name)
     setDraft(next.value)
+    if (id !== 'all') selectedMentions.current.push({ id, name, start: mention.start, end: mention.start + name.length + 1 })
     setMention(null)
     requestAnimationFrame(() => {
       textareaRef.current?.focus()
@@ -1380,22 +1444,42 @@ export function ChatPane({
 
   const send = async (): Promise<void> => {
     const content = draft.trim()
-    if ((!content && !pendingImages.length) || !conversation || sending || voiceState !== 'idle') return
+    if ((!content && !pendingImages.length && !quotedMessage) || !conversation || sending || readingFiles || voiceState !== 'idle') return
     const quote = quotedMessage
     const outgoing = quote ? `> ${quote.authorId === 'user' ? userName : quote.authorName}:\n${messageText(quote).split(/\r?\n/).map((line) => `> ${line}`).join('\n')}\n\n${content}` : content
+    const originalDraft = draft
+    const originalMentions = [...selectedMentions.current]
+    const offset = outgoing.length - content.length - (draft.length - draft.trimStart().length)
+    const sendingMentions = originalMentions.map(mention => ({ ...mention, start: mention.start + offset, end: mention.end + offset }))
     const sendingImages = pendingImages
     const sendingImageIds = new Set(sendingImages.map((image) => image.id))
     setSending(true)
     try {
-      const images: MessageImageInput[] = sendingImages.map(({ name, mimeType, data }) => ({ name, mimeType, data }))
+      const quotedImages = [...new Map((quote?.attachments ?? []).map(image => [image.id, image])).values()]
+      if (quotedImages.length + sendingImages.length > MAX_PASTED_IMAGES) throw new Error(t('You can paste up to 4 images at a time.'))
+      const references: MessageImageInput[] = await Promise.all(quotedImages.map(async attachment => {
+        const url = await window.douchat.getAttachmentData(attachment.id)
+        const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/.exec(url)
+        if (!match) throw new Error(t('Image could not be loaded'))
+        const data = Uint8Array.from(atob(match[2]), character => character.charCodeAt(0))
+        return { name: attachment.name || 'quoted-image', mimeType: match[1] as MessageAttachment['mimeType'], data, quoted: true }
+      }))
+      const images: MessageImageInput[] = [...references, ...sendingImages.filter(image => !image.isFile).map(({ name, mimeType, data }) => ({ name, mimeType, data, quoted: false }))]
+      if (images.some(image => image.data.length > MAX_PASTED_IMAGE_BYTES)) throw new Error(t('Each image must be 8 MB or smaller.'))
+      if (images.reduce((sum, image) => sum + image.data.length, 0) + sendingImages.filter(image => image.isFile).reduce((sum, file) => sum + file.size, 0) > MAX_PASTED_IMAGE_TOTAL_BYTES) throw new Error(t('Images must total 20 MB or less.'))
       setDraft('')
       setPendingImages((current) => current.filter((image) => !sendingImageIds.has(image.id)))
       setMention(null)
       setAttachmentError('')
       setQuotedMessage(null)
-      await onSend(outgoing, images)
-    } catch {
-      setDraft(content)
+      const files = sendingImages.filter(image => image.isFile).map(({ name, data }) => ({ name, data }))
+      if (sendingMentions.length) await onSend(outgoing, images, files, sendingMentions)
+      else if (files.length) await onSend(outgoing, images, files)
+      else await onSend(outgoing, images)
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : t('Image could not be loaded'))
+      setDraft(originalDraft)
+      selectedMentions.current = originalMentions
       setQuotedMessage(quote)
       setPendingImages((current) => [
         ...sendingImages.filter((image) => !current.some((candidate) => candidate.id === image.id)),
@@ -1404,6 +1488,28 @@ export function ChatPane({
     } finally {
       setSending(false)
     }
+  }
+
+  const selectFiles = async (files: File[]): Promise<void> => {
+    if (!files.length || readingFiles) return
+    setReadingFiles(true)
+    setAttachmentError('')
+    const targetConversation = conversation?.id
+    try {
+      if (pendingImages.length + files.length > 4) throw new Error('一次最多发送 4 个附件。')
+      if (pendingImages.reduce((sum, file) => sum + file.size, 0) + files.reduce((sum, file) => sum + file.size, 0) > MAX_PASTED_IMAGE_TOTAL_BYTES) throw new Error('附件总大小不能超过 20 MB。')
+      const added = await Promise.all(files.map(async file => {
+        if (!file.size) throw new Error('文件不能为空。')
+        if (PASTED_IMAGE_TYPES.has(file.type as MessageAttachment['mimeType'])) {
+          if (file.size > MAX_PASTED_IMAGE_BYTES) throw new Error(t('Each image must be 8 MB or smaller.'))
+          return readPastedImage(file)
+        }
+        return { id: crypto.randomUUID(), name: file.name, size: file.size, data: new Uint8Array(await file.arrayBuffer()), mimeType: 'image/png' as const, previewUrl: '', isFile: true }
+      }))
+      if (selectedConversationRef.current === targetConversation) setPendingImages(current => [...current, ...added])
+    } catch (error) {
+      if (selectedConversationRef.current === targetConversation) setAttachmentError(error instanceof Error ? error.message : '文件读取失败。')
+    } finally { setReadingFiles(false) }
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
@@ -1445,6 +1551,12 @@ export function ChatPane({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.nativeEvent.isComposing) return
+    if (event.key === 'Backspace' && !event.currentTarget.value && quotedMessage && !event.currentTarget.readOnly) {
+      event.preventDefault()
+      setQuotedMessage(null)
+      setAttachmentError('')
+      return
+    }
     if (mention && mentionOptions.length) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1453,7 +1565,7 @@ export function ChatPane({
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault()
-        applyMention(mentionOptions[Math.min(mentionIndex, mentionOptions.length - 1)].name)
+        applyMention(mentionOptions[Math.min(mentionIndex, mentionOptions.length - 1)])
         return
       }
       if (event.key === 'Escape') {
@@ -1598,10 +1710,10 @@ export function ChatPane({
                 className={index === mentionIndex ? 'selected' : ''}
                 onMouseEnter={() => setMentionIndex(index)}
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => applyMention(option.name)}
+                onClick={() => applyMention(option)}
               >
                 {option.agent ? <AgentAvatar agent={option.agent} size={22} /> : option.person ? <UserAvatar src={option.person.image || ''} name={option.person.name} size={22} /> : <span className="mention-all"><AtSign size={13} /></span>}
-                <span>{option.label}</span>
+                <span>{option.label}{mentionOptions.filter(other => other.name === option.name).length > 1 && <small className="mention-owner"> · {option.person ? t('User') : conversation.socialRoom?.members.find(person => person.id === conversation.socialRoom?.agents.find(agent => agent.id === option.id)?.ownerId)?.name || option.id.slice(-6)}</small>}</span>
                 {option.agent && <AgentPresence agent={conversation.socialRoom?.agents.find((agent) => agent.id === option.id)} />}
               </button>
             ))}
@@ -1619,14 +1731,15 @@ export function ChatPane({
           {quotedMessage && <MessageQuote
             author={quotedMessage.authorId === 'user' ? userName : quotedMessage.authorName}
             text={messageText(quotedMessage)}
+            attachments={quotedMessage.attachments}
             onCancel={() => setQuotedMessage(null)}
           />}
           {pendingImages.length > 0 && (
             <div className="composer-images" aria-label={t('Images ready to send')}>
               {pendingImages.map((image) => (
-                <div className="composer-image" key={image.id}>
-                  <img src={image.previewUrl} alt={image.name || t('Pasted image')} />
-                  <button type="button" onClick={() => removePendingImage(image.id)} aria-label={t('Remove image')} title={t('Remove image')}>
+                <div className={image.isFile ? 'composer-file' : 'composer-image'} key={image.id}>
+                  {image.isFile ? <><FileText size={28} aria-hidden="true" /><span className="composer-file-info"><strong title={image.name}>{image.name}</strong><small>{image.size < 1024 ? `${image.size} B` : image.size < 1024 * 1024 ? `${(image.size / 1024).toFixed(1)} KB` : `${(image.size / 1024 / 1024).toFixed(1)} MB`}</small></span></> : <img src={image.previewUrl} alt={image.name || t('Pasted image')} />}
+                  <button type="button" onClick={() => removePendingImage(image.id)} aria-label={image.isFile ? '移除文件' : t('Remove image')} title={image.isFile ? '移除文件' : t('Remove image')}>
                     <X size={13} strokeWidth={2.2} />
                   </button>
                 </div>
@@ -1666,7 +1779,9 @@ export function ChatPane({
           )}
           <div className="composer-bottom">
             <div className="composer-tools">
+              <input ref={fileInputRef} type="file" multiple hidden onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ''; void selectFiles(files) }} />
               <button type="button" className="emoji-toggle" disabled={voiceState !== 'idle'} onClick={() => setEmojiOpen((open) => !open)} aria-label={t('Emoji')} aria-expanded={emojiOpen}><Smile size={18} strokeWidth={2.1} /></button>
+              <button type="button" className="emoji-toggle" title="发送文件" aria-label="发送文件" disabled={!conversation || readingFiles || sending || voiceState !== 'idle'} onClick={() => fileInputRef.current?.click()}>{readingFiles ? <LoaderCircle size={18} /> : <FolderOpen size={18} strokeWidth={2.1} />}</button>
               {SHOW_VOICE_INPUT && <button
                   type="button"
                   className={`voice-toggle is-${voiceState}`}
@@ -1699,7 +1814,7 @@ export function ChatPane({
             {!working && <button
               className="send-button"
               onClick={() => void send()}
-              disabled={sending || voiceState !== 'idle' || (!draft.trim() && !pendingImages.length)}
+              disabled={sending || readingFiles || voiceState !== 'idle' || (!draft.trim() && !pendingImages.length && !quotedMessage)}
               aria-label={t('Send message')}
             >
               {t('Send')}

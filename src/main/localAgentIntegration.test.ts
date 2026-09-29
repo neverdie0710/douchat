@@ -20,6 +20,32 @@ function setup(localAgentId = 'codex') {
   return { store, runtime, agent, conversationId: `direct-${agent.id}` }
 }
 describe('local contact routing', () => {
+  it('asks once for repeated native app access and reuses it in the next reply on the same session', async () => {
+    const { runtime, agent, conversationId } = setup()
+    const lifetime = new AbortController()
+    let accesses = 0
+    vi.mocked(runLocalAgent).mockImplementation(async (_config, _prompt, signal, _images, options) => {
+      for (let i = 0; i < 4; i++) {
+        await options!.onApproval!({ message: 'Allow Computer Use to use Music?',
+          details: JSON.stringify({ tool: ['get_app_state', 'click', 'type_text', 'scroll'][i], arguments: { app: 'com.netease.163music' } }),
+          nativeSession: { id: 'native-live-session', appId: 'com.netease.163music', appName: 'Music', signal: lifetime.signal }
+        }, signal!)
+        accesses++
+      }
+      return { text: 'App task complete', images: [] }
+    })
+    try {
+      const first = runtime.sendMessage(conversationId, 'Use Music')
+      await vi.waitFor(() => expect(runtime.snapshot().permissionRequests).toHaveLength(1))
+      const request = runtime.snapshot().permissionRequests![0]
+      expect(request.sessionScope).toBe('Music')
+      runtime.resolveAgentPermission(request.id, 'session')
+      await first
+      await runtime.sendMessage(conversationId, 'Continue using Music')
+      expect(accesses).toBe(8)
+      expect(runtime.snapshot().permissionRequests).toHaveLength(0)
+    } finally { lifetime.abort(); runtime.disposeAgent(agent.id) }
+  })
   it.each(['codex', 'claude'])('shows native %s access in the owner permission UI before resuming', async localAgentId => {
     const { store, runtime, agent, conversationId } = setup(localAgentId)
     const resumed = vi.fn()

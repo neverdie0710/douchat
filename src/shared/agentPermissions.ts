@@ -1,7 +1,7 @@
 export const sensitiveCapabilities = ['filesRead', 'filesWrite', 'network', 'browserControl', 'accountRead', 'accountWrite', 'automation', 'localExecution', 'otherTools'] as const
 export type SensitiveCapability = typeof sensitiveCapabilities[number]
 export type PermissionDecision = 'allow' | 'ask' | 'deny'
-export type PermissionApproval = boolean | 'task'
+export type PermissionApproval = boolean | 'task' | 'session'
 export interface AgentPermissions {
   groupHumans: PermissionDecision
   groupAgents: PermissionDecision
@@ -25,6 +25,8 @@ export const permissionLabels: Record<SensitiveCapability | 'groupHumans' | 'gro
 }
 export interface PermissionRequest {
   taskScope?: string
+  sessionScope?: string
+  nativeApp?: { id: string; name: string }
   context?: 'direct' | 'group'
   id: string
   ownerId: string

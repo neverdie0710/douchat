@@ -467,6 +467,7 @@ export class DouchatStore {
   }
 
   async saveImageAttachment(input: {
+    quoted?: boolean
     name: string
     mimeType: MessageAttachment['mimeType']
     data: Uint8Array
@@ -486,7 +487,7 @@ export class DouchatStore {
       await unlink(path).catch(() => undefined)
       throw cause
     }
-    return { id, kind: 'image', name: input.name, mimeType: input.mimeType, size: input.data.byteLength }
+    return { id, kind: 'image', name: input.name, mimeType: input.mimeType, size: input.data.byteLength, ...(typeof input.quoted === 'boolean' ? { quoted: input.quoted } : {}) }
   }
 
   async attachmentDataUrl(id: string): Promise<string> {
@@ -1218,6 +1219,41 @@ export class DouchatStore {
     return accountId ? this.runs.filter((run) => run.ownerId === accountId) : []
   }
 
+  getConnanyNames(origin: string): Record<string, string> {
+    try {
+      const value: unknown = JSON.parse(this.accountMeta(`connany:names:${origin}`) || '{}')
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+      return Object.fromEntries(Object.entries(value).filter(([, name]) => typeof name === 'string'))
+    } catch { return {} }
+  }
+
+  setConnanyName(origin: string, connectionId: string, name: string): void {
+    const names = this.getConnanyNames(origin)
+    this.setAccountMeta(`connany:names:${origin}`, JSON.stringify({ ...names, [connectionId]: name }))
+  }
+
+  getConnanySelections(origin: string): import('../shared/connany').ConnectorSelection[] {
+    try {
+      const value: unknown = JSON.parse(this.accountMeta(`connany:selections:${origin}`) || '[]')
+      return Array.isArray(value) ? value.filter(item => item && typeof item.connectionId === 'string' && ['notion', 'github', 'linear'].includes(item.provider)) : []
+    } catch { return [] }
+  }
+
+  setConnanySelections(origin: string, selections: import('../shared/connany').ConnectorSelection[]): void {
+    this.setAccountMeta(`connany:selections:${origin}`, JSON.stringify(selections))
+  }
+
+  getConnanyBindings(origin: string): import('../shared/connany').ConnectorBinding[] {
+    try {
+      const value: unknown = JSON.parse(this.accountMeta(`connany:${origin}`) || '[]')
+      return Array.isArray(value) ? value.filter(item => item && typeof item.agentId === 'string' && typeof item.connectionId === 'string' && ['notion', 'github', 'linear'].includes(item.provider)) : []
+    } catch { return [] }
+  }
+
+  setConnanyBindings(origin: string, bindings: import('../shared/connany').ConnectorBinding[]): void {
+    this.setAccountMeta(`connany:${origin}`, JSON.stringify(bindings))
+  }
+
   get connectors(): EmailConnectorAccount[] {
     try {
       const value = JSON.parse(this.accountMeta('connectors') || '[]') as unknown
@@ -1442,7 +1478,7 @@ export class DouchatStore {
     this.putConversation(conversation)
   }
 
-  syncFriendConversation(ownerId: string, room: SocialRoom, incoming: SocialMessage[], attachments = new Map<string, MessageAttachment[]>()): Conversation {
+  syncFriendConversation(ownerId: string, room: SocialRoom, incoming: SocialMessage[], attachments = new Map<string, MessageAttachment[]>(), fileLinks = new Map<string, string[]>()): Conversation {
     if (ownerId !== this.currentAccountId || !room.members.some((member) => member.id === ownerId)) throw new Error('Chat account mismatch')
     const person = room.members.find((member) => member.id !== ownerId)
     if (room.kind === 'direct' && !person) throw new Error('Contact not found')
@@ -1477,7 +1513,7 @@ export class DouchatStore {
         if (!message.parentMessageId && !existingMessage) {
         this.insertMessage({ id: messageId, conversationId: id, topicId: conversation.activeTopicId,
           authorId: message.authorId === ownerId ? 'user' : message.authorId, authorName: message.authorName,
-          text: message.content, attachments: attachments.get(message.id), kind: 'message', createdAt: Date.parse(message.createdAt) })
+          text: [message.content, ...(fileLinks.get(message.id) ?? [])].filter(Boolean).join('\n\n'), attachments: attachments.get(message.id), kind: 'message', createdAt: Date.parse(message.createdAt) })
         conversation.updatedAt = Math.max(conversation.updatedAt, Date.parse(message.createdAt))
         if (message.authorId !== ownerId) unread++
         }
@@ -1489,12 +1525,12 @@ export class DouchatStore {
             this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(parent), parentId)
           }
         }
-        if (message.reply || message.replyImages?.length) {
+        if (message.reply || message.replyImages?.length || message.replyFiles?.length) {
           const replyId = `${messageId}:reply`
           if (!cleared.has(replyId)) {
             const existingReply = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', replyId)
             const reply: ChatMessage = { id: replyId, conversationId: id, topicId: conversation.activeTopicId,
-              authorId: message.agentId || 'system', authorName: message.agentName || '', text: message.reply || '',
+              authorId: message.agentId || 'system', authorName: message.agentName || '', text: fileLinks.has(`${message.id}:reply`) ? [message.reply, ...fileLinks.get(`${message.id}:reply`)!].filter(Boolean).join('\n\n') : message.replyFiles?.length && existingReply ? existingReply.text : message.reply ?? '',
               attachments: attachments.get(`${message.id}:reply`) ?? existingReply?.attachments,
               kind: 'message', createdAt: Date.parse(message.createdAt), ...(message.status === 'failed' ? { error: message.reply } : {}) }
             if (existingReply) this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(reply), replyId)
@@ -1521,11 +1557,11 @@ export class DouchatStore {
     })
   }
 
-  socialTaskOutbox(accountId = this.currentAccountId): { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; failed: boolean }[] {
+  socialTaskOutbox(accountId = this.currentAccountId): { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; files?: import('../shared/social').SocialFile[]; failed: boolean }[] {
     try { return JSON.parse(this.accountMeta('socialTaskOutbox', accountId) || '[]') } catch { return [] }
   }
 
-  saveSocialTaskResult(result: { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; failed: boolean }): void {
+  saveSocialTaskResult(result: { id: string; ownerId: string; claim: string; reply: string; images?: import('../shared/social').SocialImage[]; files?: import('../shared/social').SocialFile[]; failed: boolean }): void {
     this.setAccountMeta('socialTaskOutbox', JSON.stringify([
       ...this.socialTaskOutbox(result.ownerId).filter((item) => item.id !== result.id),
       result
@@ -1572,6 +1608,7 @@ export class DouchatStore {
     delete safeInput.thinkingLevel
     const agent: AgentConfig = {
       ...safeInput,
+      ...(safeInput.systemFiles ? { systemFiles: validateAgentFiles(safeInput.systemFiles) } : {}),
       ...(thinking ? { thinkingLevel: thinking } : {}),
       ownerId,
       avatar,
@@ -1581,6 +1618,7 @@ export class DouchatStore {
       createdAt: now
     }
     const topic = newTopic('', now)
+    if (agent.systemFiles) this.profileFiles?.save(agent, agent.systemFiles)
     return this.tx(() => {
       this.putAgent(agent)
       this.putConversation({

@@ -1116,3 +1116,26 @@ describe('message pagination', () => {
     expect(store.searchMessages('missing', '12')).toEqual([])
   })
 })
+
+it('isolates Connany selections by login account and backend origin', () => {
+  const store = createStore()
+  store.setCurrentAccountId('connector-owner-a')
+  const selection = [{ provider: 'notion' as const, connectionId: 'conn_a' }]
+  store.setConnanySelections('https://backend-a.example', selection)
+  expect(store.getConnanySelections('https://backend-b.example')).toEqual([])
+  store.setCurrentAccountId('connector-owner-b')
+  expect(store.getConnanySelections('https://backend-a.example')).toEqual([])
+  store.setCurrentAccountId('connector-owner-a')
+  expect(store.getConnanySelections('https://backend-a.example')).toEqual(selection)
+})
+
+it('persists connector names separately for each account and service', () => {
+  const store = createStore()
+  store.setCurrentAccountId('names-a')
+  store.setConnanyName('https://service-a.example', 'conn_one', 'Work GitHub')
+  store.setCurrentAccountId('names-b')
+  expect(store.getConnanyNames('https://service-a.example')).toEqual({})
+  store.setCurrentAccountId('names-a')
+  expect(store.getConnanyNames('https://service-b.example')).toEqual({})
+  expect(store.getConnanyNames('https://service-a.example')).toEqual({ conn_one: 'Work GitHub' })
+})

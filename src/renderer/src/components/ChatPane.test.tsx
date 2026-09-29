@@ -111,6 +111,34 @@ describe('private delivery disclosure', () => {
     root = createRoot(container)
   })
 
+  it('folds delivery-only receipts above the next answer, collapsed by default', async () => {
+    const receipt: ChatMessage = { ...incomingReply, id: 'receipt', source: undefined, text: '', deliveries }
+    const answer: ChatMessage = { ...receipt, id: 'answer', text: 'Switched the song.', deliveries: undefined }
+    const visible = visibleConversationMessages(directConversation, [receipt, answer])
+    expect(visible).toHaveLength(1)
+    expect(visible[0]).toMatchObject({ id: 'answer', text: answer.text, deliveries })
+    expect(answer.deliveries).toBeUndefined()
+    await act(async () => root.render(<MessageGroupRow messages={visible} agents={agents} relatedMessages={[receipt, answer]} userName="Dobi" userAvatar="" showAuthor={false} />))
+    expect(container.querySelectorAll('.agent-bubble')).toHaveLength(1)
+    const toggle = container.querySelector('.bubble-deliveries')!
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(container.textContent).not.toContain(deliveries[0].content)
+    expect(toggle.compareDocumentPosition(container.querySelector('.bubble-primary-content')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await act(async () => (toggle as HTMLButtonElement).click())
+    expect(container.textContent).toContain(deliveries[0].content)
+  })
+
+  it('keeps pending receipts and does not fold across user messages or topics', () => {
+    const receipt: ChatMessage = { ...incomingReply, source: undefined, text: '', deliveries }
+    const answer: ChatMessage = { ...receipt, id: 'answer', text: 'Done', deliveries: undefined }
+    expect(visibleConversationMessages(directConversation, [receipt])).toEqual([receipt])
+    const user = { ...answer, id: 'user', authorId: 'user' }
+    expect(visibleConversationMessages(directConversation, [receipt, user, answer])).toHaveLength(3)
+    expect(visibleConversationMessages(directConversation, [receipt, { ...answer, topicId: 'other' }])).toHaveLength(2)
+    const second = { ...receipt, id: 'second', deliveries: [deliveries[1]] }
+    expect(visibleConversationMessages(directConversation, [receipt, second, answer])[0].deliveries).toHaveLength(3)
+  })
+
   afterEach(async () => {
     await act(async () => root.unmount())
     container.remove()
@@ -204,6 +232,17 @@ describe('private delivery disclosure', () => {
     expect(container.querySelector('.user-bubble > span')?.textContent).toBe('My reply')
   })
 
+  it.each([true, false])('places quoted images inside the quote, preserving new images (legacy=%s)', async legacy => {
+    window.douchat = { getAttachmentData: vi.fn().mockResolvedValue('data:image/png;base64,aGVsbG8=') } as unknown as typeof window.douchat
+    const image = { id: 'quoted', kind: 'image' as const, name: 'reference.png', mimeType: 'image/png' as const, size: 5 }
+    const attachments = legacy ? [image] : [{ ...image, quoted: true }, { ...image, id: 'new', name: 'new.png', quoted: false }]
+    const message = { ...incomingReply, authorId: 'user', text: '> Dobi:\n> Image\n\nMy reply', attachments }
+    await act(async () => root.render(<MessageRow messages={[message]} agents={agents} relatedMessages={[]} userName="You" userAvatar="" showAuthor={false} />))
+    expect(container.querySelector('.message-quote img')?.getAttribute('alt')).toBe('reference.png')
+    expect(container.querySelectorAll('.user-bubble > .message-attachments img')).toHaveLength(legacy ? 0 : 1)
+    if (!legacy) expect(container.querySelector('.user-bubble > .message-attachments img')?.getAttribute('alt')).toBe('new.png')
+  })
+
   it('keeps the latest message visible when the queue grows without pulling readers away from history', async () => {
     const messages = [{ ...incomingReply, conversationId: directConversation.id }]
     const render = async (count: number) => act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={messages} allMessages={messages} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}}
@@ -253,11 +292,55 @@ describe('private delivery disclosure', () => {
     }
   })
 
+  it('keeps a selected duplicate-name member ID when sending visible mention text', async () => {
+    const send = vi.fn().mockResolvedValue(undefined)
+    const same = agents.map(agent => ({ ...agent, name: 'Dr. Dou' }))
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={{ ...directConversation, type: 'group' }} messages={[]} allMessages={[]} agents={same} members={same} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={send} onStop={() => {}} />))
+    const textarea = container.querySelector('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '@Dr')
+      textarea.selectionStart = 3
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelectorAll<HTMLButtonElement>('[role="option"]')[1].click())
+    expect(textarea.value).toBe('@Dr. Dou ')
+    await act(async () => container.querySelector<HTMLButtonElement>('.send-button')!.click())
+    expect(send).toHaveBeenCalledWith('@Dr. Dou', [], [], [{ id: 'agent-2', name: 'Dr. Dou', start: 0, end: 8 }])
+  })
+
+  it('selects, removes and sends a file without requiring text', async () => {
+    const send = vi.fn().mockResolvedValue(undefined)
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={[]} allMessages={[]} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={send} onStop={() => {}} />))
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!
+    const bytes = new TextEncoder().encode('<svg/>')
+    const file = new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' })
+    Object.defineProperty(file, 'arrayBuffer', { value: async () => bytes.buffer })
+    const select = async () => { await act(async () => {
+      Object.defineProperty(input, 'files', { configurable: true, value: [file] })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    }) }
+    await select()
+    expect(container.querySelector('.composer-file')?.textContent).toContain('logo.svg')
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="移除文件"]')!.click())
+    expect(container.querySelector('.composer-file')).toBeNull()
+    await select()
+    await act(async () => container.querySelector<HTMLButtonElement>('.send-button')!.click())
+    expect(send).toHaveBeenCalledTimes(1)
+    const [text, images, files] = send.mock.calls[0]
+    expect(text).toBe('')
+    expect(images).toEqual([])
+    expect(files[0].name).toBe('logo.svg')
+    expect(Array.from(files[0].data)).toEqual(Array.from(bytes))
+    expect(container.querySelector('.composer-file')).toBeNull()
+  })
+
   it('copies, quotes and deletes the selected message from its context menu', async () => {
-    const message = { ...incomingReply, conversationId: directConversation.id, source: undefined }
+    const image = { id: 'quoted-image', name: 'logo.png', mimeType: 'image/png' as const, kind: 'image' as const, size: 5 }
+    const message = { ...incomingReply, conversationId: directConversation.id, source: undefined, attachments: [image] }
     const writeText = vi.fn().mockResolvedValue(undefined)
     const deleteMessage = vi.fn().mockResolvedValue(true)
-    window.douchat = { deleteMessage, copyText: writeText } as unknown as typeof window.douchat
+    const copyAttachment = vi.fn().mockResolvedValue(undefined)
+    window.douchat = { deleteMessage, copyText: writeText, copyAttachment, getAttachmentData: vi.fn().mockResolvedValue('data:image/png;base64,aGVsbG8=') } as unknown as typeof window.douchat
     const send = vi.fn().mockResolvedValue(undefined)
     await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={[message]} allMessages={[message]} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={send} onStop={() => {}} />))
     const open = async (): Promise<void> => { await act(async () => {
@@ -266,19 +349,32 @@ describe('private delivery disclosure', () => {
     const click = async (label: string): Promise<void> => { await act(async () => {
       Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find((button) => button.textContent === label)!.click()
     }) }
+    await act(async () => container.querySelector<HTMLButtonElement>('.message-image-button')!.click())
+    expect(document.querySelector('dialog[open] img')?.getAttribute('src')).toBe('data:image/png;base64,aGVsbG8=')
+    await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>('dialog button')).find(button => button.textContent === 'Copy image')!.click() })
+    expect(copyAttachment).toHaveBeenCalledWith(image.id)
+    await act(async () => document.querySelector<HTMLButtonElement>('dialog [aria-label="Close"]')!.click())
+    expect(document.querySelector('dialog')).toBeNull()
     await open()
     await click('Copy')
     expect(writeText).toHaveBeenCalledWith(message.text)
     await open()
     await click('Quote')
     expect(container.querySelector('.composer-quote')?.textContent).toContain(message.text)
+    expect(container.querySelector('.composer-quote img')).not.toBeNull()
     const textarea = container.querySelector('textarea')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'My reply')
       textarea.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    vi.mocked(window.douchat.getAttachmentData).mockRejectedValueOnce(new Error('Image unavailable'))
     await act(async () => { container.querySelector<HTMLButtonElement>('.send-button')!.click() })
-    expect(send).toHaveBeenCalledWith(expect.stringContaining(`> ${message.text}\n\nMy reply`), [])
+    expect(send).not.toHaveBeenCalled()
+    expect(container.querySelector('.composer-quote')).not.toBeNull()
+    expect(textarea.value).toBe('My reply')
+    expect(container.querySelector('.composer-attachment-error')?.textContent).toBe('Image unavailable')
+    await act(async () => { container.querySelector<HTMLButtonElement>('.send-button')!.click() })
+    expect(send).toHaveBeenCalledWith(expect.stringContaining(`> ${message.text}\n\nMy reply`), [{ name: 'logo.png', mimeType: 'image/png', data: new Uint8Array([104, 101, 108, 108, 111]), quoted: true }])
     expect(container.querySelector('.composer-quote')).toBeNull()
     await open()
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })

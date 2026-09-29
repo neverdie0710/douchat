@@ -49,15 +49,18 @@ export function AgentPermissionsDialog({ agent, onClose, onSave }: {
 
 export function AgentPermissionPrompt({ request, agent, social, onResolve }: { request: PermissionRequest; agent?: AgentConfig; social?: SocialSnapshot; onResolve: (allow: PermissionApproval) => Promise<void> }): ReactElement {
   const contact = agent?.id === request.agentId && agent.ownerId === request.ownerId ? agent : undefined
-  let native: { tool?: string; input?: { command?: string }; arguments?: { command?: string } } | undefined
+  let native: { tool?: string; input?: { command?: string }; arguments?: { command?: string; app?: string } } | undefined
   try { native = JSON.parse(request.details) } catch { /* Plain-text requests remain visible. */ }
   const nativeLabels: Record<string, string> = {
     Bash: 'Run a terminal command', Read: 'Read a file', Write: 'Write a file', Edit: 'Edit a file',
-    Glob: 'Find files', Grep: 'Search file contents', WebFetch: 'Read a web page', WebSearch: 'Search the web'
+    Glob: 'Find files', Grep: 'Search file contents', WebFetch: 'Read a web page', WebSearch: 'Search the web',
+    get_app_state: 'Access a desktop app', launch_app: 'Access a desktop app'
   }
   const nativeTool = typeof native?.tool === 'string' ? native.tool : request.operation === 'Claude: Bash' ? 'Bash' : undefined
-  const actionLabel = nativeTool && Object.hasOwn(nativeLabels, nativeTool) ? nativeLabels[nativeTool] : undefined
+  const actionLabel = request.nativeApp ? 'Access a desktop app' : nativeTool && Object.hasOwn(nativeLabels, nativeTool) ? nativeLabels[nativeTool] : undefined
   const command = nativeTool === 'Bash' ? native?.input?.command ?? native?.arguments?.command : undefined
+  const desktopApp = request.nativeApp?.name || (['get_app_state', 'launch_app'].includes(nativeTool ?? '') && typeof native?.arguments?.app === 'string'
+    ? native.arguments.app : undefined)
   const people = social?.userId === request.ownerId && request.requesterKind !== 'agent' ? social : undefined
   const person = people?.rooms.flatMap(room => room.members).find(member => member.id === request.requesterId)
     ?? people?.friendships.find(friend => friend.person.id === request.requesterId)?.person
@@ -82,16 +85,21 @@ export function AgentPermissionPrompt({ request, agent, social, onResolve }: { r
       {room && <p className="muted">{t('Group')}: {room}</p>}
       {!actionLabel && <p>{request.operation}</p>}
       {nativeTool === 'Bash' && <p>{t('This runs the command below on your computer.')}</p>}
-      {typeof command === 'string' && command.trim() ? <>
+      {desktopApp ? <>
+        <p>{t('Application')}: <strong>{desktopApp}</strong></p>
+        <p>{t('Allow this agent to view and interact with this app through Computer Use.')}</p>
+        <details><summary>{t('Full request details')}</summary><p>{request.operation}</p><pre className="permission-details">{request.details}</pre></details>
+      </> : typeof command === 'string' && command.trim() ? <>
         <pre className="permission-details">{command}</pre>
         <details><summary>{t('Full request details')}</summary><pre className="permission-details">{request.details}</pre></details>
       </> : <pre className="permission-details">{request.details}</pre>}
       {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
       {request.context !== 'direct' && <p className="muted">{t('Results may be visible to everyone in this group.')}</p>}
       {request.taskScope && <p className="permission-notice">{t('Task approval scope')}: {request.taskScope}<br />{t('Expires when this task ends. Other resources still require approval.')}</p>}
-      <p className="muted">{t(request.taskScope ? 'Allow this operation once, or reuse approval within the scope above for this task. No response within 10 minutes means deny.' : 'This approval is for this operation only. No response within 10 minutes means deny.')}</p>
+      {request.sessionScope && <p className="permission-notice">{t('Session approval applies only to this app. Other apps and separate sensitive-action confirmations still require approval.')}<br />{t('Expires when the native session closes, including idle cleanup, stop, reset or app restart.')}</p>}
+      <p className="muted">{t(request.sessionScope ? 'Choose once or allow this app for this session. No response within 10 minutes means deny.' : request.taskScope ? 'Allow this operation once, or reuse approval within the scope above for this task. No response within 10 minutes means deny.' : 'This approval is for this operation only. No response within 10 minutes means deny.')}</p>
       {error && <p role="alert">{t(error)}</p>}
-      </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button>{request.taskScope && <button className="primary-button" disabled={busy} onClick={() => void resolve('task')}>{t('Allow for this task')}</button>}</footer>
+      </div><footer className="edit-contact-footer"><button autoFocus className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Deny')}</button><button className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{t('Allow once')}</button>{request.taskScope && <button className="primary-button" disabled={busy} onClick={() => void resolve('task')}>{t('Allow for this task')}</button>}{request.sessionScope && <button className="primary-button" disabled={busy} onClick={() => void resolve('session')}>{t('Allow this app for this session')}</button>}</footer>
     </section>
   </NativeDialog>
 }

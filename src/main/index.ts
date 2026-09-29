@@ -1,3 +1,7 @@
+import { groupMemberSessionId } from '../shared/bot/group'
+import type { SelectedMention } from '../shared/bot/mentions'
+import { ConnanyManager } from './connany'
+import { CONNECTORS_ENABLED } from '../shared/connany'
 import { LocalAccountData } from './accountData'
 import { exportAgentArchive, parseAgentArchive } from './agentArchive'
 import { parseSkillArchive } from './skillArchive'
@@ -33,6 +37,7 @@ import type {
   DesktopAuthState,
   EndpointInput,
   MessageImageInput,
+  MessageFileInput,
   CreateGroupInput,
   CreateRoutineInput,
   UpdateAgentInput,
@@ -52,7 +57,7 @@ import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUr
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
-import { configureLocalWorkspaces, validateWorkspaceFolder } from './localWorkspaces'
+import { configureLocalWorkspaces, validateWorkspaceFolder, resolveSavedWorkspace, localWorkspace, openableWorkspace } from './localWorkspaces'
 import { canAssignConversationWorkspace } from '../shared/conversationWorkspace'
 import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
 import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLauncher'
@@ -195,6 +200,7 @@ let computer: LocalComputerProvider
 let scheduler: RoutineScheduler
 let auth: DesktopAuth
 let updater: DesktopUpdater
+let connany: ConnanyManager
 let emailConnectors: EmailConnectorManager
 let pendingGroupRoom = ''
 let openingGroupRoom = false
@@ -563,6 +569,7 @@ app.whenReady().then(() => {
   // current session; otherwise its scheduler could briefly run old tasks.
   store.setCurrentAccountId('')
   emailConnectors = new EmailConnectorManager(store, app.getPath('userData'))
+  connany = new ConnanyManager(store, webAppUrl, () => auth?.getAccessToken(), url => shell.openExternal(url))
   computer = new LocalComputerProvider(
     () => !quitting && runtime && broadcast(runtime.snapshot()),
     [app.getPath('downloads'), app.getPath('desktop'), app.getPath('documents')],
@@ -587,7 +594,7 @@ app.whenReady().then(() => {
         .resize({ width: 256, height: 256, quality: 'best' })
         .toDataURL()
     }
-  }, emailConnectors)
+  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: id => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id) : [])] })
   imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
     encrypt: value => {
       if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error('系统钥匙串不可用，请启用后重试')
@@ -628,6 +635,7 @@ app.whenReady().then(() => {
   )
   auth = new DesktopAuth(webAppUrl, authScheme, development, app.getPath('userData'), (state, reason) => {
     broadcastAuth(state)
+    if (CONNECTORS_ENABLED && state.status === 'signed-in') void connany.command({ op: 'list' }).catch(() => { /* Recheck from Settings when the service is available. */ })
     // The development flow returns through a loopback HTTP server instead of
     // the custom protocol, so it does not pass through receiveAppUrl(). Bring
     // Douchat forward only for an explicit login callback, never for session
@@ -636,7 +644,7 @@ app.whenReady().then(() => {
   })
 
   social = new SocialClient(webAppUrl, auth, store, runtime, () => { if (!quitting) broadcast(runtime.snapshot()) })
-  runtime.setHumanSender((id, text, images) => social!.sendMessage(id, text, images))
+  runtime.setHumanSender((id, text, images, files, mentions) => social!.sendMessage(id, text, images, files, mentions))
   ipcMain.handle('douchat:social-snapshot', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return social!.snapshot()
@@ -970,11 +978,29 @@ app.whenReady().then(() => {
     if (input.agentIds || input.leadAgentId) runtime.resetConversation(conversationId)
     return push()
   })
+  ipcMain.handle('douchat:open-conversation-workspace', async (event, conversationId: unknown) => {
+    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
+    const conversation = store.accountConversations.find(item => item.id === conversationId)
+    if (!conversation) throw new Error('Chat not found')
+    let directory: string | undefined
+    if (conversation.workspacePath) directory = resolveSavedWorkspace(conversation.workspacePath)
+    else {
+      if (!canAssignConversationWorkspace(conversation, store.accountAgents, store.currentAccountId)) throw new Error('Workspace unavailable')
+      const topicId = store.activeTopicId(conversationId)
+      const members = conversation.agentIds.map(id => store.accountAgents.find(agent => agent.id === id)!).filter(Boolean)
+      const key = (id: string) => conversation.type === 'direct' ? `direct:${conversationId}:${topicId}` : groupMemberSessionId(conversationId, id, topicId)
+      const existing = members.flatMap(agent => { const result = openableWorkspace(agent, key(agent.id), conversation.type === 'group'); return result ? [result] : [] }).sort((a, b) => b.modified - a.modified)
+      directory = existing[0]?.directory ?? localWorkspace(members[0], key(members[0].id))?.directory
+    }
+    if (!directory) throw new Error('Workspace unavailable')
+    const error = await shell.openPath(directory)
+    if (error) throw new Error(error)
+  })
   ipcMain.handle('douchat:choose-conversation-workspace', async (event, conversationId: unknown) => {
     if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
     const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
     if (!target) throw new Error('Chat not found')
-    if (!canAssignConversationWorkspace(target, store.accountAgents, store.currentAccountId)) throw new Error('Only chats whose members are all your own local agents can use a custom workspace.')
+    if (!canAssignConversationWorkspace(target, store.accountAgents, store.currentAccountId)) throw new Error('Only chats whose members are all your own agents can use a custom workspace.')
     const options: Electron.OpenDialogOptions = { title: '选择工作区文件夹', buttonLabel: '使用此文件夹', properties: ['openDirectory', 'createDirectory'], ...(target.workspacePath ? { defaultPath: target.workspacePath } : {}) }
     if (process.platform === 'darwin') app.focus({ steal: true })
     BrowserWindow.fromWebContents(event.sender)?.focus()
@@ -1012,6 +1038,14 @@ app.whenReady().then(() => {
     const window = codeArtifactWindows.get(artifactId)
     if (!window || window.isDestroyed() || window.webContents !== event.sender) return null
     return codeArtifacts.get(artifactId) ?? null
+  })
+  ipcMain.handle('douchat:connany', (event, command) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connector request')
+    return connany.command(command)
+  })
+  ipcMain.handle('douchat:connany-select', (event, selection) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connector request')
+    return connany.select(selection)
   })
   ipcMain.handle('douchat:test-email-connector', (event, input: EmailConnectorInput) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connector request')
@@ -1062,7 +1096,7 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:mark-read', (_event, conversationId: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     const conversation = store.conversation(conversationId)
-    if (conversation?.type === 'direct' && conversation.agentIds.includes(store.systemAdminAgentId ?? '')) {
+    if (conversation?.type === 'direct') {
       void runtime.greet(conversationId)
     }
     store.markConversationRead(conversationId)
@@ -1098,10 +1132,12 @@ app.whenReady().then(() => {
     _event,
     conversationId: string,
     text: string,
-    images?: MessageImageInput[]
+    images?: MessageImageInput[],
+    files?: MessageFileInput[],
+    mentions?: SelectedMention[]
   ) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
-    await runtime.sendMessage(conversationId, text, images)
+    await runtime.sendMessage(conversationId, text, images, files, mentions)
   })
   ipcMain.handle('douchat:stop-conversation', (_event, conversationId: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
@@ -1129,6 +1165,7 @@ app.whenReady().then(() => {
     const topicId = store.activeTopicId(conversationId)
     runtime.resetConversation(conversationId, topicId)
     store.resetConversationContext(conversationId, topicId)
+    if (conversation.type === 'direct' && !conversation.remoteRoomId) void runtime.greet(conversationId)
     return push()
   })
   ipcMain.handle('douchat:create-routine', (_event, input: CreateRoutineInput) => {
@@ -1179,10 +1216,9 @@ app.whenReady().then(() => {
   })
   // Packaged clients quietly check after launch; development never contacts
   // the release feed, and draft releases are not copied to the public CDN.
-  const updateTimer = setTimeout(() => { void updater.checkForUpdates() }, 15_000)
-  updateTimer.unref()
+  updater.startAutomaticChecks()
   scheduler.start()
-  powerMonitor.on('resume', () => scheduler.checkNow())
+  powerMonitor.on('resume', () => { scheduler.checkNow(); updater.checkAfterResume() })
   app.on('activate', () => focusMainWindow())
 })
 
@@ -1193,6 +1229,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   if (quitting) return
   quitting = true
+  updater?.stopAutomaticChecks()
   cancelLocalModelQueries()
   social?.stop()
   imChannels?.stop()

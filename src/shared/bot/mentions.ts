@@ -6,6 +6,7 @@ export interface BotMember {
 
 /** Exclude code, quoted replies, links and email addresses from mention labels. */
 function routingText(content: string): string {
+  const blank = (text: string) => text.replace(/[^\n]/g, ' ')
   let fence = ''
   const prose = content
     .split('\n')
@@ -14,16 +15,16 @@ function routingText(content: string): string {
       if (marker) {
         if (!fence) fence = marker[1]
         else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = ''
-        return ''
+        return blank(line)
       }
-      return fence ? '' : line
+      return fence ? blank(line) : line
     })
     .join('\n')
   return prose
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/`[^`\n]*`/g, '')
-    .replace(/^\s*>.*$/gm, '')
-    .replace(/\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/<!--[\s\S]*?-->/g, blank)
+    .replace(/`[^`\n]*`/g, blank)
+    .replace(/^\s*>.*$/gm, blank)
+    .replace(/\[[^\]]*\]\([^)]*\)/g, blank)
 }
 
 const normalizeName = (value: string): string => value.normalize('NFKC').toLocaleLowerCase()
@@ -98,4 +99,37 @@ export function insertMention(value: string, query: MentionQuery, name: string):
     value: value.slice(0, query.start) + mention + value.slice(query.end),
     cursor: query.start + mention.length
   }
+}
+
+
+export interface SelectedMention { id: string; name: string; start: number; end: number }
+
+/** Preserve selected IDs through edits outside their text; editing a mention invalidates it. */
+export function updateSelectedMentions(before: string, after: string, mentions: SelectedMention[]): SelectedMention[] {
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start++
+  let oldEnd = before.length, newEnd = after.length
+  while (oldEnd > start && newEnd > start && before[oldEnd - 1] === after[newEnd - 1]) { oldEnd--; newEnd-- }
+  return mentions.flatMap(mention => {
+    if (mention.end <= start) return [mention]
+    if (mention.start >= oldEnd) return [{ ...mention, start: mention.start + newEnd - oldEnd, end: mention.end + newEnd - oldEnd }]
+    return []
+  }).filter(mention => after.slice(mention.start, mention.end) === `@${mention.name}`)
+}
+
+export function resolveMentionedMembers<T extends BotMember>(content: string, members: T[], selections: SelectedMention[] = []): T[] {
+  if (!Array.isArray(selections) || selections.length > 100) throw new Error('Invalid selected mentions')
+  let remaining = routingText(content)
+  const selected: T[] = []
+  for (const mention of selections) {
+    if (!mention || typeof mention.id !== 'string' || typeof mention.name !== 'string' || !Number.isInteger(mention.start) || !Number.isInteger(mention.end) || mention.start < 0 || mention.end > content.length || mention.end <= mention.start) throw new Error('Invalid selected mention')
+    if (remaining.slice(mention.start, mention.end) !== `@${mention.name}` || !mentionBoundary(remaining[mention.start - 1] ?? '') || !mentionBoundary(remaining[mention.end] ?? '')) continue
+    const member = members.find(member => member.id === mention.id)
+    if (!member) throw new Error('The selected member is no longer in this group. Select them again.')
+    selected.push(member)
+    remaining = remaining.slice(0, mention.start) + ' '.repeat(mention.end - mention.start) + remaining.slice(mention.end)
+  }
+  const typed = mentionedMembers(remaining, members)
+  if (typed.some(member => members.filter(other => normalizeName(other.name) === normalizeName(member.name)).length > 1)) throw new Error('This mention matches multiple members. Use a unique member name or select a task recipient.')
+  return [...new Map([...selected, ...typed].map(member => [member.id, member])).values()]
 }

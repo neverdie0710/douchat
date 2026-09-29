@@ -1,10 +1,10 @@
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen, ExternalLink } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
 import { canAssignConversationWorkspace } from '../../../shared/conversationWorkspace'
 import type { AgentConfig, AppSnapshot, Conversation } from '../../../shared/types'
 import { t } from '../preferences'
 
-/** Shown only for chats with just the owner's local agents, or when a saved
+/** Shown only for chats with just the owner's agents, or when a saved
  * folder needs to be cleared after the members changed. */
 export function ConversationWorkspaceSetting({ conversation, agents, onSnapshot }: {
   conversation: Conversation
@@ -15,11 +15,11 @@ export function ConversationWorkspaceSetting({ conversation, agents, onSnapshot 
   const [error, setError] = useState('')
   const eligible = canAssignConversationWorkspace(conversation, agents)
   if (!eligible && !conversation.workspacePath) return null
-  const run = async (action: () => Promise<AppSnapshot>): Promise<void> => {
+  const run = async (action: () => Promise<AppSnapshot | void>): Promise<void> => {
     setBusy(true); setError('')
     try {
       const snapshot = await action()
-      onSnapshot?.(snapshot)
+      if (snapshot) onSnapshot?.(snapshot)
     }
     catch (cause) { setError(cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : t('Could not save changes')) }
     finally { setBusy(false) }
@@ -29,10 +29,11 @@ export function ConversationWorkspaceSetting({ conversation, agents, onSnapshot 
     <h2>{t('Workspace')}</h2>
     <p className="conversation-workspace-path" title={conversation.workspacePath}>
       <FolderOpen size={15} />
-      <span>{folderName ?? t('Default (managed by Douchat)')}</span>
+      <span>{folderName ?? t('Default')}</span>
+      <button className="conversation-workspace-open" type="button" title={t('Open folder')} aria-label={t('Open folder')} disabled={busy} onClick={() => void run(() => window.douchat.openConversationWorkspace(conversation.id))}><ExternalLink size={14} /></button>
     </p>
-    {!eligible && <p className="conversation-workspace-note">{t('Not in effect: this chat now includes members other than your own local agents.')}</p>}
-    {eligible && conversation.type === 'group' && conversation.workspacePath && <p className="conversation-workspace-note">{t('Local agents in this group share this folder and run one at a time.')}</p>}
+    {!eligible && <p className="conversation-workspace-note">{t('Not in effect: this chat now includes members other than your own agents.')}</p>}
+    {eligible && conversation.type === 'group' && conversation.workspacePath && <p className="conversation-workspace-note">{t('Agents in this group share this folder.')}</p>}
     <div className="conversation-workspace-actions">
       {eligible && <button type="button" disabled={busy} onClick={() => void run(() => window.douchat.chooseConversationWorkspace(conversation.id))}>{t(conversation.workspacePath ? 'Change folder' : 'Choose folder')}</button>}
       {conversation.workspacePath && <button type="button" disabled={busy} onClick={() => void run(() => window.douchat.clearConversationWorkspace(conversation.id))}>{t('Use default')}</button>}

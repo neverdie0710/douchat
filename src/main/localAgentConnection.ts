@@ -5,6 +5,8 @@ import { localModelId, withLocalModel } from '../shared/localModels'
 import { clampThinking, localThinkingLevels, withLocalThinking, type ThinkingLevel } from '../shared/thinkingLevels'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
+import { randomUUID } from 'node:crypto'
+import { codexComputerUseInstructions, codexComputerUseInventory } from './codexComputerUse'
 
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
@@ -35,6 +37,9 @@ export class LocalAgentConnection {
   private failure?: Error
   private turnCount = 0
   private turnActivity = false
+  private turnInProgress = false
+  private readonly nativeSessionId = randomUUID()
+  private readonly nativeSessionLifetime = new AbortController()
   private lastEvent = Date.now()
   private approvalHandler?: LocalApprovalHandler
   private activeTurnId?: string
@@ -83,7 +88,8 @@ export class LocalAgentConnection {
           ? { granular: { sandbox_approval: false, rules: false, skill_approval: false, request_permissions: false, mcp_elicitations: true } }
           : 'never', sandbox: 'workspace-write',
         config: { 'sandbox_workspace_write.network_access': true, web_search: 'live',
-          ...(thinking ? { model_reasoning_effort: clampThinking(thinking, localThinkingLevels('codex')) } : {}) }
+          ...(thinking ? { model_reasoning_effort: clampThinking(thinking, localThinkingLevels('codex')) } : {}) },
+        ...(toolApprovals ? { developerInstructions: codexComputerUseInstructions } : {})
       }
       let response: any
       if (resume?.thread) {
@@ -110,7 +116,8 @@ export class LocalAgentConnection {
     const schema = p.requestedSchema
     // Only the observed native Computer Use confirmation contract is supported.
     // Forms requiring input, URL flows and verification challenges need their own UI.
-    const supported = p.serverName === 'cua_repl' && p.mode === 'form'
+    const supported = ['cua_repl', 'computer-use', 'computer_use'].includes(p.serverName)
+      && ['form', 'openai/form', 'openaiForm'].includes(p.mode)
       && p._meta?.connector_id === 'computer-use' && p._meta?.codex_approval_kind === 'mcp_tool_call'
       && schema?.type === 'object' && schema.properties && typeof schema.properties === 'object'
       && !Array.isArray(schema.properties) && Object.keys(schema.properties).length === 0
@@ -126,7 +133,20 @@ export class LocalAgentConnection {
     this.approvals.set(packet.id, abort)
     let allowed = false
     try {
-      await handler({ message: p.message, details: JSON.stringify({ tool: p._meta.tool_name, arguments: p._meta.tool_params ?? {} }, null, 2) }, abort.signal)
+      const meta = p._meta
+      const appId = meta.tool_params?.app
+      const reusable = Array.isArray(meta.persist) && meta.persist.includes('session')
+        // The native plugin asks for app access before each GUI action (including click/type).
+        // Reuse the app grant, not a particular tool name. Explicit action confirmations stay separate.
+        && meta.riskLevel === 'low' && !meta.codex_request_type
+        && typeof meta.tool_name === 'string' && meta.tool_name.length > 0
+        && meta.tool_params && Object.keys(meta.tool_params).length === 1
+        && typeof appId === 'string' && /^[\w.-]{1,255}$/.test(appId)
+      const display = Array.isArray(meta.tool_params_display) ? meta.tool_params_display.find((v: any) => v?.name === 'app')?.value : undefined
+      const appName = typeof display === 'string' && display.length <= 200 ? display : appId
+      await handler({ message: p.message, details: JSON.stringify({ tool: meta.tool_name, arguments: meta.tool_params ?? {} }, null, 2),
+        ...(reusable ? { nativeSession: { id: this.nativeSessionId, appId, appName, signal: this.nativeSessionLifetime.signal } } : {})
+      }, abort.signal)
       allowed = true
     } catch { /* Denial, expiry and cancellation never grant access. */ }
     if (!abort.signal.aborted && !this.failure) {
@@ -193,11 +213,14 @@ export class LocalAgentConnection {
     if (this.failure) throw this.failure
     this.child.stdin.write(`${JSON.stringify(packet)}\n`)
   }
-  private request(method: string, params: Packet, control = false): Promise<any> {
+  private request(method: string, params: Packet, control = false, softTimeoutMs?: number): Promise<any> {
     if (this.failure) return Promise.reject(this.failure)
     return new Promise((resolve, reject) => {
       const id = ++this.sequence
-      const timer = setTimeout(() => this.close(new Error(`Local agent did not acknowledge ${method} within 60 seconds`)), 60_000)
+      const timer = setTimeout(() => {
+        if (softTimeoutMs) { this.pending.delete(id); reject(new Error('Native tool discovery timed out')) }
+        else this.close(new Error(`Local agent did not acknowledge ${method} within 60 seconds`))
+      }, softTimeoutMs ?? 60_000)
       this.pending.set(id, { resolve, reject, timer })
       try { this.write(control ? { type: 'control_request', request_id: String(id), request: { subtype: method, ...params } } : { id, method, params }) } catch (error) { this.close(error as Error) }
     })
@@ -205,10 +228,12 @@ export class LocalAgentConnection {
   private read(chunk: string): void {
     if (this.failure) return
     this.buffer += chunk
-    // Limit individual frames, not total output over a multi-hour task.
-    if (this.buffer.length > 8 * 1024 * 1024) { this.close(new Error('Local agent protocol frame is too large')); return }
+    // Image tool results can contain multiple base64 images (about 4/3 of
+    // their binary size). Bound each JSON frame, not a batch of stdout frames.
+    const maxFrameBytes = 64 * 1024 * 1024
     let newline: number
     while (!this.failure && (newline = this.buffer.indexOf('\n')) >= 0) {
+      if (Buffer.byteLength(this.buffer.slice(0, newline), 'utf8') > maxFrameBytes) { this.close(new Error('Local agent protocol frame exceeds 64 MB')); return }
       const line = this.buffer.slice(0, newline).trim()
       this.buffer = this.buffer.slice(newline + 1)
       if (!line) continue
@@ -255,12 +280,14 @@ export class LocalAgentConnection {
         this.listener?.(packet)
       }
     }
+    if (!this.failure && Buffer.byteLength(this.buffer, 'utf8') > maxFrameBytes) this.close(new Error('Local agent protocol frame exceeds 64 MB'))
   }
 
   async turn(prompt: string, signal: AbortSignal | undefined, progress?: ProgressListener, onApproval?: LocalApprovalHandler): Promise<string> {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
-    if (this.listener) throw new Error('This local agent session is already working')
+    if (this.turnInProgress) throw new Error('This local agent session is already working')
+    this.turnInProgress = true
     this.turnActivity = false
     const started = Date.now()
     this.lastEvent = started
@@ -281,6 +308,27 @@ export class LocalAgentConnection {
     const abort = (): void => this.close(new Error('Stopped'))
     signal?.addEventListener('abort', abort, { once: true })
     try {
+      let computerContext = ''
+      if (this.kind === 'codex' && onApproval) {
+        // Thread-scoped inventory reflects the actual plugin configuration. A
+        // missing/old discovery API must not break ordinary coding conversations.
+        try {
+          const servers: unknown[] = []
+          let cursor: string | undefined
+          for (let page = 0; page < 4; page++) {
+            const result = await this.request('mcpServerStatus/list', { threadId: this.threadId, limit: 100, ...(cursor ? { cursor } : {}) }, false, 5_000)
+            if (!Array.isArray(result?.data)) throw new Error('Invalid native tool inventory')
+            servers.push(...result.data)
+            cursor = typeof result.nextCursor === 'string' ? result.nextCursor : undefined
+            if (!cursor) break
+            if (page === 3) throw new Error('Native tool inventory was incomplete')
+          }
+          computerContext = codexComputerUseInventory(servers)
+        } catch {
+          computerContext = 'Douchat could not verify the native Computer Use inventory for this session. This does not prove the tools are absent. Inspect your exposed tools and report any actual tool failure precisely.'
+        }
+        signal?.throwIfAborted()
+      }
       return await new Promise<string>((resolve, reject) => {
         let finalText = ''
         let commentary = ''
@@ -339,12 +387,16 @@ export class LocalAgentConnection {
         if (signal?.aborted) { abort(); return }
         progress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
         if (this.kind === 'codex') {
-          void this.request('turn/start', { threadId: this.threadId, input: [{ type: 'text', text: prompt, text_elements: [] }] }).catch(reject)
+          void this.request('turn/start', { threadId: this.threadId, input: [
+            { type: 'text', text: prompt, text_elements: [] },
+            ...(computerContext ? [{ type: 'text', text: `Douchat native capability check:\n${computerContext}`, text_elements: [] }] : [])
+          ] }).catch(reject)
         } else {
           try { this.write({ type: 'user', message: { role: 'user', content: prompt } }) } catch (error) { reject(error) }
         }
       })
     } finally {
+      this.turnInProgress = false
       this.cancelApprovals()
       this.approvalHandler = undefined
       this.activeTurnId = undefined
@@ -358,6 +410,7 @@ export class LocalAgentConnection {
   close(error = new Error('Local agent session closed')): void {
     if (this.failure) return
     this.failure = error
+    this.nativeSessionLifetime.abort()
     this.cancelApprovals()
     for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error) }
     this.pending.clear()

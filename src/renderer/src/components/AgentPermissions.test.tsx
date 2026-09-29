@@ -106,3 +106,14 @@ it('shows the executing contact’s current avatar and nickname above the action
   expect(node.querySelector('.permission-actor strong')?.textContent).toBe('Old name')
   expect(node.querySelector('.permission-actor img')).toBeNull()
 })
+
+it.each(['get_app_state', 'click', 'type_text', 'scroll'])('offers app-scoped session approval for %s and collapses technical details', async tool => {
+  const resolve = vi.fn(async () => {})
+  await act(async () => root.render(<AgentPermissionPrompt request={{ id: 'r', ownerId: 'owner', agentId: 'a', agentName: 'Codex', requester: 'Codex', requesterId: 'a', requesterKind: 'agent', context: 'direct', roomName: 'Codex', capability: 'otherTools', operation: 'Allow Computer Use to use NetEaseMusic?', details: JSON.stringify({ tool, arguments: { app: 'com.netease.163music' } }), sessionScope: 'NetEaseMusic', nativeApp: { id: 'com.netease.163music', name: 'NetEaseMusic' }, createdAt: 0 }} onResolve={resolve} />))
+  expect(node.querySelector('.permission-actor')?.textContent).toContain('Access a desktop app')
+  expect(node.textContent).toContain('Application: NetEaseMusic')
+  expect(node.querySelector('details')?.open).toBe(false)
+  expect(node.textContent).toContain('Expires when the native session closes')
+  await act(async () => [...node.querySelectorAll('button')].find(button => button.textContent === 'Allow this app for this session')!.click())
+  expect(resolve).toHaveBeenCalledExactlyOnceWith('session')
+})

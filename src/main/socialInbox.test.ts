@@ -21,14 +21,14 @@ function account(id: string) {
   const auth = { getState: () => ({ status: 'signed-in', user: { id } }), getAccessToken: () => id } as unknown as DesktopAuth
   const runtime = new DouchatRuntime(store, { sessions: [], snapshot: () => [] } as unknown as ComputerProvider, () => {})
   const client = new SocialClient('https://example.com', auth, store, runtime)
-  runtime.setHumanSender((conversationId, text, images) => client.sendMessage(conversationId, text, images))
+  runtime.setHumanSender((conversationId, text, images, files, mentions) => client.sendMessage(conversationId, text, images, files, mentions))
   return { store, runtime, client, path }
 }
 function server(messages: SocialMessage[] = [], sharedRoom = room) {
   let failAfterDelivery = false
   const fetcher = vi.fn(async (_url: unknown, options?: RequestInit) => {
     const authorId = String((options?.headers as Record<string, string>).Authorization).slice(7)
-    if (!options?.body) return Response.json({ data: { userId: authorId, friendships: [], rooms: [sharedRoom] } })
+    if (!options?.body) return Response.json({ data: { filesVersion: 1, userId: authorId, friendships: [], rooms: [sharedRoom] } })
     const body = JSON.parse(String(options.body))
     if (body.action === 'send') {
       if (!messages.some((message) => message.id === body.id)) messages.push({ ...body, authorId, authorName: authorId, status: 'sent', createdAt: new Date().toISOString() })
@@ -148,7 +148,7 @@ it('imports more than a page once, keeps chronological history and uses account-
   expect(alice.store.topicMessages(own.id, 'main')[0].authorId).toBe('user')
 })
 
-it('waits for a fresh room list when a friend chat is created during an older inbox poll', async () => {
+it('opens a new chat without waiting for an older inbox poll', async () => {
   const alice = account('alice')
   let releaseOld!: () => void
   let roomCreated = false
@@ -177,13 +177,47 @@ it('waits for a fresh room list when a friend chat is created during an older in
     return result
   })
   await vi.waitFor(() => expect(roomCreated).toBe(true))
-  expect(opened).toBe(false)
+  const result = await opening
+  expect(opened).toBe(true)
   releaseOld()
   await oldPoll
-  const result = await opening
   expect(roomReads).toBe(2)
   expect(result.conversationId).toBe('friend:alice:dm')
   expect(alice.store.conversation(result.conversationId!)).toMatchObject({ person: { id: 'bob' }, remoteRoomId: 'dm' })
+})
+
+it('registers selected group agents concurrently and fetches no unrelated history', async () => {
+  const alice = account('alice')
+  const agents = ['One', 'Two', 'Three'].map(name => alice.store.createAgent({ name, role: 'Assistant', instructions: '', color: '#123456', provider: 'gateway', model: 'default' }))
+  const order = agents.map(agent => `agent:${agent.id}`).reverse()
+  const pending: Array<() => void> = []
+  const registered: string[] = []
+  let reads = 0
+  vi.stubGlobal('fetch', vi.fn(async (_url, options) => {
+    if (!options?.body) {
+      reads++
+      return Response.json({ data: { userId: 'alice', friendships: [], rooms: [{ ...room, id: 'new-group', kind: 'group', agents: agents.map(agent => ({ id: agent.id, localId: agent.id, ownerId: 'alice', name: agent.name })) }] } })
+    }
+    const input = JSON.parse(String(options.body))
+    if (input.action === 'create-room') {
+      expect(input.agentIds).toBeUndefined()
+      return Response.json({ data: { roomId: 'new-group' } })
+    }
+    expect(input.action).toBe('add-agent')
+    expect(input.order).toBe(order.indexOf(`agent:${input.localId}`) + 1)
+    registered.push(input.localId)
+    await new Promise<void>(resolve => pending.push(resolve))
+    return Response.json({ data: {} })
+  }))
+  const creating = alice.client.action({ action: 'create-room', kind: 'group', friendIds: ['bob'], agentIds: agents.map(agent => agent.id), memberOrder: order })
+  await vi.waitFor(() => expect(pending).toHaveLength(3))
+  expect(reads).toBe(0)
+  pending.forEach(resolve => resolve())
+  const result = await creating
+  expect(registered).toHaveLength(3)
+  expect(reads).toBe(1)
+  expect(result.snapshot?.rooms[0].agents).toHaveLength(3)
+  expect(alice.store.conversation(result.conversationId!)?.remoteRoomId).toBe('new-group')
 })
 
  it('keeps ordinary human exchanges silent even when the sender owns an agent', async () => {
@@ -602,4 +636,61 @@ it('delivers image-only shared group messages to another account without invokin
   expect(received.attachments).toHaveLength(1)
   expect(await bob.store.attachmentDataUrl(received.attachments![0].id)).toBe('data:image/png;base64,iVBORw0KGgo=')
   alice.store.close(); bob.store.close()
+})
+
+
+it('delivers files across accounts with local file cards and retries without duplicating messages', async () => {
+  const remote = server([], { ...room, kind: 'group', name: 'Files' })
+  const alice = account('alice'), bob = account('bob')
+  await alice.client.syncInbox(); await bob.client.syncInbox()
+  const a = alice.store.accountConversations[0], b = bob.store.accountConversations[0]
+  const file = { name: 'logo.svg', data: Buffer.from('<svg>remote</svg>') }
+  remote.loseReceipt()
+  await expect(alice.runtime.sendMessage(a.id, '', [], [file])).rejects.toThrow('Connection lost')
+  await alice.runtime.sendMessage(a.id, '', [], [file])
+  await bob.client.syncInbox()
+  expect(remote.messages).toHaveLength(1)
+  expect(remote.messages[0].content).toBe('')
+  expect(remote.messages[0].files).toEqual([{ name: file.name, base64: file.data.toString('base64') }])
+  const first = bob.store.topicMessages(b.id, 'main').at(-1)!
+  expect(first.text).toContain('[logo.svg](<douchat-file:')
+  const path = (await import('node:url')).fileURLToPath(/<([^>]+)>/.exec(first.text)![1].replace('douchat-file:', 'file:'))
+  expect(await bob.store.ownedDocumentPath(path)).toBe(path)
+  expect(await (await import('node:fs/promises')).readFile(path, 'utf8')).toBe('<svg>remote</svg>')
+  await bob.client.syncInbox()
+  expect(bob.store.topicMessages(b.id, 'main').at(-1)!.text).toBe(first.text)
+  alice.store.close(); bob.store.close()
+})
+
+
+it('preserves received reply file cards across later inbox refreshes', async () => {
+  server([{ id: 'file-reply', roomId: room.id, authorId: 'alice', authorName: 'Alice', content: 'Make a file', agentId: 'helper', agentName: 'Helper', status: 'succeeded', reply: '', replyFiles: [{ name: 'result.csv', base64: Buffer.from('a,b\n1,2').toString('base64') }], createdAt: room.createdAt }])
+  const bob = account('bob')
+  await bob.client.syncInbox()
+  const chat = bob.store.accountConversations[0]
+  const reply = bob.store.topicMessages(chat.id, 'main').find(message => message.id.endsWith(':reply'))!
+  expect(reply.text).toContain('[result.csv](<douchat-file:')
+  await bob.client.syncInbox()
+  expect(bob.store.topicMessages(chat.id, 'main').find(message => message.id === reply.id)!.text).toBe(reply.text)
+  bob.store.close()
+})
+
+it('carries the selected member ID through runtime, remote send and a lost-receipt retry', async () => {
+  const agents = [
+    { id: 'first', localId: 'a', ownerId: 'alice', name: 'Dr. Dou' },
+    { id: 'second', localId: 'b', ownerId: 'bob', name: 'Dr. Dou', interactionHumans: 'allow' as const }
+  ]
+  const remote = server([], { ...room, kind: 'group', agents })
+  const alice = account('alice')
+  await alice.client.syncInbox()
+  const chat = alice.store.accountConversations[0]
+  const selections = [{ id: 'second', name: 'Dr. Dou', start: 0, end: 8 }]
+  remote.loseReceipt()
+  await expect(alice.runtime.sendMessage(chat.id, '@Dr. Dou help', [], [], selections)).rejects.toThrow('Connection lost')
+  await alice.runtime.sendMessage(chat.id, '@Dr. Dou help', [], [], selections)
+  const sends = remote.fetcher.mock.calls.flatMap(([, options]) => options?.body ? [JSON.parse(String(options.body))] : []).filter(body => body.action === 'send')
+  expect(sends.map(body => body.agentIds)).toEqual([['second'], ['second']])
+  expect(sends[0].id).toBe(sends[1].id)
+  expect(sends[0].content).toBe('@Dr. Dou help')
+  alice.store.close()
 })

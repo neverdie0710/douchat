@@ -1,3 +1,4 @@
+import type { SelectedMention } from './bot/mentions'
 import type { DesktopDeviceApi } from './deviceApi'
 import type { AccountDataApi } from './accountData'
 import type { CustomModelConfig, CustomProviderInput, CustomModelTest } from './customModels'
@@ -196,6 +197,7 @@ export interface MessageDelivery {
 /** A binary asset owned by Douchat. The renderer receives the bytes lazily
  * through IPC instead of exposing arbitrary local file paths. */
 export interface MessageAttachment {
+  quoted?: boolean
   id: string
   kind: 'image'
   name: string
@@ -203,8 +205,14 @@ export interface MessageAttachment {
   size: number
 }
 
+export interface MessageFileInput {
+  name: string
+  data: Uint8Array
+}
+
 /** An image crossing the isolated renderer/main boundary before Douchat owns it. */
 export interface MessageImageInput {
+  quoted?: boolean
   name: string
   mimeType: MessageAttachment['mimeType']
   data: Uint8Array
@@ -479,6 +487,7 @@ export interface AppSnapshot {
 }
 
 export interface CreateAgentInput {
+  systemFiles?: import('./agentCustomization').AgentFiles
   thinkingLevel?: ThinkingLevel | 'default'
   customModel?: { providerId: string; model: string }
   cloudModel?: { model: string }
@@ -650,10 +659,13 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
   /** Opens a folder picker; resolves unchanged if cancelled. */
+  openConversationWorkspace: (conversationId: string) => Promise<void>
   chooseConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
   clearConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
   openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
   getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
+  connanyCommand: (command: import('./connany').ConnectorCommand) => Promise<unknown>
+  connanySelect: (selection: import('./connany').ConnectorSelection) => Promise<void>
   testEmailConnector: (input: EmailConnectorInput) => Promise<EmailConnectionTestResult>
   saveEmailConnector: (input: EmailConnectorInput) => Promise<AppSnapshot>
   disconnectEmailConnector: (connectorId: string) => Promise<AppSnapshot>
@@ -666,7 +678,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   renameTopic: (conversationId: string, topicId: string, title: string) => Promise<AppSnapshot>
   deleteTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
   setActiveTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
-  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[]) => Promise<void>
+  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) => Promise<void>
   stopConversation: (conversationId: string) => Promise<void>
   clearConversation: (conversationId: string) => Promise<AppSnapshot>
   resetConversationContext: (conversationId: string) => Promise<AppSnapshot>

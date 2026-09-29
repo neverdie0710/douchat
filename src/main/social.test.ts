@@ -82,7 +82,7 @@ describe('social IPC and task execution', () => {
     client.start()
     await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(5))
     client.stop()
-    expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }), images)
+    expect(runtime.executeSocialTask).toHaveBeenCalledWith('alice', 'local', 'task', 'run', expect.any(AbortSignal), undefined, expect.objectContaining({ requesterId: 'bob' }), images, undefined)
     const completed = JSON.parse(vi.mocked(fetch).mock.calls.find((call) => call[1]?.body && JSON.parse(call[1].body as string).action === 'complete')![1]!.body as string)
     expect(completed.failed).toBe(false)
   })
@@ -146,6 +146,14 @@ describe('shared-group explicit response policy', () => {
     expect(sharedGroupReplyTargets('@Bob @哥飞 help @东子', agents, humans)).toEqual(['ge', 'dong'])
     expect(sharedGroupReplyTargets('@all @东子 help', agents, humans, 'alice')).toEqual(['dong'])
     expect(sharedGroupReplyTargets('@东子 @东子', agents, humans)).toEqual(['dong'])
+  })
+  it('routes selected duplicate names by ID and never falls back when that member leaves', async () => {
+    const { sharedGroupReplyTargets } = await import('./social')
+    const same = agents.map(agent => ({ ...agent, name: 'Dr. Dou' }))
+    const selected = [{ id: 'ge', name: 'Dr. Dou', start: 0, end: 8 }]
+    expect(sharedGroupReplyTargets('@Dr. Dou help', same, humans, 'alice', selected)).toEqual(['ge'])
+    expect(() => sharedGroupReplyTargets('@Dr. Dou help', [same[0]], humans, 'alice', selected)).toThrow('no longer')
+    expect(sharedGroupReplyTargets('@Dr. Dou help', same, [{ id: 'human', name: 'Dr. Dou' }], 'alice', [{ ...selected[0], id: 'human' }])).toEqual([])
   })
   it('rejects ambiguous names rather than invoking the wrong owner’s agent', async () => {
     const { sharedGroupReplyTargets } = await import('./social')

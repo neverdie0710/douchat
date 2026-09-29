@@ -1,12 +1,13 @@
 # Douchat icons
 
-The app uses the Douchat `icon-v2` artwork: a white agent mark on the product's
-blue theme-color plate. The source artwork keeps a roughly 9.8% transparent
+The app uses the Douchat `icon-v3` artwork: a white speech bubble shaped like
+the letter D, with two pill-shaped eyes that give it an agent face, on the
+product's blue theme-color plate. The source artwork keeps a roughly 9.8% transparent
 margin on each side of the 1024px canvas, with an approximately 824px plate.
 This matches the visible plate proportions measured from the installed Chrome
-icon (206px on a 256px canvas). The white mark is enlarged
+icon (206px on a 256px canvas). The white D-bubble mark is sized
 within that plate so it remains legible at Dock and taskbar sizes.
-The development variant uses the same plate and agent-mark size as the release
+The development variant uses the same plate and D-bubble mark size as the release
 icon, with a red `DEV` badge at the lower right. Keep the shared artwork at the
 same scale so both variants have the same perceived Dock size. PNG and ICNS files are generated from
 the SVG sources in this directory.

@@ -7,7 +7,14 @@ export interface LocalProgress {
   detail?: string
 }
 export type ProgressListener = (progress: LocalProgress) => void
-export interface LocalToolApproval { message: string; details: string }
+/** Host-generated lifetime, never accepted from model arguments or renderer IPC. */
+export interface NativeAppSession {
+  id: string
+  appId: string
+  appName: string
+  signal: AbortSignal
+}
+export interface LocalToolApproval { message: string; details: string; nativeSession?: NativeAppSession }
 export type LocalApprovalHandler = (request: LocalToolApproval, signal: AbortSignal) => Promise<void>
 
 export interface LocalAgentImage {

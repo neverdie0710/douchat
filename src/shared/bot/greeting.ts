@@ -51,6 +51,7 @@ export function botGreetingPrompt({
   return [
     'Write the proactive opening greeting for a brand-new chat topic.',
     'Reply with exactly one short, natural sentence and nothing else: no Markdown, heading, list, quotation marks, or explanation.',
+    'Use your current IDENTITY.md, SOUL.md, and BOOTSTRAP.md instructions to shape this greeting. These custom files take precedence over the profile description. Briefly introduce yourself and, if appropriate, suggest a first step. Do not mention platform, model, or file names. This greeting is optional onboarding, never activation required before doing tasks.',
     'Write in interface.language. Speak as currentBot and let its name, description, and labels shape the wording and personality without mechanically listing them.',
     'Use the local date and time naturally when useful. Consider a widely recognized holiday, festival, weekday, season, or time of day for this language and timezone, but mention one only when relevant and confident; never invent an occasion or precise location.',
     "Vary the greeting across topics. Do not default to a generic equivalent of 'What can I do for you?'. Do not call tools or claim that any work has already been done.",

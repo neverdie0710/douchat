@@ -1,8 +1,13 @@
 {
   "name": "douchat",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "private": true,
-  "author": "ThinkAny",
+  "author": "ThinkAny, LLC <support@thinkany.ai>",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://douchat.ai",
+  "bugs": {
+    "url": "https://github.com/thinkany-ai/douchat/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/thinkany-ai/douchat.git"
@@ -22,7 +27,7 @@
     "release:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64 --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "vitest run"
+    "test": "vitest run src"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.84.2",
@@ -161,7 +166,7 @@
     "linux": {
       "icon": "resources/icons/douchat.png",
       "category": "Utility",
-      "maintainer": "ThinkAny <idoubi@users.noreply.github.com>",
+      "maintainer": "ThinkAny, LLC <support@thinkany.ai>",
       "syncDesktopName": true,
       "desktop": {
         "entry": {

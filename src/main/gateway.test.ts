@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultProviderAuthContext } from '@earendil-works/pi-ai'
-import { fetchGatewayModels, gatewayProvider, type GatewayConfig } from './gateway'
+import { fetchGatewayModels, gatewayProvider, gatewayOutputPayload, type GatewayConfig } from './gateway'
 
 const modelList = {
   object: 'list',
@@ -18,6 +18,19 @@ const modelList = {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Douchat Cloud gateway', () => {
+  it('does not send the SDK’s invented 8192-token cap for an opaque gateway model', () => {
+    const payload = { model: 'douchat-default', max_tokens: 8192, max_completion_tokens: 8192, messages: [], tools: [{ name: 'create_file' }] }
+    expect(gatewayOutputPayload(payload)).toEqual({ model: 'douchat-default', messages: [], tools: [{ name: 'create_file' }] })
+    expect(gatewayOutputPayload(payload, 32768)).toMatchObject({ max_tokens: 32768 })
+    expect(gatewayOutputPayload(payload, 4096, 'max_completion_tokens')).toMatchObject({ max_completion_tokens: 4096 })
+  })
+
+  it('retains the gateway’s published output limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ data: [{ id: 'published-model', max_output_tokens: 32768 }] })))
+    const models = await fetchGatewayModels({ baseUrl: 'https://fixture.invalid/v1', apiKey: 'test' })
+    expect(models[0]).toMatchObject({ maxTokens: 32768, gatewayOutputLimit: 32768 })
+  })
+
   it('uses the current desktop token to load the /v1 model catalog', async () => {
     let token = 'dch_first'
     const request = vi.fn(async () => Response.json(modelList))

@@ -9,7 +9,9 @@ const original = Object.getOwnPropertyDescriptor(process, 'platform')!
 afterEach(() => { Object.defineProperty(process, 'platform', original); vi.resetAllMocks() })
 it('supports system, per-user and discovered macOS bundles without probing the GUI', () => {
   expect(codexDesktopCandidates('darwin', '/Users/test', {}, ['/Volumes/Apps/Codex.app'])).toEqual([
-    '/Applications/Codex.app/Contents/Resources/codex', '/Users/test/Applications/Codex.app/Contents/Resources/codex', '/Volumes/Apps/Codex.app/Contents/Resources/codex'
+    '/Applications/Codex.app/Contents/Resources/codex', '/Users/test/Applications/Codex.app/Contents/Resources/codex',
+    '/Applications/ChatGPT.app/Contents/Resources/codex', '/Users/test/Applications/ChatGPT.app/Contents/Resources/codex',
+    '/Volumes/Apps/Codex.app/Contents/Resources/codex'
   ])
 })
 it('supports Windows conventional and Store installation roots with spaces', () => {

@@ -11,13 +11,17 @@ const agents = [{ id: 'codex', ownerId: 'me', localAgentId: 'codex' }] as AgentC
 const conversation = { id: 'direct-codex', type: 'direct', name: 'Codex', agentIds: ['codex'], topics: [], activeTopicId: '', unread: 0, readAt: 0, createdAt: 0, updatedAt: 0, ownerId: 'me' } as Conversation
 
 it('requests the folder picker and clear without an onSnapshot callback, showing only the folder name', async () => {
+  const open = vi.fn().mockResolvedValue(undefined)
   const choose = vi.fn().mockResolvedValue({}), clear = vi.fn().mockResolvedValue({})
-  Object.defineProperty(window, 'douchat', { configurable: true, value: { chooseConversationWorkspace: choose, clearConversationWorkspace: clear } })
+  Object.defineProperty(window, 'douchat', { configurable: true, value: { openConversationWorkspace: open, chooseConversationWorkspace: choose, clearConversationWorkspace: clear } })
   const host = document.createElement('div'); const root = createRoot(host)
   try {
     await act(async () => root.render(<ConversationWorkspaceSetting conversation={conversation} agents={agents} />))
-    await act(async () => host.querySelector('button')!.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('.conversation-workspace-actions button')!.click())
     expect(choose).toHaveBeenCalledWith('direct-codex')
+    expect(host.querySelector('.conversation-workspace-path span')!.textContent).toBe('Default')
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open folder"]')!.click())
+    expect(open).toHaveBeenCalledWith('direct-codex')
     await act(async () => root.render(<ConversationWorkspaceSetting conversation={{ ...conversation, workspacePath: '/Users/me/code/project' }} agents={agents} />))
     expect(host.querySelector('.conversation-workspace-path span')!.textContent).toBe('project')
     expect(host.querySelector('.conversation-workspace-path')!.getAttribute('title')).toBe('/Users/me/code/project')

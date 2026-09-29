@@ -1,3 +1,4 @@
+import type { SelectedMention } from '../shared/bot/mentions'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AppSnapshot,
@@ -7,6 +8,7 @@ import type {
   EndpointInput,
   EmailConnectorInput,
   MessageImageInput,
+  MessageFileInput,
   CreateGroupInput,
   CreateRoutineInput,
   UpdateAgentInput,
@@ -89,11 +91,14 @@ const api: DouchatApi = {
   createGroup: (input: CreateGroupInput) => ipcRenderer.invoke('douchat:create-group', input),
   updateConversation: (conversationId: string, input: UpdateConversationInput) =>
     ipcRenderer.invoke('douchat:update-conversation', conversationId, input),
+  openConversationWorkspace: (conversationId: string) => ipcRenderer.invoke('douchat:open-conversation-workspace', conversationId),
   chooseConversationWorkspace: (conversationId: string) => ipcRenderer.invoke('douchat:choose-conversation-workspace', conversationId),
   clearConversationWorkspace: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation-workspace', conversationId),
   openConversationWindow: (conversationId: string) => ipcRenderer.invoke('douchat:open-conversation-window', conversationId),
   openCodeArtifact: (input: CodeArtifactInput) => ipcRenderer.invoke('douchat:open-code-artifact', input),
   getCodeArtifact: (artifactId: string) => ipcRenderer.invoke('douchat:get-code-artifact', artifactId),
+  connanyCommand: (command) => ipcRenderer.invoke('douchat:connany', command),
+  connanySelect: (selection) => ipcRenderer.invoke('douchat:connany-select', selection),
   testEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:test-email-connector', input),
   saveEmailConnector: (input: EmailConnectorInput) => ipcRenderer.invoke('douchat:save-email-connector', input),
   disconnectEmailConnector: (connectorId: string) => ipcRenderer.invoke('douchat:disconnect-email-connector', connectorId),
@@ -110,8 +115,8 @@ const api: DouchatApi = {
     ipcRenderer.invoke('douchat:delete-topic', conversationId, topicId),
   setActiveTopic: (conversationId: string, topicId: string) =>
     ipcRenderer.invoke('douchat:set-active-topic', conversationId, topicId),
-  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[]) =>
-    ipcRenderer.invoke('douchat:send-message', conversationId, text, images),
+  sendMessage: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) =>
+    ipcRenderer.invoke('douchat:send-message', conversationId, text, images, files, mentions),
   stopConversation: (conversationId: string) => ipcRenderer.invoke('douchat:stop-conversation', conversationId),
   clearConversation: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation', conversationId),
   resetConversationContext: (conversationId: string) => ipcRenderer.invoke('douchat:reset-conversation-context', conversationId),

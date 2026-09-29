@@ -812,8 +812,8 @@ select:focus-visible {
 
 .composer-image button {
   position: absolute;
-  top: -5px;
-  right: -5px;
+  top: 2px;
+  right: 2px;
   display: grid;
   width: 20px;
   height: 20px;
@@ -2641,13 +2641,20 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 @media (max-width: 1100px) { .local-agent-row-aside { min-width: 0; } }
 :is(.settings-content, .skill-upload-dialog, .skill-detail-dialog) .secondary-button { border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); padding: 8px 12px; font-size: calc(12px * var(--font-scale, 0.92)); cursor: pointer; }
 :is(.settings-content, .skill-upload-dialog, .skill-detail-dialog) .secondary-button:hover:not(:disabled) { border-color: var(--accent-300); background: var(--accent-050); }
-.about-card { max-width: 720px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.about-row { display: flex; min-height: 94px; align-items: center; justify-content: space-between; gap: 28px; padding: 20px 0; }
-.about-row + .about-row { border-top: 1px solid var(--line); }
-.about-row-copy { display: grid; min-width: 0; flex: 1; gap: 5px; }
-.about-row-copy > strong { color: var(--ink); font-size: calc(15px * var(--font-scale, 0.92)); font-weight: 650; }
-.about-row-copy > span, .about-update-status > span, .update-copy > span { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); }
-.about-action { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; }
+.about-page { display: grid; max-width: 720px; gap: 24px; }
+.about-hero { display: flex; align-items: center; gap: 24px; }
+.about-logo { width: 104px; height: 104px; flex: 0 0 auto; margin: -10px; }
+.about-hero-copy { display: grid; min-width: 0; gap: 8px; }
+.about-hero-copy h1 { margin: 0; color: var(--ink); font-size: calc(28px * var(--font-scale, 0.92)); font-weight: 720; letter-spacing: -.03em; line-height: 1.1; }
+.about-hero-copy p { margin: 0; color: var(--muted); font-size: calc(14px * var(--font-scale, 0.92)); line-height: 1.5; }
+.about-meta { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.about-meta code { color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: calc(12.5px * var(--font-scale, 0.92)); }
+.about-badge { padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: calc(11px * var(--font-scale, 0.92)); font-weight: 550; }
+.about-update-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.about-update-copy { display: grid; min-width: 0; gap: 4px; }
+.about-update-card h2 { margin: 0; color: var(--ink); font-size: calc(14px * var(--font-scale, 0.92)); font-weight: 650; }
+.about-update-status > span, .update-copy > span { color: var(--muted); font-size: calc(12.5px * var(--font-scale, 0.92)); line-height: 1.5; }
+.about-action { display: flex; flex: 0 0 auto; align-items: center; }
 .about-action :is(.primary-button, .secondary-button) { min-height: 38px; }
 .about-action .primary-button { padding: 8px 14px; border-radius: 8px; }
 .update-check-button { min-width: 112px; }
@@ -2658,8 +2665,11 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 .update-copy p { max-height: 132px; margin: 0; overflow: auto; color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); line-height: 1.55; white-space: pre-line; }
 .update-progress { width: min(100%, 420px); height: 7px; overflow: hidden; border-radius: 99px; background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .update-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-500); transition: width 160ms ease; }
-.about-website-button { color: var(--ink); text-decoration: none; }
-.about-website-button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; }
+.about-links { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 28px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.about-link { display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; padding: 2px 0; color: var(--muted); font: inherit; font-size: calc(13.5px * var(--font-scale, 0.92)); text-decoration: none; cursor: pointer; }
+.about-link:hover { color: var(--ink); }
+.about-link:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 2px; border-radius: 4px; }
+.about-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: -6px; color: var(--muted); font-size: calc(12.5px * var(--font-scale, 0.92)); }
 .spin { animation: settings-spin 850ms linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 
@@ -2683,7 +2693,7 @@ html[data-platform='win32'] .add-friend-modal::backdrop {
 .usage-error button { border: 0; background: none; padding: 3px 0; color: inherit; font: inherit; font-weight: 650; cursor: pointer; }
 
 @media (max-width: 640px) {
-  .about-row { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .about-hero, .about-update-card { align-items: flex-start; flex-direction: column; gap: 16px; }
   .about-action, .about-action :is(.primary-button, .secondary-button) { width: 100%; }
   .usage-credit-row { grid-template-columns: auto minmax(0, 1fr); }
   .usage-top-up-button { grid-column: 1 / -1; width: 100%; }
@@ -6352,7 +6362,7 @@ html[data-platform='win32'] .messenger .app-rail {
 .agent-permission-row > span { min-width: 0; }
 .agent-permission-row select { flex-shrink: 0; width: 112px; max-width: 45%; padding: 7px 9px; font: inherit; font-size: calc(13px * var(--font-scale, .92)); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: none; cursor: pointer; }
 .agent-permission-row select:focus-visible { outline: 0; border-color: var(--accent-400); box-shadow: 0 0 0 2px var(--brand-ring); }
-.agent-permissions-modal .edit-contact-footer { flex-shrink: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.agent-permissions-modal .edit-contact-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .agent-permissions-modal [role='alert'] { color: var(--danger, #ba4438); }
 .permission-notice { margin: 12px 0; padding: 10px 12px; border-radius: 8px; background: var(--bubble-agent); color: var(--muted); font-size: 13px; line-height: 1.6; }
 .permission-details { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflow: auto; font-size: 13px; }
@@ -6369,10 +6379,12 @@ html[data-platform='win32'] .messenger .app-rail {
 .user-bubble :is(.message-quote, .message-markdown blockquote) { color: color-mix(in srgb, var(--ink) 50%, var(--muted)); border-left-color: color-mix(in srgb, var(--muted) 35%, transparent); }
 .message-quote-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; white-space: normal; flex: 1; min-width: 0; font-weight: inherit; }
 .message-quote-text strong { font-weight: inherit; }
-.composer-quote { margin: 12px 2px 4px; font-size: calc(14px * var(--font-scale, 0.92)); line-height: 1.6; }
-.message-quote button { display: grid; place-items: center; flex: 0 0 15px; width: 15px; height: 15px; margin: 0 3px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--muted) 30%, var(--canvas)); color: var(--canvas); cursor: pointer; }
-.message-quote button:hover { background: var(--muted); }
-.message-quote button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
+.composer-quote { gap: 8px; margin: 12px 2px 4px; font-size: calc(14px * var(--font-scale, 0.92)); line-height: 1.6; }
+.composer-quote .message-quote-text { flex: 0 1 auto; }
+.composer-quote.message-quote .message-attachments { margin: 0; }
+.message-quote > button { display: grid; place-items: center; flex: 0 0 15px; width: 15px; height: 15px; margin: 0 3px; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--muted) 30%, var(--canvas)); color: var(--canvas); cursor: pointer; }
+.message-quote > button:hover { background: var(--muted); }
+.message-quote > button:focus-visible { outline: 2px solid var(--accent-500); outline-offset: 3px; }
 
  .chat-render-error { flex: 1; min-width: 0; padding: 24px; align-self: stretch; overflow: auto; }
 .message-plain-fallback { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -6905,3 +6917,42 @@ html.native-dialog-window,
 /* Transport provenance stays outside the bubble and out of copied message text. */
 .message-channel-badge { display: inline-flex; align-items: center; justify-content: center; align-self: center; flex: 0 0 24px; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 50%; background: var(--search-focus-surface); }
 .message-channel-badge img { display: block; width: 16px; height: 16px; object-fit: contain; }
+
+/* Images have their own viewer and clipboard action, separate from message text. */
+.message-image-button { display: block; padding: 0; border: 0; background: transparent; min-width: 0; cursor: zoom-in; }
+.message-image-button:focus-visible { outline: 2px solid var(--accent, #1769ff); outline-offset: -2px; }
+.message-quote .message-attachments { display: flex; flex-shrink: 0; gap: 4px; margin: 0 8px; }
+.message-quote .message-image { width: 44px; height: 44px; object-fit: cover; border-radius: 5px; }
+.chat-image-preview { position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; padding: 24px; border: 0; background: transparent; color: #fff; }
+.chat-image-preview::backdrop { background: rgb(0 0 0 / 82%); }
+.chat-image-preview[open] { display: grid; place-items: center; }
+.chat-image-preview-panel { max-width: 100%; min-width: min(320px, 90vw); }
+.chat-image-preview-panel > img { display: block; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
+.chat-image-preview-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.chat-image-preview-toolbar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-image-preview-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 8px; padding: 8px 12px; background: rgb(255 255 255 / 14%); color: #fff; cursor: pointer; }
+.chat-image-preview-toolbar button:hover { background: rgb(255 255 255 / 24%); }
+
+
+.composer-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 220px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.composer-file > svg { flex-shrink: 0; color: var(--muted); }
+.composer-file-info { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.composer-file-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.composer-file-info small { color: var(--muted); font-size: 11px; }
+.composer-file > button { display: grid; place-items: center; flex: 0 0 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.composer-file > button:hover { background: var(--line); color: var(--ink); }
+
+.conversation-workspace-open { display: grid; place-items: center; flex: 0 0 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; color: var(--muted); background: transparent; opacity: 0; cursor: pointer; }
+.conversation-workspace-path:hover .conversation-workspace-open, .conversation-workspace-path:focus-within .conversation-workspace-open { opacity: 1; }
+.conversation-workspace-open:hover { color: var(--ink); background: var(--surface); }
+@media (hover: none) { .conversation-workspace-open { opacity: 1; } }

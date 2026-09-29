@@ -48,7 +48,7 @@ interface AgentManagementToolLike {
   name: string
   execute: (
     toolCallId: string,
-    params: Record<string, string | string[] | boolean | undefined>
+    params: Record<string, string | string[] | boolean | Record<string, string> | undefined>
   ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>
 }
 
@@ -271,6 +271,55 @@ describe('DouchatRuntime', () => {
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({
       images: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }]
     }))
+  })
+
+  it('lets shared agents read received files and returns generated files without local paths', async () => {
+    const { store, runtime } = createRuntime()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    const internals = runtime as any
+    vi.spyOn(internals, 'canRunLive').mockResolvedValue(true)
+    vi.spyOn(internals, 'runReply').mockImplementation(async (...params: unknown[]) => {
+      const options = params[0] as ReplyOptions
+      const url = /\]\(<(douchat-file:[^>]+)>\)/.exec(options.prompt)![1]
+      internals.replyCancels.set(options.sessionKey, { conversationId: 'social:file-task', abort: new AbortController() })
+      const tool = internals.artifactTools(admin.id, options.sessionKey).find((tool: any) => tool.name === 'read_message_file')
+      const result = await tool.execute('read', { url })
+      expect(JSON.parse(result.content[0].text).content).toBe('shared file contents')
+      const link = await store.saveIMFile({ name: 'result.txt', data: Buffer.from('processed') }, 'alice')
+      return { text: `Done\n\n${link}` }
+    })
+    const result = await runtime.executeSocialTask('alice', admin.id, 'file-task', 'Read this', new AbortController().signal, '', undefined, [], [{ name: 'input.txt', base64: Buffer.from('shared file contents').toString('base64') }])
+    expect(result).toEqual({ text: 'Done', files: [{ name: 'result.txt', base64: Buffer.from('processed').toString('base64') }] })
+    expect(internals.sharedFileUrls.size).toBe(0)
+  })
+
+  it('reads an earlier shared file on a later mention while excluding history outside the task context', async () => {
+    const { store, runtime } = createRuntime()
+    const admin = store.ensureDefaultCloudContact('alice', { provider: 'gateway', model: 'default' }).agent!
+    const file = await store.saveIMFile({ name: 'sidepanel.html', data: Buffer.from('<html>side panel</html>') }, 'alice')
+    const hidden = await store.saveIMFile({ name: 'old.txt', data: Buffer.from('excluded') }, 'alice')
+    store.syncFriendConversation('alice', { id: 'room-files', name: 'Team', kind: 'group', members: [{ id: 'alice', name: 'Alice', email: '' }], agents: [], createdAt: new Date().toISOString() }, [
+      { id: 'upload', roomId: 'room-files', authorId: 'alice', authorName: 'Alice', content: file, status: 'sent', createdAt: new Date().toISOString() },
+      { id: 'excluded', roomId: 'room-files', authorId: 'alice', authorName: 'Alice', content: hidden, status: 'sent', createdAt: new Date().toISOString() }
+    ])
+    const internals = runtime as any
+    vi.spyOn(internals, 'canRunLive').mockResolvedValue(true)
+    vi.spyOn(internals, 'runReply').mockImplementation(async (...params: unknown[]) => {
+      const options = params[0] as ReplyOptions
+      expect(options.prompt).toContain('fileLinks')
+      expect(options.prompt).toContain(file)
+      expect(options.prompt).not.toContain(hidden)
+      internals.replyCancels.set(options.sessionKey, { conversationId: 'social:followup', abort: new AbortController() })
+      const tool = internals.artifactTools(admin.id, options.sessionKey).find((tool: any) => tool.name === 'read_message_file')
+      const url = /\]\(<([^>]+)>\)/.exec(file)![1]
+      const read = await tool.execute('read', { url })
+      expect(JSON.parse(read.content[0].text).content).toBe('<html>side panel</html>')
+      await expect(tool.execute('hidden', { url: /\]\(<([^>]+)>\)/.exec(hidden)![1] })).rejects.toThrow('not available')
+      return { text: 'This is an HTML side panel.' }
+    })
+    const context = JSON.stringify({ history: [{ id: 'upload', content: 'What is this?', fileNames: ['sidepanel.html'] }] })
+    const result = await runtime.executeSocialTask('alice', admin.id, 'followup', '@Dr. Dou ?', new AbortController().signal, context, { roomId: 'room-files', requesterId: 'alice', requester: 'Alice', roomName: 'Team', delegate: async () => {} })
+    expect(result.text).toBe('This is an HTML side panel.')
   })
 
   it('returns generated image bytes with a shared task reply', async () => {
@@ -590,7 +639,7 @@ describe('DouchatRuntime', () => {
     internals.activeInputImages.set(defaultAgent.id, [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }])
 
     const tools = internals.agentManagementTools(defaultAgent)
-    expect(tools.map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
+    expect(tools.map((tool) => tool.name)).toEqual(['read_agent_configuration', 'update_group', 'create_group', 'create_agent', 'update_agent'])
     const originalGroup = store.createGroup({ name: '闲聊小群', agentIds: [defaultAgent.id] })
     store.addMessage({ conversationId: originalGroup.id, topicId: originalGroup.activeTopicId, authorId: defaultAgent.id, authorName: defaultAgent.name, text: 'History stays', kind: 'message' })
     const groupCount = store.accountConversations.filter((item) => item.type === 'group').length
@@ -609,7 +658,7 @@ describe('DouchatRuntime', () => {
     store.createGroup({ name: '三国英雄', agentIds: [defaultAgent.id] })
     await expect(updateGroup.execute('ambiguous', { group: '三国英雄', name: 'oops' })).rejects.toThrow()
     const create = tools.find((tool) => tool.name === 'create_agent')!
-    const createdResult = await create.execute('create-1', { name: 'Researcher', avatar: 'attached' })
+    const createdResult = await create.execute('create-1', { name: 'Researcher', avatar: 'attached', systemFiles: { 'SOUL.md': 'Be precise.', 'IDENTITY.md': 'I am Researcher.' } })
     const createdId = createdResult.details.agentId as string
     await updateGroup.execute('add-member', { group: originalGroup.id, addAgents: ['Researcher', createdId] })
     expect(store.conversation(originalGroup.id)?.agentIds).toEqual([defaultAgent.id, createdId])
@@ -628,6 +677,12 @@ describe('DouchatRuntime', () => {
     await expect(tools.find((tool) => tool.name === 'create_group')!.execute('group-bad', { name: 'Bad', agents: ['Missing'] })).rejects.toThrow('No agent')
 
     expect(createdResult.details.created).toBe(true)
+    expect(store.agent(createdId)?.systemFiles).toEqual({ 'SOUL.md': 'Be precise.', 'IDENTITY.md': 'I am Researcher.' })
+    expect(createdResult.content[0].text).toContain('SOUL.md')
+    const read = tools.find(tool => tool.name === 'read_agent_configuration')!
+    expect((await read.execute('read', { agent: createdId })).content[0].text).toContain('I am Researcher.')
+    await expect(create.execute('bad-files', { name: 'Invalid', systemFiles: { 'USER.md': 'private' } })).rejects.toThrow('Personal user files')
+    expect(store.accountAgents.some(agent => agent.name === 'Invalid')).toBe(false)
     expect(store.agent(createdId)).toMatchObject({
       name: 'Researcher',
       role: 'Assistant',
@@ -641,8 +696,10 @@ describe('DouchatRuntime', () => {
       agent: 'Researcher',
       name: 'Release Scout',
       description: 'Track release notes.',
+      systemFiles: { 'IDENTITY.md': 'I am Release Scout.' },
       emoji: '🦊'
     })
+    expect(store.agent(createdId)?.systemFiles).toEqual({ 'SOUL.md': 'Be precise.', 'IDENTITY.md': 'I am Release Scout.' })
     expect(updatedResult.details.updated).toBe(true)
     expect(store.agent(createdId)).toMatchObject({
       name: 'Release Scout',
@@ -659,7 +716,7 @@ describe('DouchatRuntime', () => {
     store.deleteConversation(`direct-${defaultAgent.id}`)
     expect(store.defaultConversationId).toBeUndefined()
     expect(store.systemAdminAgentId).toBe(defaultAgent.id)
-    expect(internals.agentManagementTools(defaultAgent).map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
+    expect(internals.agentManagementTools(defaultAgent).map((tool) => tool.name)).toEqual(['read_agent_configuration', 'update_group', 'create_group', 'create_agent', 'update_agent'])
     const withoutCapability = { ...defaultAgent, capabilities: [] }
     expect(internals.agentManagementTools(withoutCapability)).toEqual([])
   })
@@ -704,7 +761,7 @@ describe('DouchatRuntime', () => {
     expect(earlier.systemRole).toBe('admin')
     expect(current.systemRole).toBe('admin')
     expect(internals.agentManagementTools(earlier)).toEqual([])
-    expect(internals.agentManagementTools(current).map((tool) => tool.name)).toEqual(['update_group', 'create_group', 'create_agent', 'update_agent'])
+    expect(internals.agentManagementTools(current).map((tool) => tool.name)).toEqual(['read_agent_configuration', 'update_group', 'create_group', 'create_agent', 'update_agent'])
   })
 
   it('asks agents to preserve verified local files as reopenable history links', () => {
@@ -1303,7 +1360,7 @@ describe('DouchatRuntime', () => {
     internals.activeConversation.set('dobi', 'direct-dobi'); internals.activeTopic.set('dobi', topic)
     internals.runReply = async () => ({ text: 'Drawn.', attachments: [attachment] })
     await internals.messageAgentTool(store.agent('dobi')!).execute('draw', { agent: 'lin', message: 'Draw a wolf', replyTo })
-    expect(store.topicMessages('direct-dobi', topic).at(-1)).toMatchObject({ authorId: 'dobi', attachments: [attachment], source: { id: 'lin' } })
+    expect(store.topicMessages('direct-dobi', topic).find(message => message.attachments?.length)).toMatchObject({ authorId: 'dobi', attachments: [attachment], source: { id: 'lin' } })
   })
 
   it('keeps inline agent handoffs out of the direct-chat transcript', async () => {
@@ -1330,7 +1387,50 @@ describe('DouchatRuntime', () => {
     expect(store.topicMessages('direct-dobi', topicId)).toEqual(before)
   })
 
-  it('returns tool reply as synthesis context without copying it into the requesting chat', async () => {
+  it('hands a newly configured contact a task immediately without a human greeting', async () => {
+    const { store, runtime } = createRuntime()
+    const internal = runtime as any
+    const admin = store.accountAgents.find(agent => agent.systemRole === 'admin')
+    // The demo fixture permits management through its configured coordinator.
+    const manager = admin ?? store.agent('dobi')!
+    const tools = internal.agentManagementTools(manager) as AgentManagementToolLike[]
+    const create = tools.find(tool => tool.name === 'create_agent')
+    const fresh = create
+      ? store.agent((await create.execute('create', { name: 'PPT Master', systemFiles: { 'IDENTITY.md': 'I make PPTs.' } })).details.agentId as string)!
+      : store.createAgent({ name: 'PPT Master', role: 'Assistant', instructions: '', color: '#123456', provider: 'gateway', model: 'douchat-default', systemFiles: { 'IDENTITY.md': 'I make PPTs.' } })
+    internal.activeConversation.set('dobi', 'direct-dobi')
+    internal.activeTopic.set('dobi', store.activeTopicId('direct-dobi'))
+    internal.runReply = vi.fn(async ({ config }: any) => {
+      expect(config.systemFiles['IDENTITY.md']).toBe('I make PPTs.')
+      return { text: 'Here is the presentation.' }
+    })
+    expect(store.topicMessages(`direct-${fresh.id}`, store.activeTopicId(`direct-${fresh.id}`))).toHaveLength(0)
+    const result = await internal.messageAgentTool(store.agent('dobi')!).execute('send', { agent: fresh.id, message: 'Make a PPT' })
+    expect(result.details.delivered).toBe(true)
+    expect(store.topicMessages(`direct-${fresh.id}`, store.activeTopicId(`direct-${fresh.id}`)).at(-1)?.text).toBe('Here is the presentation.')
+  })
+
+  it.each([true, false])('recovers empty model output once, preserving prior tool results (recovers=%s)', async recovers => {
+    const { store, runtime } = createRuntime()
+    const internal = runtime as any
+    delete internal.runReply
+    const state = { messages: [] as any[] }
+    const prompt = vi.fn(async () => {
+      if (!state.messages.length) state.messages.push(
+        { role: 'user', content: 'Make a PPT' },
+        { role: 'toolResult', toolCallId: 'read-1', content: [{ type: 'text', text: 'Template loaded' }] })
+      state.messages.push({ role: 'assistant', stopReason: 'stop', content: prompt.mock.calls.length > 1 && recovers ? [{ type: 'text', text: 'Result' }] : [] })
+    })
+    internal.sessions.set('empty-recovery', { agentId: 'dobi', agent: { state, prompt, abort: vi.fn() } })
+    const reply = await internal.runReply({ config: store.agent('dobi'), sessionKey: 'empty-recovery', context: 'direct',
+      prompt: 'Make a PPT', conversationId: 'direct-dobi', topicId: store.activeTopicId('direct-dobi') })
+    expect(prompt).toHaveBeenCalledTimes(2)
+    expect(state.messages.filter(message => message.role === 'toolResult')).toHaveLength(1)
+    if (recovers) expect(reply).toMatchObject({ text: 'Result', retryCount: 1 })
+    else expect(reply.error).toContain('finished without a text response')
+  })
+
+  it('keeps tool handoff request and replies in a sender receipt without copying reply text into a bubble', async () => {
     const { store, runtime } = createRuntime()
     const internals = runtime as unknown as {
       activeConversation: Map<string, string>; activeTopic: Map<string, string>
@@ -1345,7 +1445,31 @@ describe('DouchatRuntime', () => {
     await internals.messageAgentTool(store.agent('dobi')!).execute('hello', { agent: 'lin', message: 'Greet the human' })
     expect(store.topicMessages('direct-lin', store.activeTopicId('direct-lin')).at(-1)).toMatchObject({ authorId: 'lin', text: 'Hi, I am Lin.', source: { id: 'dobi' } })
     expect(store.conversation('direct-lin')?.unread).toBe(1)
-    expect(store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toEqual(before)
+    const after = store.topicMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    expect(after).toHaveLength(before.length + 1)
+    expect(after.at(-1)).toMatchObject({ authorId: 'dobi', text: '', deliveries: [{
+      recipientId: 'lin', recipientName: 'Lin', content: 'Greet the human',
+      replies: [{ senderId: 'lin', content: 'Hi, I am Lin.' }]
+    }] })
+    expect(runtime.snapshot().messages).toContainEqual(after.at(-1))
+  })
+
+  it.each(['group', 'failed'] as const)('does not expose a private tool receipt for %s handoffs', async scenario => {
+    const { store, runtime } = createRuntime()
+    const conversationId = scenario === 'group' ? 'crew' : 'direct-dobi'
+    const topicId = store.activeTopicId(conversationId)
+    const internals = runtime as unknown as {
+      activeConversation: Map<string, string>; activeTopic: Map<string, string>
+      messageAgentTool: (config: { id: string; name: string }) => MessageAgentToolLike
+      runReply: (options: ReplyOptions) => Promise<object>
+    }
+    internals.activeConversation.set('dobi', conversationId)
+    internals.activeTopic.set('dobi', topicId)
+    internals.runReply = async () => scenario === 'failed' ? { text: '', error: 'Unavailable' } : { text: 'Private answer' }
+    const before = store.topicMessages(conversationId, topicId)
+    await internals.messageAgentTool(store.agent('dobi')!).execute('private', { agent: 'lin', message: 'Private request' })
+    expect(store.topicMessages(conversationId, topicId)).toEqual(before)
+    if (scenario === 'failed') expect(store.topicMessages('direct-lin', store.activeTopicId('direct-lin')).at(-1)).toMatchObject({ error: 'Unavailable', source: { id: 'dobi', content: 'Private request' } })
   })
 
   it('posts an introduction in the selected group, not another member private inbox', async () => {
@@ -1433,9 +1557,54 @@ describe('DouchatRuntime', () => {
     }
     store.createTopic(conversation!.id)
     await runtime.greet(conversation!.id)
-    expect(store.messages.filter(message => message.conversationId === conversation!.id)).toHaveLength(1)
-    expect(live).not.toHaveBeenCalled()
+    expect(store.messages.filter(message => message.conversationId === conversation!.id)).toHaveLength(2)
+    expect(store.contextMessages(conversation!.id, store.activeTopicId(conversation!.id))[0].text).toContain(agent!.name)
     expect(reply).not.toHaveBeenCalled()
+  })
+
+  it('bounds greetings, suppresses duplicates and discards late model output', async () => {
+    vi.useFakeTimers()
+    try {
+      const { store, runtime } = createRuntime()
+      const internal = runtime as any
+      store.clearConversation('direct-lin', store.activeTopicId('direct-lin'))
+      let finish!: (value: { text: string }) => void
+      internal.runReply = vi.fn(() => new Promise(resolve => { finish = resolve }))
+      const greeting = runtime.greet('direct-lin')
+      await runtime.greet('direct-lin')
+      await vi.advanceTimersByTimeAsync(8000)
+      await greeting
+      expect(internal.runReply).toHaveBeenCalledTimes(1)
+      expect(internal.runReply.mock.calls[0][0]).toMatchObject({ toolsDisabled: true, timeoutMs: 8000 })
+      expect(store.contextMessages('direct-lin', store.activeTopicId('direct-lin'))).toHaveLength(1)
+      finish({ text: 'Late greeting' })
+      await Promise.resolve()
+      expect(store.contextMessages('direct-lin', store.activeTopicId('direct-lin'))[0].text).not.toBe('Late greeting')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('greets after a context reset with current customization, and skips if the human starts talking', async () => {
+    const { store, runtime } = createRuntime()
+    const internal = runtime as any
+    const topic = store.activeTopicId('direct-lin')
+    store.updateAgent('lin', { systemFiles: { 'IDENTITY.md': 'I am an English tutor.', 'BOOTSTRAP.md': 'Ask about learning goals.' } })
+    store.resetConversationContext('direct-lin', topic)
+    internal.runReply = vi.fn(async ({ config, prompt }: any) => {
+      expect(config.systemFiles['BOOTSTRAP.md']).toBe('Ask about learning goals.')
+      expect(prompt).toContain('IDENTITY.md')
+      return { text: 'Hello, what would you like to learn?' }
+    })
+    await runtime.greet('direct-lin')
+    expect(store.contextMessages('direct-lin', topic)[0].text).toContain('learn')
+    store.resetConversationContext('direct-lin', topic)
+    let finish!: (value: { text: string }) => void
+    internal.runReply = () => new Promise(resolve => { finish = resolve })
+    const greeting = runtime.greet('direct-lin')
+    await Promise.resolve()
+    store.addMessage({ conversationId: 'direct-lin', topicId: topic, authorId: 'user', authorName: 'Me', text: 'Start now', kind: 'message' })
+    finish({ text: 'Must not interrupt' })
+    await greeting
+    expect(store.contextMessages('direct-lin', topic)).toHaveLength(1)
   })
 
   it('uses the selected interface language for proactive greetings', async () => {
@@ -1555,6 +1724,34 @@ describe('DouchatRuntime', () => {
     expect(errors[0].detail).toContain('- create_agent (东子)')
     expect(errors[0].detail).toContain('- computer_list_files')
     expect(store.runs.at(-1)).toMatchObject({ status: 'failed', error: 'The model connection was interrupted' })
+  })
+
+  it('stores selected files and lets the active agent read only files shared in its conversation', async () => {
+    const { store, runtime } = createRuntime()
+    let prompt = ''
+    ;(runtime as any).runReply = async (options: ReplyOptions) => { prompt = options.prompt; return { text: 'Read it.' } }
+    await runtime.sendMessage('direct-dobi', 'Inspect this SVG', [], [{ name: 'logo.svg', data: Buffer.from('<svg>hello</svg>') }])
+    const messages = store.contextMessages('direct-dobi', store.activeTopicId('direct-dobi'))
+    const user = messages.filter(message => message.authorId === 'user').at(-1)!
+    const url = /\]\(<(douchat-file:[^>]+)>\)/.exec(user.text)![1]
+    expect(prompt).toContain(url)
+    const session = 'test-file-session'
+    ;(runtime as any).replyCancels.set(session, { conversationId: 'direct-dobi', abort: new AbortController() })
+    ;(runtime as any).activeConversation.set(session, 'direct-dobi')
+    const tool = (runtime as any).artifactTools('dobi', session).find((tool: any) => tool.name === 'read_message_file')
+    const result = await tool.execute('read', { url })
+    expect(JSON.parse(result.content[0].text).content).toBe('<svg>hello</svg>')
+    const other = await store.saveIMFile({ name: 'private.txt', data: Buffer.from('private') }, store.currentAccountId)
+    const otherUrl = /\]\(<([^>]+)>\)/.exec(other)![1]
+    await expect(tool.execute('read', { url: otherUrl })).rejects.toThrow('not available')
+  })
+
+  it('rejects oversized or empty file batches without adding messages', async () => {
+    const { store, runtime } = createRuntime()
+    const before = store.contextMessages('direct-dobi', store.activeTopicId('direct-dobi')).length
+    await expect(runtime.sendMessage('direct-dobi', '', [], [{ name: 'empty.txt', data: new Uint8Array() }])).rejects.toThrow('不能为空')
+    await expect(runtime.sendMessage('direct-dobi', '', [], [{ name: 'large.bin', data: new Uint8Array(20 * 1024 * 1024 + 1) }])).rejects.toThrow('20 MB')
+    expect(store.contextMessages('direct-dobi', store.activeTopicId('direct-dobi'))).toHaveLength(before)
   })
 
   it('persists a pasted image and passes its bytes to the model', async () => {

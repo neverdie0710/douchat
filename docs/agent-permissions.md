@@ -17,8 +17,17 @@ For externally initiated cloud-agent tasks, the owner separately controls local 
 ## Local agents
 
 For native approval protocols, structured Claude `Read` and `WebFetch` requests
-can use the same exact-path/origin task grants. Free-form commands, Computer Use,
-scripts and unrecognized native tools still require individual confirmation.
+can use the same exact-path/origin task grants. Codex Computer Use low-risk
+application-access confirmations that explicitly support session persistence offer
+**Allow this app for this session**. This authorizes access to the named app,
+including reading its screen, clicking, typing and scrolling. App-access scope is
+recognized from the structured app-only confirmation, independently of the GUI tool name. The grant is bound to the owner, agent,
+requester, chat context, application ID and live native connection. It spans
+replies on that connection and is revoked on close, idle eviction, cancellation,
+reset, or agent disposal. Each callback still checks the current Deny policy.
+Other apps, high-risk confirmations and operations other than native app-access
+requests continue to ask. These grants are not written into Codex's global settings.
+Free-form commands, scripts and unrecognized native tools still require individual confirmation.
 The system does not infer safe privileges from a tool's human-readable description.
 
 Local CLIs own their internal tool harness. Douchat cannot truthfully enforce the same per-tool categories inside every supported executable. The UI therefore shows an explicit **Run the local agent program** policy instead of pretending that individual local tools are intercepted. It defaults to Ask for external requests. Approving it authorizes this invocation under the CLI's existing filesystem, command and network privileges. No external invocation begins without this grant. Deny disables external local execution even when group interaction is allowed. This is not a tool-free local chat sandbox or fine-grained ACP approval implementation.

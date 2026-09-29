@@ -1,3 +1,5 @@
+import { ConnanyPanel } from './ConnanyPanel'
+import { CONNECTORS_ENABLED } from '../../../shared/connany'
 import { UserMemoryPanel } from './UserMemoryPanel'
 import { LocalAgentEditor } from './LocalAgentEditor'
 import { CustomModelSettings } from './CustomModelSettings'
@@ -6,15 +8,16 @@ import { messageSendError } from '../messageQueue'
 import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
+import douchatLogo from '../../../../resources/icons/douchat.png'
 import { setPreferences, usePreferences, t, tr, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, Info, LogOut, Pause, Play, Plus, RefreshCw, ScanSearch, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
 import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about'
+export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about' | 'connectors'
 
 export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
@@ -130,6 +133,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Credits')}</span></button>
         <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
         <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
+        {CONNECTORS_ENABLED && <button id="connectors-tab" role="tab" aria-selected={tab === 'connectors'} aria-controls="settings-content" className={tab === 'connectors' ? 'active' : ''} onClick={() => onTab('connectors')}><Plug size={18} /><span>{t('Connectors')}</span></button>}
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
         <button id="scheduling-tab" role="tab" aria-selected={tab === 'scheduling'} aria-controls="settings-content" className={tab === 'scheduling' ? 'active' : ''} onClick={() => onTab('scheduling')}><Workflow size={18} /><span>{t('Scheduling')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
@@ -174,7 +178,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         </section>
         {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
         {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
+      </> : CONNECTORS_ENABLED && tab === 'connectors' ? <ConnanyPanel key={user.id} /> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
     </main>
     </section>
   </NativeDialog>
@@ -404,61 +408,59 @@ function AboutTab(): ReactElement {
       {status === 'checking' ? t('Checking for updates…') : t('Check for updates')}
     </button>
   )
-  return <>
-    <header className="settings-heading"><div><h1>{t('About')}</h1><p>{t('Version information and software updates.')}</p></div></header>
-    <section className="about-card">
-      <div className="about-row about-version-row">
-        <div className="about-row-copy">
-          <strong>{t('Version information')}</strong>
-          <span>{update?.currentVersion ?? '…'}</span>
-          <div className="about-update-status" aria-live="polite">
-            {status === 'downloading' ? <>
-              <div className="update-progress"><i style={{ width: `${update?.percent ?? 0}%` }} /></div>
-              <span>{t('Downloading the verified update from Douchat…')}</span>
-            </> : status === 'available' ? <div className="update-copy"><span>{t('Version {version} is available').replace('{version}', version ?? '')}</span>{update?.releaseNotes && <p>{update.releaseNotes}</p>}</div>
-              : status === 'downloaded' ? <div className="update-copy"><span>{t('Update ready to install')}</span>{Boolean(update?.busyTasks) && <p>{t('Finish {count} active tasks before restarting.').replace('{count}', String(update?.busyTasks))}</p>}</div>
-                : status === 'installing' ? <span>{t('Installing update and restarting…')}</span>
-                  : status === 'checking' ? <span>{t('Connecting to the Douchat update service…')}</span>
-                    : status === 'up-to-date' ? <span>{t('You are using the latest version.')}</span>
-                      : status === 'disabled' ? <span>{t('Update checks are available in packaged builds.')}</span>
-                        : null}
-            {error && <p className="settings-error">{t('Update failed:')} {t(error)}</p>}
-          </div>
-        </div>
-        <div className="about-action">
-          {status === 'available'
-            ? <button className="primary-button" onClick={() => void install()}>{t('Update to v{version} and restart').replace('{version}', version ?? '')}</button>
-            : status === 'downloaded'
-              ? <button className="primary-button" onClick={() => void install()}>{t('Restart to finish update')}</button>
-              : status === 'installing'
-                ? <button className="secondary-button update-check-button" disabled>{t('Installing update and restarting…')}</button>
-                : status === 'downloading'
-                  ? <button className="secondary-button update-check-button" disabled>{t('Downloading update…')} {update?.percent ?? 0}%</button>
-                  : checkButton}
+  return <div className="about-page">
+    <header className="about-hero">
+      <img className="about-logo" src={douchatLogo} alt="" />
+      <div className="about-hero-copy">
+        <h1>Douchat</h1>
+        <p>{t('A desktop workspace where AI agents work and talk together.')}</p>
+        <div className="about-meta">
+          <code>{update?.currentVersion ? `v${update.currentVersion}` : '…'}</code>
+          <span className="about-badge">{status === 'disabled' ? t('Development') : t('Desktop')}</span>
         </div>
       </div>
-      <div className="about-row">
-        <div className="about-row-copy">
-          <strong>{t('Douchat website')}</strong>
-          <span>douchat.ai</span>
-        </div>
-        <div className="about-action">
-          <a className="secondary-button about-website-button" href="https://douchat.ai/?utm_source=douchat-desktop" target="_blank" rel="noreferrer">
-            {t('Open website')}<ExternalLink size={14} />
-          </a>
+    </header>
+    <nav className="about-links" aria-label={t('Links')}>
+      <a className="about-link about-website-button" href="https://douchat.ai/?utm_source=douchat-desktop" target="_blank" rel="noreferrer">{t('Official website')}<ExternalLink size={15} /></a>
+      <a className="about-link" href="https://github.com/thinkany-ai/douchat" target="_blank" rel="noreferrer">{t('Source code')}<ExternalLink size={15} /></a>
+      <a className="about-link" href="https://github.com/thinkany-ai/douchat/issues" target="_blank" rel="noreferrer">{t('Report an issue')}<ExternalLink size={15} /></a>
+      <button type="button" className="about-link" title={t('Share local logs to help troubleshoot display errors.')} onClick={() => { void window.douchat.openDiagnosticLogs().catch((error) => window.alert(String(error))) }}>{t('Open log folder')}<FolderOpen size={15} /></button>
+    </nav>
+    <footer className="about-footer">
+      <span>{t('AGPL-3.0-only license')}</span>
+      <span aria-hidden="true">·</span>
+      <span>© 2026 ThinkAny, LLC</span>
+    </footer>
+    <section className="about-update-card" aria-labelledby="about-update-title">
+      <div className="about-update-copy">
+        <h2 id="about-update-title">{t('Software update')}</h2>
+        <div className="about-update-status" aria-live="polite">
+          {status === 'downloading' ? <>
+            <div className="update-progress"><i style={{ width: `${update?.percent ?? 0}%` }} /></div>
+            <span>{t('Downloading the verified update from Douchat…')}</span>
+          </> : status === 'available' ? <div className="update-copy"><span>{t('Version {version} is available').replace('{version}', version ?? '')}</span>{update?.releaseNotes && <p>{update.releaseNotes}</p>}</div>
+            : status === 'downloaded' ? <div className="update-copy"><span>{t('Update ready to install')}</span>{Boolean(update?.busyTasks) && <p>{t('Finish {count} active tasks before restarting.').replace('{count}', String(update?.busyTasks))}</p>}</div>
+              : status === 'installing' ? <span>{t('Installing update and restarting…')}</span>
+                : status === 'checking' ? <span>{t('Connecting to the Douchat update service…')}</span>
+                  : status === 'up-to-date' ? <span>{t('You are using the latest version.')}</span>
+                    : status === 'disabled' ? <span>{t('Update checks are available in packaged builds.')}</span>
+                      : null}
+          {error && <p className="settings-error">{t('Update failed:')} {t(error)}</p>}
         </div>
       </div>
-      <div className="about-row">
-        <div className="about-row-copy">
-          <strong>{t('Diagnostic logs')}</strong>
-          <span>{t('Share local logs to help troubleshoot display errors.')}</span>
-        </div>
-        <div className="about-action">
-          <button className="secondary-button" onClick={() => { void window.douchat.openDiagnosticLogs().catch((error) => window.alert(String(error))) }}>{t('Open log folder')}</button>
-        </div>
+      <div className="about-action">
+        {status === 'available'
+          ? <button className="primary-button" onClick={() => void install()}>{t('Update to v{version} and restart').replace('{version}', version ?? '')}</button>
+          : status === 'downloaded'
+            ? <button className="primary-button" onClick={() => void install()}>{t('Restart to finish update')}</button>
+            : status === 'installing'
+              ? <button className="secondary-button update-check-button" disabled>{t('Installing update and restarting…')}</button>
+              : status === 'downloading'
+                ? <button className="secondary-button update-check-button" disabled>{t('Downloading update…')} {update?.percent ?? 0}%</button>
+                : checkButton}
       </div>
     </section>
-  </>
+  </div>
 }
 
 /** One account, one identity: edits are saved to the service and the returned

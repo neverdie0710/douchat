@@ -1,3 +1,4 @@
+import type { SelectedMention } from '../../shared/bot/mentions'
 import { AgentSettingsDialog } from './components/AgentSettingsDialog'
 import { reportDiagnostic } from './diagnostics'
 import { ChatErrorBoundary } from './components/ChatErrorBoundary'
@@ -20,6 +21,7 @@ import type {
   CreateGroupInput,
   DesktopAuthState,
   MessageImageInput,
+  MessageFileInput,
   UpdateAgentInput
 } from '../../shared/types'
 import { SettingsPanel, type SettingsTab } from './components/SettingsPanel'
@@ -297,16 +299,16 @@ function WorkspaceApp(): ReactElement {
   const fail = (error: unknown, fallback: string): void =>
     setToast(t(error instanceof Error ? error.message : fallback))
 
-  async function send(text: string, images?: MessageImageInput[]): Promise<void> {
+  async function send(text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]): Promise<void> {
     if (!conversation) return
     const target = conversation
     const targetTopic = topic?.id
-    messageQueue.enqueue(target.id, text || `[${images?.length ?? 0} 张图片]`, async () => {
+    messageQueue.enqueue(target.id, text || (files?.length ? files.map(file => file.name).join('、') : `[${images?.length ?? 0} 张图片]`), async () => {
       const current = snapshotRef.current?.conversations.find((item) => item.id === target.id)
       if (!current || current.ownerId !== target.ownerId) throw new Error('会话已不可用，请移除这条排队消息。')
       const currentTopic = current.activeTopicId ?? current.topics[0]?.id
       if (currentTopic !== targetTopic) throw new Error('话题已切换，请切回原话题后重试。')
-      await window.douchat.sendMessage(target.id, text, images)
+      await window.douchat.sendMessage(target.id, text, images, files, mentions)
     }, () => !snapshotRef.current?.activity.some((item) => item.conversationId === target.id))
   }
 
@@ -657,10 +659,9 @@ function WorkspaceApp(): ReactElement {
           onCreateSocialGroup={async (friendIds, agentIds, memberOrder = []) => {
             const people = socialSnapshot?.friendships.filter((friend) => friendIds.includes(friend.person.id)).map((friend) => friend.person.name) ?? []
             const agentNames = snapshot.agents.filter((agent) => agentIds.includes(agent.id)).map(agentDisplayName)
-            const result = await window.douchat.socialAction({ action: 'create-room', kind: 'group', name: [...agentNames, ...people].join('、'), friendIds, memberOrder })
+            const result = await window.douchat.socialAction({ action: 'create-room', kind: 'group', name: [...agentNames, ...people].join('、'), friendIds, memberOrder, agentIds })
             if (!result.roomId) throw new Error('Chat could not be created')
-            for (const localId of agentIds) await window.douchat.socialAction({ action: 'add-agent', roomId: result.roomId, localId, order: memberOrder.indexOf(`agent:${localId}`) + 1 })
-            setSocialSnapshot(await window.douchat.getSocialSnapshot())
+            if (result.snapshot) setSocialSnapshot(result.snapshot)
             const next = await window.douchat.getSnapshot()
             setSnapshot(next)
             const created = next.conversations.find((conversation) => conversation.remoteRoomId === result.roomId)

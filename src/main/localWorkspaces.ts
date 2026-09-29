@@ -112,3 +112,21 @@ export function resetLocalWorkspaces(owner: string, matches: (sessionKey: string
     }
   }
 }
+
+
+/** Resolve existing workspaces without rewriting fingerprints or native thread bindings. */
+export function openableWorkspace(config: AgentConfig, sessionKey: string, includeChildSessions = false): { directory: string; modified: number } | undefined {
+  if (!root || !config.ownerId) return undefined
+  const records = join(root, 'sessions')
+  const candidates = existsSync(records) ? readdirSync(records).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).flatMap(name => {
+    const file = join(records, name), record = read(file)
+    if (!record || record.owner !== config.ownerId || record.agent !== config.id || !(record.sessionKey === sessionKey || includeChildSessions && record.sessionKey.startsWith(sessionKey + ':')) || !/^[a-f0-9-]{36}$/.test(record.generation)) return []
+    const id = name.slice(0, -5)
+    const compact = join(root!, 'cursor', id, record.generation)
+    const directory = config.localAgentId === 'cursor' || existsSync(compact) ? compact : join(root!, 'files', hash(config.ownerId!), hash(config.id), id, record.generation)
+    return [{ directory, modified: statSync(file).mtimeMs }]
+  }) : []
+  const latest = candidates.sort((a, b) => b.modified - a.modified)[0]
+  if (latest) { mkdirSync(latest.directory, { recursive: true, mode: 0o700 }); return latest }
+  return undefined
+}

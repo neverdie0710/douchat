@@ -39,6 +39,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(p.method==='thread/start') {model=p.params.model;approvalPolicy=p.params.approvalPolicy;send({id:p.id,result:{thread:{id:'thread-'+process.pid}}});}
  if(p.method==='thread/resume') {if(p.params.threadId==='missing'){send({id:p.id,error:{message:'thread not found'}});return;}threadId=p.params.threadId;count=1;send({id:p.id,result:{thread:{id:threadId,turns:[{}]}}});}
  if(p.method==='model/list') send({id:p.id,result:{data:[{model:'test-model',displayName:'Test model'}],nextCursor:null}});
+ if(p.method==='mcpServerStatus/list') send({id:p.id,result:{data:[{name:'cua_repl',runtimeStatus:'connected',tools:{js:{},js_reset:{}}}],nextCursor:null}});
  const prompt=p.method==='turn/start'?p.params.input[0].text:p.type==='user'?p.message.content:null;
  if(prompt===null)return;
  count++;
@@ -51,8 +52,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt.startsWith('approval')) {
   send({method:'turn/started',params:{threadId,turn:{id:'turn-'+count}}});
   send({id:999,method:'mcpServer/elicitation/request',params:{threadId:prompt==='approval-other-thread'?'another-thread':threadId,turnId:prompt==='approval-old-turn'?'old-turn':'turn-'+count,
-   serverName:'cua_repl',mode:prompt==='approval-url'?'url':'form',message:'Allow Computer Use to use Finder?',
-   _meta:{connector_id:prompt==='approval-other-server'?'other':'computer-use',codex_approval_kind:'mcp_tool_call',tool_name:'get_app_state',tool_params:{app:'com.apple.finder'}},
+   serverName:prompt==='approval-legacy'?'computer-use':'cua_repl',mode:prompt==='approval-url'?'url':prompt==='approval-extended'?'openai/form':'form',message:'Allow Computer Use to use Finder?',
+   _meta:{connector_id:prompt==='approval-other-server'?'other':'computer-use',codex_approval_kind:'mcp_tool_call',tool_name:prompt.startsWith('approval-action-')?prompt.slice('approval-action-'.length):'get_app_state',codex_request_type:prompt==='approval-sensitive'?'approval_request':undefined,tool_params:{app:'com.apple.finder',...(prompt==='approval-extra-params'?{command:'something'}:{})},persist:prompt==='approval-no-persist'?[]:['session'],riskLevel:prompt==='approval-high-risk'?'high':'low',tool_params_display:[{name:'app',value:'Finder'}]},
    requestedSchema:{type:'object',properties:prompt==='approval-fields'?{code:{type:'string'}}:{}}}});return;
  }
  if(prompt==='crash'){process.exit(12);return;}
@@ -62,7 +63,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt==='no-credit' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='auth-conflict' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set'});return;}
  if(prompt==='spawn-child') { const child=require('node:child_process').spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});send({method:'item/completed',params:{threadId,item:{type:'agentMessage',text:String(child.pid)}}});send({method:'turn/completed',params:{threadId,turn:{status:'completed'}}});return; }
- const text=JSON.stringify({pid:process.pid,count,prompt,model:model||(argvModel>=0?process.argv[argvModel+1]:undefined),cwd:process.cwd(),args:process.argv.slice(2)});
+ const text=JSON.stringify({pid:process.pid,count,prompt,capabilityContext:p.params?.input?.[1]?.text,model:model||(argvModel>=0?process.argv[argvModel+1]:undefined),cwd:process.cwd(),args:process.argv.slice(2)});
  if(p.type==='user') {send({type:'system',subtype:'init',session_id:threadId});send({type:'assistant',message:{content:[{type:'text',text:'Working'}]}});send({type:'result',result:text});}
  else {
  send({method:'item/completed',params:{threadId,item:{type:'agentMessage',phase:'commentary',text:'Working'}}});
@@ -87,6 +88,64 @@ async function connected(kind: 'codex' | 'claude' = 'codex') {
 }
 const options = { sessionKey: 'direct:conversation:topic', continuationPrompt: 'next turn' }
 describe('persistent local agent connections', () => {
+  it('accepts image-sized frames split across chunks and checks coalesced frames individually', async () => {
+    const child = await connected()
+    const internals = child as unknown as { read(chunk: string): void; listener: (packet: any) => void; failure?: Error }
+    const sizes: number[] = []
+    internals.listener = packet => sizes.push(packet.data.length)
+    const data = 'a'.repeat(34 * 1024 * 1024)
+    const frame = JSON.stringify({ method: 'image/result', data }) + '\n'
+    internals.read(frame.slice(0, 9 * 1024 * 1024))
+    expect(sizes).toEqual([])
+    internals.read(frame.slice(9 * 1024 * 1024))
+    internals.read(frame + frame)
+    expect(sizes).toEqual([data.length, data.length, data.length])
+    expect(internals.failure).toBeFalsy()
+  })
+
+  it.each([false, true])('rejects oversized protocol frames (terminated=%s)', async terminated => {
+    const child = await connected()
+    const internals = child as unknown as { read(chunk: string): void; failure?: Error }
+    internals.read('a'.repeat(64 * 1024 * 1024 + 1) + (terminated ? '\n' : ''))
+    expect(internals.failure?.message).toBe('Local agent protocol frame exceeds 64 MB')
+  })
+
+  it('provides a stable host session scope across turns and invalidates it on close', async () => {
+    const child = await connected()
+    const approve = vi.fn(async () => {})
+    await child.turn('approval', undefined, undefined, approve)
+    await child.turn('approval-action-click', undefined, undefined, approve)
+    const first = (approve.mock.calls as any)[0][0].nativeSession
+    const second = (approve.mock.calls as any)[1][0].nativeSession
+    expect(first).toMatchObject({ appId: 'com.apple.finder', appName: 'Finder' })
+    expect(first.id).toBe(second.id)
+    expect(first.signal.aborted).toBe(false)
+    child.close()
+    expect(first.signal.aborted).toBe(true)
+  })
+  it.each(['approval-sensitive', 'approval-high-risk', 'approval-extra-params', 'approval-no-persist'])('does not offer session reuse for %s', async prompt => {
+    const child = await connected(), approve = vi.fn(async () => {})
+    await child.turn(prompt, undefined, undefined, approve)
+    expect((approve.mock.calls as any)[0][0].nativeSession).toBeUndefined()
+  })
+  it.each(['click', 'type_text', 'scroll', 'press_key', 'drag', 'launch_app'])('shares app access for native %s operations', async tool => {
+    const child = await connected(), approve = vi.fn(async () => {})
+    await child.turn(`approval-action-${tool}`, undefined, undefined, approve)
+    expect((approve.mock.calls as any)[0][0].nativeSession).toMatchObject({ appId: 'com.apple.finder', appName: 'Finder' })
+  })
+  it('passes discovered native desktop tools to the actual Codex turn', async () => {
+    const result = await runLocalAgent(config, 'Inspect Calculator', undefined, [], { ...options, onApproval: vi.fn(async () => {}) })
+    const reply = JSON.parse(result.text)
+    expect(reply.capabilityContext).toContain('cua_repl is connected')
+    expect(reply.capabilityContext).toContain('js, js_reset')
+  })
+  it.each(['approval-legacy', 'approval-extended'])('forwards supported native confirmation %s', async prompt => {
+    const child = await connected()
+    const onApproval = vi.fn(async () => {})
+    const result = JSON.parse(await child.turn(prompt, undefined, undefined, onApproval))
+    expect(onApproval).toHaveBeenCalledOnce()
+    expect(result.approval.action).toBe('accept')
+  })
   it.each([true, false])('routes Claude tool permission and returns the owner decision: %s', async allow => {
     const child = new LocalAgentConnection('claude'); children.push(child)
     await child.connect(script, directory, process.env, undefined, false, undefined, true)

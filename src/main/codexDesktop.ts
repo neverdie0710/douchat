@@ -11,7 +11,7 @@ const execute = promisify(execFile)
 export function codexDesktopCandidates(platform: string, home: string, env: NodeJS.ProcessEnv, discovered: string[] = []): string[] {
   const p = platform === 'win32' ? path.win32 : path.posix
   if (platform === 'darwin') {
-    return [...new Set(['/Applications/Codex.app', p.join(home, 'Applications/Codex.app'), ...discovered])]
+    return [...new Set(['/Applications/Codex.app', p.join(home, 'Applications/Codex.app'), '/Applications/ChatGPT.app', p.join(home, 'Applications/ChatGPT.app'), ...discovered])]
       .map(root => p.join(root, 'Contents/Resources/codex'))
   }
   if (platform !== 'win32') return []

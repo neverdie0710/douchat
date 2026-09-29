@@ -1,20 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <mask id="agent-pod" maskUnits="userSpaceOnUse">
-      <rect width="1024" height="1024" fill="black"/>
-      <path
-        fill="white"
-        d="M392 276c-79 2-146 53-163 137-20 98 23 199 108 268 93 77 209 102 315 69 49-15 84-24 127 3l58 36c-20-35-38-69-27-103 33-90-26-177-116-208-82-28-128-61-163-117-34-54-81-87-139-85Z"
-      />
-      <rect x="331" y="391" width="95" height="95" rx="24" fill="black"/>
-      <rect x="449" y="487" width="95" height="95" rx="24" fill="black"/>
-      <rect x="571" y="568" width="95" height="95" rx="24" fill="black"/>
-    </mask>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A70FF"/>
+      <stop offset="1" stop-color="#0751EC"/>
+    </linearGradient>
   </defs>
   <g transform="translate(57.344 57.344) scale(.888)">
-    <rect x="48" y="48" width="928" height="928" rx="218" fill="#0B5CFF"/>
-    <g transform="translate(512 512) scale(1.1) translate(-512 -512)">
-      <rect width="1024" height="1024" fill="#FFFFFF" mask="url(#agent-pod)"/>
+    <rect x="48" y="48" width="928" height="928" rx="218" fill="url(#plate)"/>
+    <g transform="translate(512 512) scale(1.12) translate(-498 -522)">
+      <path fill="#FFFFFF" d="M332 262H512A240 240 0 0 1 512 742H380Q370 742 361 747L292 785Q262 801 268 768C284 728 292 700 292 660V302Q292 262 332 262Z"/>
+      <rect x="410" y="420" width="78" height="164" rx="39" fill="#0B5CFF"/>
+      <rect x="570" y="420" width="78" height="164" rx="39" fill="#0B5CFF"/>
     </g>
   </g>
 </svg>

@@ -1,5 +1,8 @@
 import type { UpdateState } from '../shared/types'
 
+const AUTO_CHECK_INTERVAL = 60 * 60_000
+const STARTUP_CHECK_DELAY = 15_000
+
 export interface UpdateDriver {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
@@ -55,6 +58,10 @@ export function safeUpdateError(cause: unknown): string {
  */
 export class DesktopUpdater {
   private value: UpdateState
+  private startupTimer?: ReturnType<typeof setTimeout>
+  private checkTimer?: ReturnType<typeof setInterval>
+  private checking = false
+  private lastCheckAt?: number
 
   constructor(
     private readonly driver: UpdateDriver | undefined,
@@ -108,14 +115,46 @@ export class DesktopUpdater {
     return { ...this.value }
   }
 
+  startAutomaticChecks(): void {
+    if (!this.enabled || !this.driver || this.checkTimer) return
+    this.startupTimer = setTimeout(() => { void this.checkAutomatically() }, STARTUP_CHECK_DELAY)
+    this.startupTimer.unref()
+    this.checkTimer = setInterval(() => { void this.checkAutomatically() }, AUTO_CHECK_INTERVAL)
+    this.checkTimer.unref()
+  }
+
+  stopAutomaticChecks(): void {
+    clearTimeout(this.startupTimer)
+    clearInterval(this.checkTimer)
+    this.startupTimer = undefined
+    this.checkTimer = undefined
+  }
+
+  /** Wake-ups can happen frequently; only catch up after a full check interval. */
+  checkAfterResume(): void {
+    if (!this.checkTimer || (this.lastCheckAt !== undefined && Date.now() - this.lastCheckAt < AUTO_CHECK_INTERVAL)) return
+    void this.checkAutomatically()
+  }
+
+  private async checkAutomatically(): Promise<void> {
+    // Keep a discovered update visible until the user chooses to install it.
+    // Background polling must never replace the download/install state.
+    if (this.value.availableVersion || ['downloading', 'downloaded', 'installing'].includes(this.value.status)) return
+    await this.checkForUpdates()
+  }
+
   async checkForUpdates(): Promise<UpdateState> {
     if (!this.enabled || !this.driver) return this.state()
-    if (['downloading', 'downloaded', 'installing'].includes(this.value.status)) return this.state()
+    if (this.checking || ['downloading', 'downloaded', 'installing'].includes(this.value.status)) return this.state()
+    this.checking = true
+    this.lastCheckAt = Date.now()
     this.publish({ status: 'checking' })
     try {
       await this.driver.checkForUpdates()
     } catch (cause) {
       this.fail(cause)
+    } finally {
+      this.checking = false
     }
     return this.state()
   }

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { agentPermissions } from '../shared/agentPermissions'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -76,13 +77,13 @@ it('a stopped waiter does not block the folder', async () => {
   release.get(claude.id)!(); await again
 })
 
-it('falls back to the managed folder when the chat is no longer eligible, keeping the setting', async () => {
+it('keeps the chosen folder when a cloud agent joins the private group', async () => {
   const { store, group, project, codex, cloud, run } = setup()
   store.setConversationWorkspace(group.id, project)
   vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
   store.updateConversation(group.id, { agentIds: [...group.agentIds, cloud.id] })
   await run(codex.id)
-  expect(vi.mocked(runLocalAgent).mock.calls[0][4]?.workspaceDirectory).toBeUndefined()
+  expect(vi.mocked(runLocalAgent).mock.calls[0][4]?.workspaceDirectory).toBe(project)
   expect(store.conversation(group.id)?.workspacePath).toBe(project)
 })
 
@@ -112,4 +113,24 @@ it('uses the folder for a direct chat with my local agent', async () => {
   vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
   await (runtime as any).runReply({ config: store.agent(codex.id)!, sessionKey: `direct:${conversation.id}:main`, conversationId: conversation.id, topicId: 'main', context: 'direct', prompt: 'hi' })
   expect(vi.mocked(runLocalAgent).mock.calls[0][4]?.workspaceDirectory).toBe(project)
+})
+
+it('lets cloud agents read and write the selected folder while enforcing permissions and shared-room isolation', async () => {
+  const { store, runtime, project, cloud } = setup()
+  const { conversation } = store.ensureDirectConversation(cloud.id)
+  store.setConversationWorkspace(conversation.id, project)
+  const permissions = agentPermissions(); permissions.sensitive.filesRead = 'allow'; permissions.sensitive.filesWrite = 'allow'
+  store.updateAgent(cloud.id, { permissions })
+  const internal = runtime as any, session = `direct:${conversation.id}:test`
+  internal.replyCancels.set(session, { conversationId: conversation.id, abort: new AbortController() })
+  internal.activeConversation.set(session, conversation.id)
+  const tools = internal.artifactTools(cloud.id, session)
+  const write = tools.find((tool: any) => tool.name === 'write_workspace_file')
+  await write.execute('write', { path: 'hello.md', content: '# Cloud workspace' })
+  expect(readFileSync(join(project, 'hello.md'), 'utf8')).toBe('# Cloud workspace')
+  expect(JSON.stringify(await tools.find((tool: any) => tool.name === 'read_workspace_file').execute('read', { path: 'hello.md' }))).toContain('Cloud workspace')
+  permissions.sensitive.filesWrite = 'deny'; store.updateAgent(cloud.id, { permissions })
+  await expect(write.execute('write', { path: 'denied.md', content: 'no' })).rejects.toThrow('disabled')
+  internal.sharedCallers.set(session, { requesterId: 'another-person' })
+  await expect(tools.find((tool: any) => tool.name === 'read_workspace_file').execute('read', { path: 'hello.md' })).rejects.toThrow('unavailable')
 })

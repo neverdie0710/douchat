@@ -44,9 +44,9 @@
 
 ## 来源
 
-按 `~/code/fastclaw` 的联系人渠道卡片、微信扫码流程、Telegram 长轮询和飞书长连接设计迁移，后端改写为 Electron / TypeScript。平台图标复制自其 `web/public/channels`，原许可见 [FastClaw LICENSE](third-party/fastclaw-LICENSE.txt)。
+按 FastClaw 的联系人渠道卡片、微信扫码流程、Telegram 长轮询和飞书长连接设计迁移，后端改写为 Electron / TypeScript。平台图标复制自其 `web/public/channels`，原许可见 [FastClaw LICENSE](third-party/fastclaw-LICENSE.txt)。
 
-协议参考：[Telegram Bot API](https://core.telegram.org/bots/api)、[飞书官方 Node SDK](https://github.com/larksuite/node-sdk)。微信 iLink 协议参考本机 fastclaw 的 `internal/channels/wechat.go` 和 `internal/setup/handlers_agent_channels.go`。
+协议参考：[Telegram Bot API](https://core.telegram.org/bots/api)、[飞书官方 Node SDK](https://github.com/larksuite/node-sdk)。微信 iLink 协议参考 FastClaw 的 `internal/channels/wechat.go` 和 `internal/setup/handlers_agent_channels.go`。
 
 ## 输入中状态
 

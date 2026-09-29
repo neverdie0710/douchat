@@ -1,4 +1,20 @@
-# Douchat
+<p align="center">
+  <img src="resources/icons/douchat.png" width="128" alt="Douchat logo">
+</p>
+
+<h1 align="center">Douchat</h1>
+
+<p align="center">
+  A desktop workspace where AI agents work and talk together.
+</p>
+
+<p align="center">
+  <a href="https://douchat.ai">Website</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs">Docs</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="LICENSE">License</a>
+</p>
 
 Douchat is an Electron desktop workspace where independent AI agents can work
 alone or collaborate in a shared conversation. Cloud agents use an authenticated
@@ -14,6 +30,12 @@ on the computer.
 - Run isolated browser sessions, local file tools and persistent scheduled routines.
 - Keep conversations, topics and agent configuration in Electron's local user-data directory.
 
+## Download
+
+Signed macOS builds for Apple Silicon and Intel are available from
+[douchat.ai](https://douchat.ai). Installed apps update themselves automatically.
+To build from source instead, follow the quick start below.
+
 ## Requirements
 
 - Node.js 22.12 or newer
@@ -23,6 +45,8 @@ on the computer.
 ## Quick start
 
 ```bash
+git clone https://github.com/thinkany-ai/douchat.git
+cd douchat
 npm ci
 cp .env.example .env
 npm run dev
@@ -127,67 +151,10 @@ npm run package:linux  # x64 AppImage + deb package
 npm run preview    # preview the production bundles
 ```
 
-Packaged artifacts are written to `release/<version>/`.
-
-## Release and automatic updates
-
-Production updates are served from the public `douchat` Cloudflare R2 bucket at
-`https://cdn.douchat.ai`, while GitHub Releases remain the private staging area.
-`electron-builder` creates each platform installer plus its checksum-protected
-update manifest, and the packaged app embeds only the public CDN URL. The
-renderer can request a check or installation over IPC, but it cannot replace the
-release feed or access the R2 publishing credentials.
-
-Installed builds check quietly after launch. Users can also open
-**Settings → About** to check manually. One click downloads the verified update,
-installs it and restarts Douchat. If an agent task is active, the completed
-download waits until the task has finished before restarting.
-
-To prepare a release:
-
-1. Set the same version in `package.json` and `package-lock.json`.
-2. Commit the version change and push it.
-3. Tag that commit with `v<version>` and push the tag.
-4. Wait for `.github/workflows/release.yml` to create a draft GitHub Release.
-5. Test the attached DMG, then publish the draft. Publishing runs
-   `.github/workflows/publish-cdn.yml`, which uploads versioned files first and
-   `latest-mac.yml` last. The manifest update is the shipping step seen by
-   installed clients.
-
-```bash
-npm version 0.2.0 --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "release: Douchat 0.2.0"
-git tag v0.2.0
-git push origin dev v0.2.0
-```
-
-Tagged releases ship separate signed and notarized Apple Silicon (`arm64`) and
-Intel (`x64`) macOS builds. Both architectures share `latest-mac.yml`; the
-updater selects the matching ZIP automatically, so users never download the
-other architecture's Electron runtime.
-Windows and Linux installers can be produced from the workflow's manual action,
-but are not attached to public tagged releases until their signing and support
-channels are enabled.
-
-The release workflows use these repository secrets:
-
-| Secret | Purpose |
-| --- | --- |
-| `APPLE_CERTIFICATE` | Base64-encoded Developer ID Application `.p12` |
-| `APPLE_CERTIFICATE_PASSWORD` | Password for the certificate archive |
-| `APPLE_ID` | Apple account used for notarization |
-| `APPLE_PASSWORD` | App-specific Apple password |
-| `APPLE_TEAM_ID` | Apple Developer team identifier |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account containing the `douchat` bucket |
-| `R2_ACCESS_KEY_ID` | Bucket-scoped R2 Object Read & Write token id |
-| `R2_SECRET_ACCESS_KEY` | Bucket-scoped R2 token secret |
-
-Never store these values in `.env`, the builder configuration or Git history.
-The R2 token is restricted to the `douchat` bucket and exists only in GitHub
-Actions Secrets; downloads through `cdn.douchat.ai` are public and credential-free.
-The local `package:mac` command explicitly disables signing and notarization, so
-it is suitable for smoke testing but not distribution or automatic-update tests.
+Packaged artifacts are written to `release/<version>/`. The local `package:mac`
+command disables signing and notarization, so it is suitable for smoke testing
+but not distribution or automatic-update tests. Maintainers publishing signed
+builds should follow [docs/releasing.md](docs/releasing.md).
 
 Project layout:
 
@@ -198,6 +165,26 @@ src/renderer/      React application and UI assets
 src/shared/        shared data types and collaboration protocol helpers
 resources/icons/   development and production application icons
 resources/entitlements.mac.plist  hardened-runtime permissions for signed macOS builds
+docs/              design notes for agents, groups, permissions and releases
 ```
 
 Before committing a change, run `npm run typecheck`, `npm test` and `npm run build`.
+
+## Contributing
+
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup, pull-request guidelines and the contribution license terms.
+
+## Security
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md)
+rather than opening a public issue.
+
+## License
+
+Douchat is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+A separate commercial license without the AGPL's copyleft obligations is
+available from ThinkAny, LLC — contact support@thinkany.ai.
+
+Third-party assets keep their own licenses; see [docs/third-party](docs/third-party)
+and the license files next to bundled assets.
