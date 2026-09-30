@@ -10,7 +10,7 @@ export async function testLocalAgent(id: string | undefined, input: CustomLocalA
   const timer = setTimeout(() => abort.abort(new Error('Connection test timed out after 30 seconds.')), 30_000)
   const probeId = `local-test:${randomUUID()}`
   try {
-    const agent = await resolveLocalAgentDraft(id, input)
+    const agent = await resolveLocalAgentDraft(id, input, combined)
     combined.throwIfAborted()
     const reply = await runLocalAgent({
       id: probeId, name: agent.name, localAgentId: agent.id, role: '', instructions: '',
@@ -22,7 +22,7 @@ export async function testLocalAgent(id: string | undefined, input: CustomLocalA
     if (reply.text.trim() !== 'DOUCHAT_OK') throw new Error(`Unexpected test response: ${reply.text.slice(0, 600) || '(empty)'}`)
     const durationMs = Date.now() - started
     clearTimeout(timer)
-    const version = agent.path ? await executableVersion(agent.path) : undefined
+    const version = agent.remote ? agent.version : agent.path ? await executableVersion(agent.path) : undefined
     combined.throwIfAborted()
     return { reply: reply.text, durationMs, version }
   } catch (error) {

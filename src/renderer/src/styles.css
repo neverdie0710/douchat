@@ -6810,6 +6810,13 @@ html.native-dialog-window,
 .local-agent-test-result { color: var(--brand-ink); font-size: calc(13px * var(--font-scale, .92)); }
 .local-agent-editor footer { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 18px; margin-top: 20px; }
 .local-agent-editor footer > span { flex: 1; }
+.local-agent-editor select { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+.local-agent-location { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; font-size: calc(13px * var(--font-scale, .92)); }
+.local-agent-location > span { font-weight: 500; }
+.local-agent-editor .local-agent-location label, .local-agent-editor .local-agent-checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+.local-agent-editor .local-agent-location input, .local-agent-editor .local-agent-checkbox input { width: auto; }
+.local-agent-remote-grid { display: grid; grid-template-columns: 2fr 1fr 1.4fr; gap: 10px; }
+.local-agent-remote-badge { padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
 .local-agent-editor footer .primary-button { padding: 9px 16px; }
 .local-agent-editor .secondary-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font-size: calc(12px * var(--font-scale, .92)); white-space: nowrap; cursor: pointer; }
 .messenger .local-agent-editor .secondary-button:hover:not(:disabled) { background: var(--surface); border-color: var(--muted); }
@@ -6998,3 +7005,10 @@ html.native-dialog-window,
 .about-community-copy .about-link { color: var(--accent-600); }
 .settings-content .about-page > .about-update-card { margin-bottom: 0; }
 .settings-content .about-page > .about-community { margin-top: 0; }
+
+/* Remote agents: a small server glyph on the icon plus the host alias. */
+.local-agent-icon, .agent-select-logo { position: relative; }
+.remote-agent-mark { position: absolute; right: -3px; bottom: -3px; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: #3B82F6; color: #fff; border: 1.5px solid var(--canvas); }
+.local-agent-remote-badge { display: inline-flex; align-items: center; gap: 4px; color: #3B82F6; border-color: color-mix(in srgb, #3B82F6 35%, var(--line)); background: color-mix(in srgb, #3B82F6 8%, var(--surface)); }
+.agent-select-host { margin-left: 6px; color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
+.contact-kind-badge.remote { background: #3B82F6; color: #fff; }

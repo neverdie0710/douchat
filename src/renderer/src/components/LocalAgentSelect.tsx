@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { LocalAgent } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
 import { t } from '../preferences'
+import { RemoteMark } from './RemoteMark'
 
 export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAgent[]; value: string; onChange: (id: string) => void }) {
   const [open, setOpen] = useState(false)
@@ -19,7 +20,7 @@ export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAge
     option?.focus({ preventScroll: true })
     return () => doc.removeEventListener('pointerdown', dismiss)
   }, [open])
-  const icon = (agent: LocalAgent) => <span className="agent-select-logo" data-agent={agent.id}>{(agent.avatar || agentIcons[agent.id]) ? <img src={agent.avatar || agentIcons[agent.id]} alt="" /> : <Bot size={18} />}</span>
+  const icon = (agent: LocalAgent) => { const art = agent.avatar || agentIcons[agent.remote?.adapter ?? agent.id]; return <span className="agent-select-logo" data-agent={agent.id}>{art ? <img src={art} alt="" /> : <Bot size={18} />}{agent.remote && <RemoteMark host={agent.remote.host} />}</span> }
   return <div className="agent-select" ref={root} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }} onKeyDown={(event) => {
     if (event.key === 'Escape' && open) { event.preventDefault(); event.stopPropagation(); setOpen(false); trigger.current?.focus({ preventScroll: true }) }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -38,12 +39,12 @@ export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAge
       }
     }
   }}>
-    <button ref={trigger} type="button" className="agent-select-trigger" aria-label={t('Local agent')} aria-haspopup="listbox" aria-expanded={open} disabled={!agents.length} onClick={() => setOpen(!open)}>
-      {selected && icon(selected)}<span>{selected?.name || t('Select a local agent')}</span><ChevronDown size={16} />
+    <button ref={trigger} type="button" className="agent-select-trigger" aria-label={t('Agent')} aria-haspopup="listbox" aria-expanded={open} disabled={!agents.length} onClick={() => setOpen(!open)}>
+      {selected && icon(selected)}<span>{selected?.name || t('Select an agent')}</span>{selected?.remote && <small className="agent-select-host">{selected.remote.host}</small>}<ChevronDown size={16} />
     </button>
-    {open && <div className="agent-select-options" role="listbox" aria-label={t('Local agent')}>
+    {open && <div className="agent-select-options" role="listbox" aria-label={t('Agent')}>
       {agents.map((agent) => <button type="button" role="option" aria-selected={agent.id === value} key={agent.id} onClick={() => { onChange(agent.id); setOpen(false); trigger.current?.focus({ preventScroll: true }) }}>
-        {icon(agent)}<span>{agent.name}</span>{agent.id === value && <Check size={16} />}
+        {icon(agent)}<span>{agent.name}</span>{agent.remote && <small className="agent-select-host">{t('Remote')} · {agent.remote.host}</small>}{agent.id === value && <Check size={16} />}
       </button>)}
     </div>}
   </div>

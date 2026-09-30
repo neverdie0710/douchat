@@ -68,6 +68,7 @@ const api: DouchatApi = {
   updateLocalAgent: (id: string, input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:update-local-agent', id, input),
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:test-local-agent', id, input),
   cancelLocalAgentTest: () => ipcRenderer.invoke('douchat:cancel-local-agent-test'),
+  listSshHosts: () => ipcRenderer.invoke('douchat:list-ssh-hosts'),
   removeCustomLocalAgent: (id: string) => ipcRenderer.invoke('douchat:remove-custom-local-agent', id),
   searchMessages: (conversationId, query) => ipcRenderer.invoke('douchat:search-messages', conversationId, query),
   getMessagePage: (conversationId, topicId, before) => ipcRenderer.invoke('douchat:message-page', conversationId, topicId, before),

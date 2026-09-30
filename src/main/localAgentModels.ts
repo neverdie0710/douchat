@@ -9,6 +9,10 @@ import { spawnEnvironment } from './shellPath'
 import { executableCommand } from './windowsCommand'
 import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
 import { acquireLocalProcessSlot, localAgentExecutable } from './localAgentRuntime'
+import type { LocalAgent, RemoteAgentSpec } from '../shared/types'
+import { RemoteRun } from './remoteFileChannel'
+import { launchScript } from './remoteScript'
+import { probeRemoteAgent, remoteLaunch, spawnLaunch } from './remoteTransport'
 
 export function parseLocalModels(id: string, output: string): LocalModel[] {
   const clean = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
@@ -62,8 +66,9 @@ export function listLocalAgentModels(id: string): Promise<LocalModelList> {
 }
 
 async function discoverLocalAgentModels(id: string, signal: AbortSignal): Promise<LocalModelList> {
-  if (!configurableLocalAgents.includes(id)) return { models: [], source: 'manual', configurable: false }
   const agent = await validateLocalAgent(id)
+  if (agent.remote) return discoverRemoteModels(agent, agent.remote, signal)
+  if (!configurableLocalAgents.includes(id)) return { models: [], source: 'manual', configurable: false }
   // These CLIs accept a model override but don't expose a stable non-interactive catalog.
   if (!['codex', 'claude', 'opencode', 'cursor', 'grok', 'openclaw', 'omp'].includes(id)) return { models: [], source: 'manual', configurable: true }
   const env = await spawnEnvironment()
@@ -104,4 +109,44 @@ async function discoverLocalAgentModels(id: string, signal: AbortSignal): Promis
     })
     return { models: parseLocalModels(id, output), source: 'agent', configurable: true }
   } finally { await rm(cwd, { recursive: true, force: true }) }
+}
+
+/** Same catalog commands, launched on the server through the fixed ssh path. */
+async function discoverRemoteModels(agent: LocalAgent, input: RemoteAgentSpec, signal: AbortSignal): Promise<LocalModelList> {
+  const adapter = input.adapter
+  if (!configurableLocalAgents.includes(adapter)) return { models: [], source: 'manual', configurable: false }
+  if (!['codex', 'claude', 'opencode', 'cursor', 'grok', 'openclaw', 'omp'].includes(adapter)) return { models: [], source: 'manual', configurable: true }
+  const spec = await probeRemoteAgent(input, signal)
+  const run = new RemoteRun(spec)
+  try {
+    await run.prepare(signal)
+    const launch = (args: string[]) => remoteLaunch(spec, launchScript({ runId: run.id, executable: spec.executable, args, channel: 'stdin', remotePath: spec.remotePath }))
+    if (adapter === 'codex' || adapter === 'claude') {
+      const connection = new LocalAgentConnection(adapter)
+      const cancel = () => connection.close(new Error('Model discovery stopped'))
+      signal.addEventListener('abort', cancel, { once: true })
+      const timer = setTimeout(() => connection.close(new Error('Model discovery timed out')), 15000)
+      try {
+        await connection.connect(spec.executable, run.workspace, {}, undefined, true, undefined, false, spec.args, undefined, { cwd: run.workspace, launch })
+        return { models: await connection.models(), source: 'agent', configurable: true }
+      } finally { signal.removeEventListener('abort', cancel); clearTimeout(timer); connection.close(); await connection.disposed() }
+    }
+    const args = adapter === 'openclaw' ? ['models', 'list', '--json'] : adapter === 'omp' ? ['models', '--json'] : ['models']
+    const child = spawnLaunch(await launch(appendLocalAgentArguments(args, spec.args)))
+    const output = await new Promise<string>((resolve, reject) => {
+      let stdout = ''
+      let failure: Error | undefined
+      const stop = (error: Error): void => { failure = error; killLocalProcess(child) }
+      const cancel = () => stop(new Error('Model discovery stopped'))
+      signal.addEventListener('abort', cancel, { once: true })
+      const timer = setTimeout(() => stop(new Error('Model discovery timed out')), 15000)
+      child.stdout.on('data', chunk => { stdout += chunk.toString(); if (stdout.length > 2_000_000) stop(new Error('Model list is too large')) })
+      child.stderr.resume()
+      child.on('error', error => stop(error))
+      child.on('close', code => { signal.removeEventListener('abort', cancel); clearTimeout(timer); killLocalProcess(child); failure ? reject(failure) : code === 0 ? resolve(stdout) : reject(new Error(`Could not load models from ${agent.name}. Check its login on the server.`)) })
+      child.stdin.on('error', () => {})
+      child.stdin.end()
+    })
+    return { models: parseLocalModels(adapter, output), source: 'agent', configurable: true }
+  } finally { await run.dispose(true) }
 }

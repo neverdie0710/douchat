@@ -9,6 +9,7 @@ vi.mock('../preferences', () => ({
   t: (text: string) => text
 }))
 
+import { setRemoteAgents } from './RemoteMark'
 import { AgentAvatar, ConversationAvatar, UserAvatar, conversationMembers, agentSourceLabel, mentionableAgents } from './common'
 
 describe('user avatar', () => {
@@ -136,8 +137,11 @@ describe('user avatar', () => {
     expect(agentSourceLabel({ ...base, id: 'cloud' })).toBe('Douchat Cloud')
     expect(agentSourceLabel({ ...base, id: 'custom-model', provider: 'custom:deepseek' })).toBe('Custom model')
     expect(agentSourceLabel({ ...base, id: 'following', provider: 'custom:deepseek', followDefaultModel: true })).toBe('Custom model')
-    expect(agentSourceLabel({ ...base, id: 'local', localAgentId: 'opencode', provider: 'local' })).toBe('Local agent · OpenCode')
-    expect(agentSourceLabel({ ...base, id: 'custom', localAgentId: 'custom:id', localAgentName: 'Research wrapper', provider: 'local' })).toBe('Local agent · Research wrapper')
+    expect(agentSourceLabel({ ...base, id: 'local', localAgentId: 'opencode', provider: 'local' })).toBe('Agent · OpenCode')
+    expect(agentSourceLabel({ ...base, id: 'custom', localAgentId: 'custom:id', localAgentName: 'Research wrapper', provider: 'local' })).toBe('Agent · Research wrapper')
+    setRemoteAgents([{ id: 'custom:gpu', name: 'GPU Codex', command: 'codex', installed: true, custom: true, remote: { transport: 'ssh', host: 'dev-box', adapter: 'codex', executable: 'codex', args: [] } } as never])
+    expect(agentSourceLabel({ ...base, id: 'remote', localAgentId: 'custom:gpu', localAgentName: 'GPU Codex', provider: 'local' })).toBe('Remote agent · dev-box · GPU Codex')
+    setRemoteAgents([])
   })
 })
 

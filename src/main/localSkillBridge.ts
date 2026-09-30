@@ -40,10 +40,11 @@ export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSign
   const close = () => { lifetime.abort(); server.closeAllConnections(); server.close(); signal.removeEventListener('abort', close) }
   signal.addEventListener('abort', close, { once: true })
   if (signal.aborted) { close(); signal.throwIfAborted() }
-  return { close, prompt: [
+  const tools_ = JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
+  return { close, port: address.port, token, tools: tools_, prompt: [
     'Douchat skill tools for THIS TURN ONLY: use your native shell/HTTP tool to POST JSON {"tool":"tool_name","arguments":{...}} to the loopback endpoint below. This is the supported way to install skills into Douchat, including another owned agent. Do not write its database. Keep this private token out of replies and files; discard older endpoints from history. Wait for the response (owner approval can take several minutes). If your native shell needs permission, request it normally.',
     `Endpoint: http://127.0.0.1:${address.port}/tools`, `Authorization: Bearer ${token}`,
     'Send Content-Type: application/json. Prefer stdin/heredoc JSON rather than interpolating commands or file contents into shell strings.',
-    JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
+    tools_
   ].join('\n') }
 }

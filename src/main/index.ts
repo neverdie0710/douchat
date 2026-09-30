@@ -9,6 +9,7 @@ import { parseSkillArchive } from './skillArchive'
 import { replyToIM } from './imReply'
 import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
+import { listSshHosts } from './sshHosts'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
 import { thinkingLevel } from '../shared/thinkingLevels'
@@ -50,7 +51,8 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, remoteAgentSpec, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { closeRemoteConnections, configureRemoteTransport } from './remoteTransport'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
@@ -86,6 +88,7 @@ const webAppUrl = normalizeWebAppUrl(
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
+configureRemoteTransport(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
 configureLocalWorkspaces(app.getPath('userData'))
 const customModels = new CustomModelStore(join(app.getPath('userData'), 'custom-models'), {
@@ -751,7 +754,12 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:update-local-agent', async (event, id: string, input: CustomLocalAgentInput) => {
     if (!isDouchatRenderer(event.sender) || typeof id !== 'string') throw new Error('Invalid local agent request')
+    const previous = await remoteAgentSpec(id)
     await updateLocalAgent(id, input)
+    if (previous) {
+      for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
+      void closeRemoteConnections(previous)
+    }
     cancelLocalModelQueries()
     resetShellPath()
     return checkLocalAgentUpdates(await detectLocalAgents())
@@ -772,12 +780,18 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid local agent request')
     localAgentTests.get(event.sender.id)?.abort(new Error('Connection test cancelled.'))
   })
+  ipcMain.handle('douchat:list-ssh-hosts', async (event) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid local agent request')
+    return listSshHosts()
+  })
   ipcMain.handle('douchat:remove-custom-local-agent', async (event, id: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid custom local agent request')
     if (store.agents.some((agent) => agent.localAgentId === id)) {
       throw new Error('Remove contacts using this local agent before deleting it.')
     }
+    const previous = await remoteAgentSpec(id)
     await removeCustomLocalAgent(id)
+    if (previous) void closeRemoteConnections(previous)
     return checkLocalAgentUpdates(await detectLocalAgents())
   })
   ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
@@ -1276,6 +1290,7 @@ app.on('before-quit', () => {
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)
   scheduler?.dispose()
   computer?.dispose()
+  void closeRemoteConnections()
 })
 
 app.on('will-quit', () => {

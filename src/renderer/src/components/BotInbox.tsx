@@ -1,4 +1,5 @@
 import { ContactKindBadge } from './ContactKindBadge'
+import { remoteHost } from './RemoteMark'
 import { t, tr } from '../preferences'
 import {
   BellOff,
@@ -218,7 +219,7 @@ export function BotInbox({
           <span className="conversation-line">
             <strong>
               {displayName || 'New chat'}
-              <ContactKindBadge human={Boolean(person)} local={conversation.type === 'direct' && Boolean(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId)} />
+              <ContactKindBadge human={Boolean(person)} local={conversation.type === 'direct' && Boolean(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId)} remote={conversation.type === 'direct' ? remoteHost(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId) : undefined} />
               {conversation.pinned && <Pin size={11} className="pin-mark" />}
             </strong>
             <time>{new Date(lastMessageAt(conversation)).toDateString() === new Date(now).toDateString() ? formatTime(lastMessageAt(conversation)) : relativeTime(lastMessageAt(conversation), now)}</time>

@@ -60,7 +60,7 @@ function save(file: string, value: RecordData): void {
   writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 })
   renameSync(temporary, file)
 }
-export function localWorkspace(config: AgentConfig, sessionKey?: string, customDirectory?: string) {
+export function localWorkspace(config: AgentConfig, sessionKey?: string, customDirectory?: string, placement: { remote?: boolean } = {}) {
   if (!root) return undefined
   if (!config.ownerId) throw new Error('A local workspace requires an account.')
   const key = sessionKey || `agent:${config.id}`
@@ -76,8 +76,11 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
     ...(old?.fingerprint === fingerprint && old.thread ? { thread: old.thread } : {}),
     ...(config.localAgentId === 'claude' && old?.claudeAccountLogin === true ? { claudeAccountLogin: true } : {}) }
   save(file, record)
+  // Remote agents keep files on the server; the key names that folder there.
+  const remoteKey = hash(JSON.stringify([id, record.generation]))
   let directory = customDirectory
-  if (!directory) {
+  if (placement.remote) directory = ''
+  else if (!directory) {
     const legacyDirectory = join(root, 'files', hash(config.ownerId), hash(config.id), id, record.generation)
     // Cursor flattens the entire workspace path into one directory name for its
     // trust marker (NAME_MAX = 255). The session hash already isolates owner,
@@ -90,7 +93,7 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
     }
     mkdirSync(directory, { recursive: true, mode: 0o700 })
   }
-  return { directory, custom: Boolean(customDirectory), thread: record.thread, claudeAccountLogin: record.claudeAccountLogin, rememberAccountLogin() {
+  return { directory, remoteKey, custom: Boolean(customDirectory), thread: record.thread, claudeAccountLogin: record.claudeAccountLogin, rememberAccountLogin() {
     const current = read(file)
     if (current?.generation !== record.generation || current.fingerprint !== fingerprint) return
     save(file, { ...current, claudeAccountLogin: true })
