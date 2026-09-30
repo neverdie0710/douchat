@@ -788,6 +788,24 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
     return new LocalAccountData(store).getMessagePage(conversationId, topicId, before)
   })
+  const invitationImage = (dataUrl: unknown) => {
+    if (typeof dataUrl !== 'string' || dataUrl.length > 4_000_000 || !dataUrl.startsWith('data:image/png;base64,')) throw new Error('Invalid invitation image')
+    const image = nativeImage.createFromDataURL(dataUrl)
+    if (image.isEmpty() || image.getSize().width > 2048 || image.getSize().height > 2048) throw new Error('Invalid invitation image')
+    return image
+  }
+  ipcMain.handle('douchat:copy-invitation-image', (event, dataUrl: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid clipboard request')
+    clipboard.writeImage(invitationImage(dataUrl))
+  })
+  ipcMain.handle('douchat:save-invitation-image', async (event, dataUrl: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid invitation image')
+    const image = invitationImage(dataUrl)
+    const result = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), 'douchat-invitation.png'), filters: [{ name: 'PNG', extensions: ['png'] }] })
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, image.toPNG())
+    return true
+  })
   ipcMain.handle('douchat:copy-text', (event, text: string) => {
     if (!isDouchatRenderer(event.sender) || typeof text !== 'string') throw new Error('Invalid clipboard request')
     clipboard.writeText(text)

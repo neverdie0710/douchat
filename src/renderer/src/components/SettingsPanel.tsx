@@ -1,3 +1,4 @@
+import { QRCodeSVG } from 'qrcode.react'
 import { ConnanyPanel } from './ConnanyPanel'
 import { CONNECTORS_ENABLED } from '../../../shared/connany'
 import { UserMemoryPanel } from './UserMemoryPanel'
@@ -9,7 +10,7 @@ import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import douchatLogo from '../../../../resources/icons/douchat.png'
-import { setPreferences, usePreferences, t, tr, type LanguagePreference } from '../preferences'
+import { setPreferences, usePreferences, resolveInterfaceLanguage, t, tr, type LanguagePreference } from '../preferences'
 import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
@@ -370,6 +371,11 @@ export function UsageTab({ refreshToken = 0, attention = false, onCreditsAvailab
 }
 
 function AboutTab(): ReactElement {
+  const preferences = usePreferences()
+  const chineseCommunity = resolveInterfaceLanguage(preferences.language) === 'zh-CN'
+  const communityUrl = chineseCommunity
+    ? 'https://douchat.ai/join-group?room=f167a810-5899-445d-af9c-d0c3fc115ae0&token=hbXNPJmbHii1oBanMARVIVzyOMOIWeAzFbG48jPkbcc'
+    : 'https://douchat.ai/join-group?room=89f7e3f2-aa50-4a9a-bb49-1a9abef3abf9&token=uTuAltFkHr8lpe3PSGo007zM_HrKvAGAKqmOnReB8Tc'
   const [update, setUpdate] = useState<UpdateState | null>(null)
   const [requestError, setRequestError] = useState('')
 
@@ -458,6 +464,16 @@ function AboutTab(): ReactElement {
               : status === 'downloading'
                 ? <button className="secondary-button update-check-button" disabled>{t('Downloading update…')} {update?.percent ?? 0}%</button>
                 : checkButton}
+      </div>
+    </section>
+    <section className="about-community" aria-labelledby="about-community-title">
+      <QRCodeSVG value={communityUrl} size={112} level="M" marginSize={4} title={t('Invitation QR code')} />
+      <div className="about-community-copy">
+        <h2 id="about-community-title">{t('Douchat Community')}</h2>
+        <p>{t('Scan to join the community, share ideas and get help.')}</p>
+        <a className="about-link" href={communityUrl} target="_blank" rel="noreferrer">
+          {t('Join community')}<ExternalLink size={15} />
+        </a>
       </div>
     </section>
   </div>

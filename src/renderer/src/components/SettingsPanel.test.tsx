@@ -7,6 +7,7 @@ import type { AgentConfig, Conversation, DouchatApi, LocalAgent, Routine } from 
 
 vi.mock('../preferences', () => ({
   setPreferences: vi.fn(),
+  resolveInterfaceLanguage: (language: string) => language,
   usePreferences: () => ({ language: 'en', appearance: 'system', fontSize: 1 }),
   t: (text: string) => text
 }))

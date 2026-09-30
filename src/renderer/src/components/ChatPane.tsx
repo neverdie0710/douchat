@@ -7,7 +7,7 @@ import type { SocialAgent, SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
 import { AtSign, FolderOpen, FileText, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
   AgentConfig,
@@ -882,7 +882,9 @@ function SocialTaskStatus({ tasks, agents }: { tasks: NonNullable<ChatMessage['s
   })}</div>
 }
 
-export function MessageRow({
+// Memoized so composer state (every keystroke of the draft) does not re-render
+// the whole transcript; the pane keeps each row's props referentially stable.
+export const MessageRow = memo(function MessageRow({
   socialAgents,
   person,
   onOpenPersonProfile,
@@ -987,7 +989,7 @@ export function MessageRow({
       onOpenAgentProfile={onOpenAgentProfile}
     />
   )
-}
+})
 
 export function visibleConversationMessages(
   conversation: Conversation | undefined,
@@ -1212,8 +1214,10 @@ export function ChatPane({
   const working = Boolean(activity)
   const fullConversationName = conversation ? conversationDisplayName(conversation, agents) : ''
   const conversationName = conversation ? conversationDisplayName(conversation, agents, true) : ''
-  const timelineMessages = person ? messages : visibleConversationMessages(conversation, messages)
-  const timelineGroups = groupConversationMessages(timelineMessages.filter((message) => !deletedIds.has(message.id)))
+  const timelineGroups = useMemo(() => {
+    const timelineMessages = person ? messages : visibleConversationMessages(conversation, messages)
+    return groupConversationMessages(timelineMessages.filter((message) => !deletedIds.has(message.id)))
+  }, [person, conversation, messages, deletedIds])
 
   useEffect(() => {
     voiceAttemptRef.current += 1

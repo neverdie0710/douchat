@@ -5,6 +5,8 @@ export interface DesktopDeviceApi {
   resizeDialog: (name: string, width: number, height: number) => Promise<boolean>
   reportDiagnostic: (event: string, detail: string) => void
   openDiagnosticLogs: () => Promise<void>
+  copyInvitationImage: (dataUrl: string) => Promise<void>
+  saveInvitationImage: (dataUrl: string) => Promise<boolean>
   copyText: (text: string) => Promise<void>
   copyAttachment: (attachmentId: string) => Promise<void>
   platform: string

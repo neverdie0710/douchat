@@ -4293,6 +4293,10 @@ html[data-platform='win32'] .messenger .app-rail {
   overflow-x: auto;
   white-space: pre;
 }
+/* Streamdown renders tokenized lines as spans; its Tailwind utilities are not loaded. */
+.message-markdown [data-streamdown='code-block-body'] pre > code > span {
+  display: block;
+}
 .message-markdown [data-streamdown='code-block-body'] code,
 .message-markdown .diagram-source code {
   font: .86em/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -6960,3 +6964,37 @@ html.native-dialog-window,
 .conversation-workspace-path:hover .conversation-workspace-open, .conversation-workspace-path:focus-within .conversation-workspace-open { opacity: 1; }
 .conversation-workspace-open:hover { color: var(--ink); background: var(--surface); }
 @media (hover: none) { .conversation-workspace-open { opacity: 1; } }
+
+.group-invite-qr { margin: 16px 0 4px; padding: 4px; border: 1px solid #e5e7eb; border-radius: 14px; background: #fff; }
+.group-invite-qr svg { display: block; width: 208px; height: 208px; max-width: 100%; }
+.group-invite-dialog .group-invite-save { background: var(--accent-500); color: #fff; border-radius: 7px; padding: 9px 12px; }
+.group-invite-dialog .group-invite-actions { flex-wrap: wrap; justify-content: center; }
+.group-invite-dialog .group-invite-refresh { font-size: 11px; color: var(--muted); }
+
+.group-invite-poster { width: 288px; max-width: 100%; margin: 16px 0 4px; border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; background: #fff; }
+.group-invite-poster > svg { display: block; width: 100%; height: auto; }
+
+/* Invitation card: a quiet preview stage and a single primary share action. */
+.group-invite-dialog.group-invite-redesign { width: min(520px, calc(100vw - 32px)); padding: 24px; align-items: stretch; gap: 0; background: var(--canvas); }
+.group-invite-redesign .group-invite-heading h2 { margin: 0 32px 4px 0; text-align: left; font-size: 24px; letter-spacing: -.5px; }
+.group-invite-redesign .group-invite-heading p { margin: 0 0 20px; text-align: left; font-size: 14px; }
+.group-invite-stage { min-height: 240px; padding: 24px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--accent-050) 45%, var(--canvas)); }
+.group-invite-redesign .group-invite-poster { width: 230px; margin: 0; border: 1px solid #0b5cff14; border-radius: 12px; box-shadow: 0 8px 24px #153b731a; }
+.group-invite-primary { display: flex; align-items: stretch; gap: 12px; margin-top: 20px; }
+.group-invite-primary button { background: var(--accent-600); color: #fff; height: 44px; border-radius: 8px; font-size: 14px; }
+.group-invite-primary .group-invite-copy-card { flex: 1; font-weight: 600; }
+.group-invite-primary .group-invite-copy-link { width: 44px; flex-shrink: 0; background: var(--accent-050); color: var(--accent-600); border: 1px solid var(--accent-200); }
+.group-invite-primary button:hover:not(:disabled) { filter: brightness(.95); }
+.group-invite-more { margin-top: 16px; font-size: 12px; color: var(--muted); }
+.group-invite-more summary { text-align: center; cursor: pointer; }
+.group-invite-redesign .group-invite-feedback:empty { display: none; }
+.native-dialog-window .group-invite-redesign { --dialog-preferred-width: 520; }
+@media (max-height: 740px) { .group-invite-redesign .group-invite-poster { width: 190px; } .group-invite-stage { padding: 16px; } }
+
+.about-community { display: flex; align-items: center; gap: 20px; padding: 20px; border: 1px solid var(--line); border-radius: 12px; }
+.about-community > svg { flex-shrink: 0; border-radius: 8px; }
+.about-community-copy h2 { margin: 0 0 8px; font-size: 16px; }
+.about-community-copy p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.about-community-copy .about-link { color: var(--accent-600); }
+.settings-content .about-page > .about-update-card { margin-bottom: 0; }
+.settings-content .about-page > .about-community { margin-top: 0; }

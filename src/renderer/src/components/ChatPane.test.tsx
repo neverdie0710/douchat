@@ -13,10 +13,15 @@ vi.mock('../preferences', () => ({
   )
 }))
 
+const markdownRenders = vi.hoisted(() => ({ count: 0 }))
+
 vi.mock('./MessageMarkdown', async () => ({
   FileConversationContext: (await import('react')).createContext<string | undefined>(undefined),
   QuoteMarkdown: ({ text }: { text: string }) => <span>{text}</span>,
-  MessageMarkdown: ({ text }: { text: string }) => <div data-testid="private-message-content">{text}</div>
+  MessageMarkdown: ({ text }: { text: string }) => {
+    markdownRenders.count += 1
+    return <div data-testid="private-message-content">{text}</div>
+  }
 }))
 
 vi.mock('./common', () => ({
@@ -260,6 +265,20 @@ describe('private delivery disclosure', () => {
     await act(async () => scroller.dispatchEvent(new Event('scroll')))
     await render(3)
     expect(scroller.scrollTop).toBe(200)
+  })
+
+  it('does not re-render the transcript while typing in the composer', async () => {
+    const messages = Array.from({ length: 3 }, (_, index) => ({ ...incomingReply, id: `incoming-${index}`, conversationId: directConversation.id, source: undefined }))
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={messages} allMessages={messages} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}} />))
+    expect(container.querySelectorAll('.agent-bubble')).toHaveLength(3)
+    const textarea = container.querySelector('textarea')!
+    markdownRenders.count = 0
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'Hello')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(textarea.value).toBe('Hello')
+    expect(markdownRenders.count).toBe(0)
   })
 
   it('tracks deferred message layout before paint without pulling readers away from history', async () => {
