@@ -11,6 +11,7 @@
 .connany-list-copy small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .connany-icon { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; flex: 0 0 auto; background: #fff; border: 1px solid #e8e8e8; }
 .connany-icon img { display: block; width: 24px; height: 24px; }
+.connany-icon-letter { font-weight: 600; font-size: 16px; color: #333; }
 .connany-detail-header .connany-icon img { width: 36px; height: 36px; }
 .connany-status { color: var(--muted); font-size: 12px; flex-shrink: 0; }
 .connany-status.is-connected { color: #009861; }
@@ -86,3 +87,19 @@
 .connany-account-row > .connany-inline-error { flex-basis: 100%; margin: 0 16px 12px; }
 .connany-inline-error span { flex: 1; }
 .connany-inline-error button { display: grid; place-items: center; border: 0; background: transparent; padding: 2px; border-radius: 4px; }
+
+/* Status lines inside an account card, aligned with its header padding. */
+.connany-account-row > .connany-account-notice { flex-basis: 100%; display: flex; align-items: center; gap: 12px; margin: 0 16px 12px; padding: 10px 12px; border-radius: 8px; background: color-mix(in srgb, var(--accent, #3370ff) 6%, transparent); color: var(--muted); font-size: 12px; line-height: 1.5; box-sizing: border-box; }
+.connany-account-notice span { flex: 1; min-width: 0; }
+.connany-account-notice button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 6px 11px; font-size: 12px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+.connany-account-notice .connany-spinner { flex: 0 0 auto; }
+
+/* Resources an account shares, listed inside its expanded panel. */
+.connany-access { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.connany-access-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: var(--muted); font-size: 12px; }
+.connany-access ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.connany-access li { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 6px 10px; border-radius: 8px; background: var(--surface); font-size: 13px; }
+.connany-access-name { font-weight: 500; }
+.connany-access-meta { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; }
+.connany-access button { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 6px 11px; font-size: 12px; background: color-mix(in srgb, var(--ink) 5%, var(--surface)); }
+.connany-access-empty { margin: 10px 0 0; color: var(--muted); font-size: 12px; }

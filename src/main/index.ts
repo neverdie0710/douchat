@@ -54,7 +54,7 @@ import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, re
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
-import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl } from './authProtocol'
+import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl, parseDesktopConnectorsUrl, DEVELOPMENT_APP_SCHEME } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
@@ -68,6 +68,8 @@ import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLaunc
 if (process.platform === 'win32') app.disableHardwareAcceleration()
 
 const development = !app.isPackaged
+// Where the connector return page sends the browser back: the dev host has its own scheme.
+const connectorScheme = development ? DEVELOPMENT_APP_SCHEME : 'douchat'
 // Chromium derives the macOS safeStorage Keychain service from the application
 // name. Keep development on "Douchat Dev Safe Storage" so local builds never
 // contend with the signed release's "Douchat Safe Storage" credentials.
@@ -207,6 +209,7 @@ let scheduler: RoutineScheduler
 let auth: DesktopAuth
 let updater: DesktopUpdater
 let connany: ConnanyManager
+let connanyEvents: ReturnType<typeof setInterval> | undefined
 let emailConnectors: EmailConnectorManager
 let pendingGroupRoom = ''
 let openingGroupRoom = false
@@ -230,7 +233,7 @@ function focusMainWindow(): void {
 }
 
 function callbackUrlFromArgs(args: string[]): string | undefined {
-  return args.find((arg) => isDesktopAuthUrl(arg, authScheme) || isDesktopCreditsUrl(arg, authScheme) || Boolean(parseDesktopGroupUrl(arg)))
+  return args.find((arg) => isDesktopAuthUrl(arg, authScheme) || isDesktopCreditsUrl(arg, authScheme) || Boolean(parseDesktopGroupUrl(arg)) || parseDesktopConnectorsUrl(arg, connectorScheme) !== undefined)
 }
 
 async function openPendingGroup(): Promise<void> {
@@ -252,6 +255,12 @@ async function openPendingGroup(): Promise<void> {
 }
 
 function receiveAppUrl(url: string): void {
+  const connectorSession = parseDesktopConnectorsUrl(url, connectorScheme)
+  if (connectorSession !== undefined) {
+    focusMainWindow()
+    if (connectorSession && connany) void connany.handleReturn(connectorSession).catch(() => { /* Polling still completes the connection. */ })
+    return
+  }
   const roomId = parseDesktopGroupUrl(url)
   if (roomId) {
     pendingGroupRoom = roomId
@@ -304,6 +313,22 @@ function broadcast(snapshot: AppSnapshot): void {
     localWorkBlocker = undefined
   }
   notifyWindows(BrowserWindow.getAllWindows(), 'douchat:snapshot', snapshot)
+}
+
+// A full snapshot is built synchronously on this thread, which also forwards
+// keystrokes to the renderer. Background changes (streaming, inbox sync,
+// heartbeats) arrive in bursts, so publish at most one snapshot per interval.
+const BACKGROUND_BROADCAST_INTERVAL_MS = 100
+let backgroundBroadcast: ReturnType<typeof setTimeout> | undefined
+let lastBackgroundBroadcastAt = 0
+function scheduleBroadcast(): void {
+  if (quitting || backgroundBroadcast) return
+  backgroundBroadcast = setTimeout(() => {
+    backgroundBroadcast = undefined
+    if (quitting || !runtime) return
+    lastBackgroundBroadcastAt = Date.now()
+    broadcast(runtime.snapshot())
+  }, Math.max(0, lastBackgroundBroadcastAt + BACKGROUND_BROADCAST_INTERVAL_MS - Date.now()))
 }
 
 let social: SocialClient | undefined
@@ -558,6 +583,8 @@ app.whenReady().then(() => {
   // the development process instead of /Applications/Douchat.app.
   if (!development) {
     app.setAsDefaultProtocolClient(authScheme)
+  } else {
+    app.setAsDefaultProtocolClient(DEVELOPMENT_APP_SCHEME)
   }
   app.dock?.setIcon(appIcon)
   ipcMain.on('douchat:window-action', (event, action: string) => {
@@ -575,9 +602,9 @@ app.whenReady().then(() => {
   // current session; otherwise its scheduler could briefly run old tasks.
   store.setCurrentAccountId('')
   emailConnectors = new EmailConnectorManager(store, app.getPath('userData'))
-  connany = new ConnanyManager(store, webAppUrl, () => auth?.getAccessToken(), url => shell.openExternal(url))
+  connany = new ConnanyManager(store, webAppUrl, () => auth?.getAccessToken(), url => shell.openExternal(url), fetch, () => notifyWindows(BrowserWindow.getAllWindows(), 'douchat:connany-changed'), () => runtime?.language === 'zh-CN' ? 'zh' : 'en', development)
   computer = new LocalComputerProvider(
-    () => !quitting && runtime && broadcast(runtime.snapshot()),
+    scheduleBroadcast,
     [app.getPath('downloads'), app.getPath('desktop'), app.getPath('documents')],
     (path) => shell.openPath(path)
   )
@@ -600,7 +627,8 @@ app.whenReady().then(() => {
         .resize({ width: 256, height: 256, quality: 'best' })
         .toDataURL()
     }
-  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: id => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id) : [])] })
+  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: (id, hooks) => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [])], prepare: () => CONNECTORS_ENABLED ? connany.prepare() : Promise.resolve(), createLocalTools: (id, hooks) => CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [] })
+  runtime.notifyChangesWith(scheduleBroadcast)
   imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
     encrypt: value => {
       if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text')) throw new Error(ui('The system keychain is unavailable. Enable it and try again.', '系统钥匙串不可用，请启用后重试'))
@@ -610,7 +638,7 @@ app.whenReady().then(() => {
   }, () => store.currentAccountId, id => store.accountAgents.some(agent => agent.id === id),
   async (agent, thread, text, signal, provider, media, receiptId) => {
     const answer = await replyToIM(store, runtime, agent, thread, text, signal, provider, media, receiptId)
-    broadcast(runtime.snapshot())
+    scheduleBroadcast()
     return answer
   }, (input, init) => net.fetch(String(input), init),
   (agent, thread, text, provider, messageId) => runtime.receiveIMMessage(agent, thread, text, provider, messageId),
@@ -625,7 +653,7 @@ app.whenReady().then(() => {
   scheduler = new RoutineScheduler(
     store,
     runtime,
-    () => { if (!quitting) broadcast(runtime.snapshot()) },
+    scheduleBroadcast,
     async () => (await auth.getUsageSummary()).credits
   )
   runtime.setRoutineCreator((input) => scheduler.createRoutine(input))
@@ -642,6 +670,11 @@ app.whenReady().then(() => {
   auth = new DesktopAuth(webAppUrl, authScheme, development, app.getPath('userData'), (state, reason) => {
     broadcastAuth(state)
     if (CONNECTORS_ENABLED && state.status === 'signed-in') void connany.command({ op: 'list' }).catch(() => { /* Recheck from Settings when the service is available. */ })
+    if (CONNECTORS_ENABLED) {
+      // Connany has no push; the backend shares one project-wide event poll.
+      clearInterval(connanyEvents)
+      if (state.status === 'signed-in') connanyEvents = setInterval(() => void connany.pollEvents().catch(() => { /* Retried on the next tick. */ }), 30_000)
+    }
     // The development flow returns through a loopback HTTP server instead of
     // the custom protocol, so it does not pass through receiveAppUrl(). Bring
     // Douchat forward only for an explicit login callback, never for session
@@ -649,7 +682,7 @@ app.whenReady().then(() => {
     if (state.status === 'signed-in' && reason === 'login-completed') { focusMainWindow(); void openPendingGroup() }
   })
 
-  social = new SocialClient(webAppUrl, auth, store, runtime, () => { if (!quitting) broadcast(runtime.snapshot()) })
+  social = new SocialClient(webAppUrl, auth, store, runtime, scheduleBroadcast)
   runtime.setHumanSender((id, text, images, files, mentions) => social!.sendMessage(id, text, images, files, mentions))
   ipcMain.handle('douchat:social-snapshot', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
@@ -797,6 +830,13 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:copy-invitation-image', (event, dataUrl: unknown) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid clipboard request')
     clipboard.writeImage(invitationImage(dataUrl))
+  })
+  // Images that are not saved yet (e.g. pasted into the composer); the renderer sends PNG.
+  ipcMain.handle('douchat:copy-image-data', (event, dataUrl: unknown) => {
+    if (!isDouchatRenderer(event.sender) || typeof dataUrl !== 'string' || dataUrl.length > 48_000_000 || !dataUrl.startsWith('data:image/png;base64,')) throw new Error('Invalid clipboard request')
+    const image = nativeImage.createFromDataURL(dataUrl)
+    if (image.isEmpty()) throw new Error('Image could not be copied')
+    clipboard.writeImage(image)
   })
   ipcMain.handle('douchat:save-invitation-image', async (event, dataUrl: unknown) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid invitation image')
@@ -952,6 +992,12 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:parse-skill-archive', async (event, data: Uint8Array) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return parseSkillArchive(data)
+  })
+  ipcMain.handle('douchat:get-agent-skill', (event, agentId: string, skillId: string) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
+    const skill = store.accountAgents.find(agent => agent.id === agentId)?.skills?.find(item => item.id === skillId)
+    if (!skill) throw new Error('Skill not found')
+    return skill
   })
   ipcMain.handle('douchat:update-agent', async (_event, agentId: string, input: UpdateAgentInput) => {
     if (!store.accountAgents.some((agent) => agent.id === agentId)) throw new Error('Agent not found')

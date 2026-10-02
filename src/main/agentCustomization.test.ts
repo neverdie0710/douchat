@@ -66,6 +66,25 @@ it('persists agent-specific files and skills, merges file edits, and rejects mal
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
+it('keeps skill resource files out of snapshots and preserves them when a snapshot copy is saved', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'douchat-skill-files-'))
+  const store = new DouchatStore(join(directory, 'test.db'))
+  store.setCurrentAccountId('test-owner')
+  const computer: ComputerProvider = { snapshots: () => [], start: vi.fn(), stop: vi.fn(), show: vi.fn(), createTools: () => [], dispose: vi.fn() }
+  const runtime = new DouchatRuntime(store, computer, () => {})
+  try {
+    const agent = store.createAgent({ name: 'Writer', role: 'Assistant', instructions: '', color: '#0b5cff', provider: 'local', model: 'default' })
+    const files = [{ path: 'scripts/run.sh', data: btoa('echo hello') }]
+    store.updateAgent(agent.id, { skills: [{ id: 'tool', name: 'Tool', content: 'Use the script', enabled: true, files }] })
+    const listed = runtime.snapshot().agents.find(item => item.id === agent.id)!.skills!
+    expect(listed).toEqual([{ id: 'tool', name: 'Tool', content: 'Use the script', enabled: true, directory: expect.any(String), filesOmitted: true }])
+    // The settings panel saves the snapshot copy back, e.g. after toggling the skill off.
+    store.updateAgent(agent.id, { skills: listed.map(skill => ({ ...skill, enabled: false })) })
+    expect(store.agent(agent.id)!.skills).toEqual([{ id: 'tool', name: 'Tool', content: 'Use the script', enabled: false, files, directory: expect.any(String) }])
+    expect(() => store.updateAgent(agent.id, { skills: [{ ...listed[0], id: 'unknown' }] })).toThrow('Skill files are unavailable')
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 it('replaces built-in identity after customization and preserves it across manifest refreshes', () => {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-identity-'))
   const file = join(directory, 'test.db')

@@ -1,45 +1,54 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, X } from 'lucide-react'
-import type { ConnectorCommand, ConnectorPlatform, ConnanySession, ConnanyState, ConnectorSelection } from '../../../shared/connany'
+import { type ConnectorCommand, type ConnectorName, type ConnanySession, type ConnanyState, type ConnectorSelection } from '../../../shared/connany'
 import { t } from '../preferences'
-import { ConnanyDetails, ConnectorIcon, connectorCatalog } from './ConnanyDetails'
+import { ConnanyDetails, ConnectorIcon, connectorDescription } from './ConnanyDetails'
 import './ConnanyPanel.css'
 
 const waiting = (s: ConnanySession) => ['pending', 'authorizing', 'processing'].includes(s.status)
-function errorText(error: unknown): string {
+export function errorText(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
   const messages: Record<string, string> = {
-    action_not_found: t("This tool is unavailable. Refresh the connector tool list."),
-    unsupported_tool_schema: t("This tool's parameters are not supported yet."),
-    provider_unavailable: t("Cannot reach the platform. Try again later."),
-    mcp_tool_error: t("Notion could not complete this request. Check the parameters and page access."),
-    mcp_protocol_error: t("Notion protocol error. Contact the connector administrator."),
-    invalid_mcp_response: t("Notion returned an invalid response. Try again later."),
+    tool_not_found: t("This tool is unavailable. Refresh the connector tool list."),
+    upstream_error: t("Cannot reach the platform. Try again later."),
+    mcp_tool_error: t("The platform could not complete this request. Check the parameters and access."),
     reauth_required: t("Authorization expired. Reconnect this account."),
     connection_revoked: t("This account was disconnected."),
+    session_unavailable: t("The link expired. Connect again to create a new link."),
+    connector_not_configured: t("This platform is not configured yet."),
+    connector_not_found: t("This platform is not configured yet."),
     not_found: t("Connection not found for this account."),
     unauthorized: t("The connector service key needs administrator attention."),
     not_configured: t("An administrator needs to configure this connector."),
-    provider_not_configured: t("This platform is not configured yet."),
     service_unavailable: t("Cannot reach the connector service. Try again."),
     rate_limited: t("Too many requests. Wait a moment and retry."),
+    invalid_response: t("The connector service returned an unexpected response. Check the backend's CONNANY_BASE_URL."),
   }
-  return Object.entries(messages).find(([key]) => text.includes(key))?.[1] || text
+  return Object.entries(messages).find(([key]) => text.includes(key))?.[1] || text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '').replace(/^Connector error: \w+$/, t('Cannot reach the connector service. Try again.'))
 }
 export function ConnanyPanel() {
-  const [detail, setDetail] = useState<ConnectorPlatform>()
+  const [detail, setDetail] = useState<ConnectorName>()
   const [state, setState] = useState<ConnanyState>()
   const [sessions, setSessions] = useState<ConnanySession[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [accountErrors, setAccountErrors] = useState<Record<string, string>>({})
+  const [notices, setNotices] = useState<Record<string, string>>({})
+  // Connections whose resource-access page is open; polled until access appears.
+  const [accessWaiting, setAccessWaiting] = useState<Record<string, number>>({})
   const dismissedSessions = useRef(new Set<string>())
   const alive = useRef(true)
   const load = async () => {
     const result = await window.douchat.connanyCommand({ op: 'list' }) as ConnanyState
     if (alive.current) { setState(result); if (result.sessions) setSessions(result.sessions.filter(s => !dismissedSessions.current.has(s.id))) }
   }
-  useEffect(() => { alive.current = true; void load().catch(e => setError(errorText(e))); return () => { alive.current = false } }, [])
+  useEffect(() => {
+    alive.current = true
+    void load().catch(e => setError(errorText(e)))
+    // Connections can change outside Settings: chat authorization, events from Connany.
+    const unsubscribe = window.douchat.onConnanyChanged?.(() => void load().catch(() => { /* The next action reports errors. */ }))
+    return () => { alive.current = false; unsubscribe?.() }
+  }, [])
   useEffect(() => {
     if (!sessions.some(waiting)) return
     let cancelled = false
@@ -48,7 +57,7 @@ export function ConnanyPanel() {
         const next: ConnanySession[] = []
         for (const session of sessions) {
           if (!waiting(session)) { next.push(session); continue }
-          next.push(Date.parse(session.expires_at) <= Date.now() ? { ...session, status: 'expired' } : await window.douchat.connanyCommand({ op: 'session', id: session.id }) as ConnanySession)
+          next.push(Date.parse(session.expires_at) <= Date.now() ? { ...session, status: 'expired' } : await window.douchat.connanyCommand({ op: 'session', connector: session.connector, id: session.id }) as ConnanySession)
         }
         if (cancelled) return
         setSessions(next)
@@ -57,16 +66,41 @@ export function ConnanyPanel() {
     }, 5000)
     return () => { cancelled = true; window.clearTimeout(timer) }
   }, [sessions])
+  useEffect(() => {
+    const ids = Object.keys(accessWaiting)
+    if (!ids.length) return
+    let cancelled = false
+    const timer = window.setTimeout(async () => {
+      const next = { ...accessWaiting }
+      let granted = false
+      for (const id of ids) {
+        try {
+          const access = await window.douchat.connanyCommand({ op: 'access', id }) as { total: number }
+          if (access.total > 0) { delete next[id]; granted = true }
+          else if (Date.now() - next[id] > 10 * 60_000) delete next[id]
+        } catch { delete next[id] }
+      }
+      if (cancelled) return
+      setAccessWaiting(next)
+      if (granted) await load().catch(() => {})
+    }, 5000)
+    return () => { cancelled = true; window.clearTimeout(timer) }
+  }, [accessWaiting])
   async function run(command: ConnectorCommand): Promise<boolean> {
     setBusy(true); setError('')
     const accountId = 'id' in command && command.op !== 'session' ? command.id : undefined
-    if (accountId) setAccountErrors(errors => ({ ...errors, [accountId]: '' }))
+    if (accountId) { setAccountErrors(errors => ({ ...errors, [accountId]: '' })); setNotices(n => ({ ...n, [accountId]: '' })) }
     try {
       const result = await window.douchat.connanyCommand(command)
       if (!alive.current) return false
       if (command.op === 'connect' || command.op === 'reconnect') {
         const session = result as ConnanySession
-        setSessions(s => [...s.filter(x => x.provider !== session.provider), session])
+        setSessions(s => [...s.filter(x => x.connector !== session.connector), session])
+      } else if (command.op === 'check') {
+        setNotices(n => ({ ...n, [command.id]: t('Connection is working.') }))
+        await load()
+      } else if (command.op === 'openAccess') {
+        setAccessWaiting(waiting => ({ ...waiting, [command.id]: Date.now() }))
       } else {
         if (command.op === 'disconnect' && (result as { status?: string })?.status === 'revoked') {
           setState(previous => previous && { ...previous, connections: previous.connections.filter(c => c.id !== command.id), selections: previous.selections.map(s => s.connectionId === command.id ? { ...s, connectionId: '' } : s) })
@@ -76,7 +110,13 @@ export function ConnanyPanel() {
       }
       if (command.op === 'disconnect' && (result as { revocation_status?: string })?.revocation_status === 'failed') setError(t('Disconnected locally. Platform revocation failed; remove app access on the platform.'))
       return true
-    } catch (e) { if (alive.current) { if (accountId) setAccountErrors(errors => ({ ...errors, [accountId]: errorText(e) })); else setError(errorText(e)) } return false }
+    } catch (e) {
+      if (alive.current) {
+        if (accountId) setAccountErrors(errors => ({ ...errors, [accountId]: errorText(e) })); else setError(errorText(e))
+        if (command.op === 'check') await load().catch(() => {})
+      }
+      return false
+    }
     finally { if (alive.current) setBusy(false) }
   }
   async function select(selection: ConnectorSelection) {
@@ -87,19 +127,20 @@ export function ConnanyPanel() {
   }
   return <div className="connany-panel">
     {error && <div role="alert" className="connany-error">{error} <button disabled={busy} onClick={() => void run({ op: 'list' })}>{t('Retry')}</button><button aria-label={t('Dismiss')} onClick={() => setError('')}><X size={14} /></button></div>}
-    {detail ? <ConnanyDetails key={detail} provider={detail} state={state} session={sessions.find(s => s.provider === detail)} busy={busy} run={run} select={select} accountErrors={accountErrors} dismissAccountError={id => setAccountErrors(errors => ({ ...errors, [id]: '' }))} dismissSession={() => { const session = sessions.find(s => s.provider === detail); if (session) dismissedSessions.current.add(session.id); setSessions(s => s.filter(x => x.provider !== detail)) }}
-      stopWaiting={() => setSessions(s => s.filter(x => x.provider !== detail))} onBack={() => setDetail(undefined)} /> : <>
+    {detail ? <ConnanyDetails key={detail} connector={detail} state={state} session={sessions.find(s => s.connector === detail)} busy={busy} run={run} select={select} accountErrors={accountErrors} notices={notices} accessWaiting={Object.keys(accessWaiting)} dismissAccountError={id => setAccountErrors(errors => ({ ...errors, [id]: '' }))} dismissSession={() => { const session = sessions.find(s => s.connector === detail); if (session) dismissedSessions.current.add(session.id); setSessions(s => s.filter(x => x.connector !== detail)) }}
+      stopWaiting={() => setSessions(s => s.filter(x => x.connector !== detail))} onBack={() => setDetail(undefined)} /> : <>
       <h1>{t('Connectors')}</h1>
-      <p className="connany-description">{t('Connect external accounts so your agents can read their data.')}</p>
+      <p className="connany-description">{t('Connect external accounts so your agents can use their data.')}</p>
       {!state && !error && <p role="status">{t('Loading…')}</p>}
-      <div className="connany-list">{(['github', 'notion', 'linear'] as ConnectorPlatform[]).map(provider => {
-        const catalog = connectorCatalog[provider]
-        const session = sessions.find(s => s.provider === provider)
-        const connections = state?.connections.filter(c => c.provider === provider) || []
+      {state && !state.connectors.length && <p className="connany-description">{t('No connectors are available yet.')}</p>}
+      <div className="connany-list">{(state?.connectors || []).map(item => {
+        const connector = item.name
+        const session = sessions.find(s => s.connector === connector)
+        const connections = state?.connections.filter(c => c.connector === connector) || []
         const connected = connections.some(c => c.status === 'connected')
-        const status = session && waiting(session) ? t('Finish connecting in your browser…') : connected ? t('Connected') : connections.some(c => c.status === 'reauth_required') ? t('Reconnect required') : !state?.providers.some(p => p.name === provider && p.enabled) ? t('Not configured') : t('Not connected')
-        return <button className="connany-list-item" key={provider} onClick={() => setDetail(provider)} aria-label={catalog.name}>
-          <ConnectorIcon provider={provider} /><span className="connany-list-copy"><strong>{catalog.name}</strong><small>{t(catalog.description)}</small></span><span className={`connany-status ${connected ? 'is-connected' : ''}`}>{status}</span><ChevronRight size={17} />
+        const status = session && waiting(session) ? t('Finish connecting in your browser…') : connected ? t('Connected') : connections.some(c => c.status === 'reauth_required') ? t('Reconnect required') : t('Not connected')
+        return <button className="connany-list-item" key={connector} onClick={() => setDetail(connector)} aria-label={item.title}>
+          <ConnectorIcon connector={item} /><span className="connany-list-copy"><strong>{item.title}</strong><small>{connectorDescription(item)}</small></span><span className={`connany-status ${connected ? 'is-connected' : ''}`}>{status}</span><ChevronRight size={17} />
         </button>
       })}</div>
     </>}

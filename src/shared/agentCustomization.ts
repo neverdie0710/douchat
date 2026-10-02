@@ -5,7 +5,16 @@ export const agentFileNames = ['SOUL.md', 'IDENTITY.md', 'USER.md', 'TOOLS.md', 
 export type AgentFileName = typeof agentFileNames[number]
 export type AgentFiles = Partial<Record<AgentFileName, string>>
 export const MAX_SKILL_BYTES = 64 * 1024 * 1024
-export interface AgentSkill { id: string; name: string; content: string; enabled: boolean; description?: string; files?: { path: string; data: string }[]; directory?: string }
+export interface AgentSkill {
+  id: string; name: string; content: string; enabled: boolean; description?: string; files?: { path: string; data: string }[]; directory?: string
+  /** Set on renderer snapshots, which leave resource files out; saving keeps the stored files. */
+  filesOmitted?: boolean
+}
+
+/** Resource files can be megabytes, so app snapshots carry only skill metadata. */
+export function withoutSkillFiles(skills: AgentSkill[]): AgentSkill[] {
+  return skills.map(({ files, ...skill }) => files ? { ...skill, filesOmitted: true } : skill)
+}
 export function isSafeSkillPath(path: string): boolean {
   return !!path && path.length <= 1024 && !/[\\:\x00-\x1f]/.test(path)
     && path.split('/').every(part => !!part && part !== '.' && part !== '..' && !/[. ]$/.test(part) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))

@@ -70,6 +70,24 @@ export function AgentPermissionPrompt({ request, agent, social, onResolve }: { r
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const resolve = async (allow: PermissionApproval) => { setBusy(true); try { await onResolve(allow) } catch { setError(t('Could not save changes')); setBusy(false) } }
+  if (request.connect) {
+    const label = request.connect.access ? t('Grant {name} access').replace('{name}', request.connect.title) : `${request.connect.reconnect ? t('Reconnect') : t('Connect')} ${request.connect.title}`
+    return <NativeDialog className="modal-backdrop permission-approval-backdrop" onClose={() => { if (!busy) void resolve(false) }}>
+      <section className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={label} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) void resolve(false) } }}>
+        <header className="edit-contact-heading"><h2>{label}</h2></header><div className="permission-body">
+        <div className="permission-actor">
+          {contact ? <AgentAvatar agent={contact} size={40} /> : <UserAvatar src="" name={request.agentName} size={40} />}
+          <span className="permission-requester-copy"><strong>{contact ? agentDisplayName(contact) : request.agentName}</strong>
+            <span>{t(request.connect.access ? 'Needs access to more resources in your account to continue' : request.connect.reconnect ? 'Needs your account to be reconnected to continue' : 'Needs access to your account to continue')}</span></span>
+        </div>
+        {room && <p className="muted">{t('Group')}: {room}</p>}
+        <p>{request.details}</p>
+        <p className="muted">{t('Authorization happens on the platform’s own page. Douchat never sees your password.')}</p>
+        {error && <p role="alert">{t(error)}</p>}
+        </div><footer className="edit-contact-footer"><button className="secondary-button" disabled={busy} onClick={() => void resolve(false)}>{t('Not now')}</button><button autoFocus className="primary-button" disabled={busy} onClick={() => void resolve(true)}>{label}</button></footer>
+      </section>
+    </NativeDialog>
+  }
   return <NativeDialog className="modal-backdrop permission-approval-backdrop" onClose={() => { if (!busy) void resolve(false) }}>
     <section className="agent-modal agent-permissions-modal" role="dialog" aria-modal="true" aria-label={t('Permission required')} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); if (!busy) void resolve(false) } }}>
       <header className="edit-contact-heading"><h2>{t('Permission required')}</h2></header><div className="permission-body">

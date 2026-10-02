@@ -801,7 +801,25 @@ select:focus-visible {
   flex: 0 0 72px;
 }
 
+.composer-image-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: zoom-in;
+}
+
+/* The thumbnail is its own frame; no focus ring around it. */
+.composer-image-open:focus,
+.composer-image-open:focus-visible {
+  outline: none;
+}
+
 .composer-image img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -810,7 +828,7 @@ select:focus-visible {
   background: var(--surface);
 }
 
-.composer-image button {
+.composer-image .composer-attachment-remove {
   position: absolute;
   top: 2px;
   right: 2px;
@@ -6935,7 +6953,15 @@ html.native-dialog-window,
 .chat-image-preview::backdrop { background: rgb(0 0 0 / 82%); }
 .chat-image-preview[open] { display: grid; place-items: center; }
 .chat-image-preview-panel { max-width: 100%; min-width: min(320px, 90vw); }
-.chat-image-preview-panel > img { display: block; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
+.chat-image-preview-stage { position: relative; display: grid; place-items: center; min-height: 200px; }
+.chat-image-preview-stage > img { display: block; max-width: calc(100vw - 48px); max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
+.chat-image-preview-state { color: rgb(255 255 255 / 72%); font-size: 13px; }
+.chat-image-preview-count { flex: 0 0 auto !important; color: rgb(255 255 255 / 72%); font-variant-numeric: tabular-nums; }
+.chat-image-preview-nav { position: absolute; top: 50%; display: grid; place-items: center; width: 44px; height: 44px; margin-top: -22px; padding: 0; border: 0; border-radius: 50%; background: rgb(0 0 0 / 45%); color: #fff; cursor: pointer; }
+.chat-image-preview-nav:hover { background: rgb(0 0 0 / 65%); }
+.chat-image-preview-nav.is-previous { left: 12px; }
+.chat-image-preview-nav.is-next { right: 12px; }
+.chat-image-preview-toolbar button:disabled { opacity: .5; cursor: default; }
 .chat-image-preview-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .chat-image-preview-toolbar > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-image-preview-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 8px; padding: 8px 12px; background: rgb(255 255 255 / 14%); color: #fff; cursor: pointer; }

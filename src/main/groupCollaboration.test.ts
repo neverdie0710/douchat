@@ -1005,3 +1005,25 @@ it('gives dependent DAG workers the actual public image and distinct node sessio
   expect(keys).toHaveLength(2)
   expect(new Set(keys).size).toBe(2)
 })
+
+it.each(['en', 'zh-CN'] as const)('keeps the local task deadline and reports interruption details without failover (%s)', async language => {
+  const { runtime, store, agents, group, internal } = fixture()
+  runtime.setInterfaceLanguage(language)
+  store.updateAgent(agents[1].id, { localAgentId: 'claude' })
+  const workers: string[] = []
+  internal.runReply = async ({ config, context, prompt, timeoutMs }: any) => {
+    if (context === 'controller') return scriptedPolicy(prompt, agents, { target: agents[1].id })
+    workers.push(config.id)
+    expect(timeoutMs).toBe(15 * 60_000)
+    return { text: '', error: 'Reply timed out after 15 minutes' }
+  }
+  await runtime.sendMessage(group.id, 'Finish the task')
+  expect(workers).toEqual([agents[1].id])
+  const workflow = store.groupWorkflows()[0]
+  expect(workflow.status).toBe('paused')
+  expect(workflow.error).toContain(agents[1].name)
+  expect(workflow.error).toContain('Reply timed out after 15 minutes')
+  expect(workflow.error).toContain(language === 'en' ? 'will not be repeated automatically' : '不会自动重复执行')
+  const publicText = store.topicMessages(group.id, group.activeTopicId).map(message => [message.text, message.detail].join('\n')).join('\n')
+  expect(publicText).toContain('Reply timed out after 15 minutes')
+})

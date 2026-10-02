@@ -122,6 +122,16 @@ it('renders exported callouts with Markdown blocks and preserves literal code', 
   expect(copy).toHaveBeenLastCalledWith(content)
 })
 
+it('loads resource files that the app snapshot left out', async () => {
+  const getAgentSkill = vi.fn().mockResolvedValue({ id: 'tool', name: 'tool', enabled: true, content: 'Stored', files: [{ path: 'notes.txt', data: btoa('Loaded on demand') }] })
+  Object.defineProperty(window, 'douchat', { configurable: true, value: { copyText: copy, getAgentSkill } })
+  await act(async () => root.render(<SkillDetailDialog skill={{ id: 'tool', name: 'tool', enabled: true, content: 'Listed', filesOmitted: true }} agentId="agent-1" onClose={close} />))
+  expect(getAgentSkill).toHaveBeenCalledWith('agent-1', 'tool')
+  expect(document.querySelector('[role="status"]')).toBeNull()
+  await click('[title="notes.txt"]')
+  expect(document.querySelector('.skill-file-preview')?.textContent).toContain('Loaded on demand')
+})
+
 it('highlights source safely and keeps line numbers separate from copied content', async () => {
   const content = 'def greet():\n    print("<img src=x onerror=alert(1)>")\n\n    return 42\n'
   await act(async () => root.render(<SkillDetailDialog skill={{ id: 'code', name: 'code', enabled: true, content: '', files: [{ path: 'script.py', data: btoa(content) }] }} onClose={close} />))

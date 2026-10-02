@@ -38,6 +38,8 @@ export interface PermissionRequest {
   roomName: string
   capability: SensitiveCapability | 'groupHumans' | 'groupAgents'
   operation: string
+  /** A connector authorization: the prompt offers a connect button instead of allow/deny. */
+  connect?: { connector: string; title: string; reconnect: boolean; access?: boolean }
   details: string
   createdAt: number
 }

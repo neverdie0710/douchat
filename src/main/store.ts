@@ -1688,7 +1688,12 @@ export class DouchatStore {
     if (thinkingChanged) next.thinkingLevel = nextThinking
     if (next.systemFiles !== undefined) next.systemFiles = { ...agent.systemFiles, ...validateAgentFiles(next.systemFiles) }
     if (next.skills !== undefined) {
-      next.skills = validateAgentSkills(next.skills)
+      next.skills = validateAgentSkills(next.skills.map(skill => {
+        if (!skill?.filesOmitted) return skill
+        const previous = agent.skills?.find(item => item.id === skill.id)
+        if (!previous) throw new Error('Skill files are unavailable. Reload and try again.')
+        return { ...skill, files: previous.files }
+      }))
       // Fresh directories prevent stale resources and never follow existing file symlinks.
       // Retain prior directories for replies already using the previous skill version.
       const created: string[] = []

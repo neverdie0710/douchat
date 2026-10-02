@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseDesktopGroupUrl,
+  parseDesktopConnectorsUrl,
   chatApiBaseUrl,
   createDesktopLoginUrl,
   desktopAuthScheme,
@@ -17,6 +18,18 @@ describe('desktop auth protocol', () => {
     expect(parseDesktopGroupUrl('douchat://group/join?room=group-123')).toBeUndefined()
     expect(parseDesktopGroupUrl('douchat://group/open?room=../secret')).toBeUndefined()
     expect(parseDesktopGroupUrl('douchat://group/open')).toBeUndefined()
+  })
+
+  it('accepts only connector return links', () => {
+    expect(parseDesktopConnectorsUrl('douchat://connectors/callback?connany_session_id=cs_1')).toBe('cs_1')
+    expect(parseDesktopConnectorsUrl('douchat://connectors/callback')).toBe('')
+    expect(parseDesktopConnectorsUrl('https://connectors/callback?connany_session_id=cs_1')).toBeUndefined()
+    expect(parseDesktopConnectorsUrl('douchat://connectors/other?connany_session_id=cs_1')).toBeUndefined()
+    expect(parseDesktopConnectorsUrl('douchat://connectors/callback?connany_session_id=../x')).toBeUndefined()
+    // The development host listens on its own scheme only.
+    expect(parseDesktopConnectorsUrl('douchat-dev://connectors/callback?connany_session_id=cs_1', 'douchat-dev')).toBe('cs_1')
+    expect(parseDesktopConnectorsUrl('douchat://connectors/callback?connany_session_id=cs_1', 'douchat-dev')).toBeUndefined()
+    expect(parseDesktopConnectorsUrl('douchat-dev://connectors/callback?connany_session_id=cs_1')).toBeUndefined()
   })
 
   it('uses the Douchat scheme and environment-specific web origin', () => {

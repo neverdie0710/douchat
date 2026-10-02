@@ -33,9 +33,24 @@ function decode(file: SkillFile): string | undefined {
   } catch { return undefined }
 }
 
-export function SkillDetailDialog({ skill, onClose }: { skill: AgentSkill; onClose: () => void }) {
+export function SkillDetailDialog({ skill: listed, agentId, onClose }: { skill: AgentSkill; agentId?: string; onClose: () => void }) {
   const preferences = usePreferences()
   const tr = (en: string, zh: string) => resolveInterfaceLanguage(preferences.language) === 'zh-CN' ? zh : en
+  // Snapshots leave resource files out; load them only when the skill is opened.
+  const [loaded, setLoaded] = useState<AgentSkill>()
+  const [loadFailed, setLoadFailed] = useState(false)
+  useEffect(() => {
+    if (!listed.filesOmitted || !agentId) return
+    let active = true
+    setLoaded(undefined)
+    setLoadFailed(false)
+    window.douchat.getAgentSkill(agentId, listed.id)
+      .then(skill => { if (active) setLoaded(skill) })
+      .catch(() => { if (active) setLoadFailed(true) })
+    return () => { active = false }
+  }, [agentId, listed.id, listed.filesOmitted])
+  const skill = useMemo(() => !listed.filesOmitted ? listed : loaded ? { ...loaded, name: listed.name, content: listed.content } : { ...listed, files: [] }, [listed, loaded])
+  const loadingFiles = Boolean(listed.filesOmitted && !loaded)
   const dialog = useRef<HTMLDialogElement>(null)
   const preview = useRef<HTMLElement>(null)
   const [selected, setSelected] = useState('SKILL.md')
@@ -92,9 +107,10 @@ export function SkillDetailDialog({ skill, onClose }: { skill: AgentSkill; onClo
   }) : value}</code></pre></div>
   return createPortal(<dialog ref={dialog} className="skill-detail-dialog messenger" aria-labelledby="skill-detail-title" onCancel={event => { event.preventDefault(); onClose() }} onClick={event => { if (event.target === event.currentTarget) onClose() }}>
     <header className="skill-detail-header"><div><button className="icon-button" aria-label={tr('Back to skills', '返回技能列表')} onClick={onClose}><ChevronLeft size={22} /></button><h2 id="skill-detail-title">{tr('Skill details', '技能详情')}</h2></div><div>
-      <button className="icon-button" aria-label={tr('Download skill ZIP', '下载技能 ZIP')} title={tr('Download skill ZIP', '下载技能 ZIP')} disabled={downloading} onClick={() => void download()}><Download size={20} /></button>
+      <button className="icon-button" aria-label={tr('Download skill ZIP', '下载技能 ZIP')} title={tr('Download skill ZIP', '下载技能 ZIP')} disabled={downloading || loadingFiles} onClick={() => void download()}><Download size={20} /></button>
       <button className="icon-button" aria-label={tr('Close skill details', '关闭技能详情')} onClick={onClose}><X size={22} /></button></div></header>
-    <div className="skill-detail-layout"><nav className="skill-files" aria-label={tr('Skill files', '技能文件')}><p>{tr('Files', '文件')}</p><ul>{nodes(tree)}</ul></nav>
+    <div className="skill-detail-layout"><nav className="skill-files" aria-label={tr('Skill files', '技能文件')}><p>{tr('Files', '文件')}</p><ul>{nodes(tree)}</ul>
+      {loadingFiles && <p role="status">{loadFailed ? tr('Could not load skill files. Reopen to try again.', '技能文件加载失败，请重新打开重试。') : tr('Loading files…', '正在加载文件…')}</p>}</nav>
       <div className="skill-file-viewer"><div className="skill-file-toolbar">
         <span className="skill-file-path" title={file.path}>{file.path}</span>
         <div className="skill-view-modes" role="group" aria-label={tr('View mode', '查看模式')}>

@@ -93,7 +93,7 @@ export function AgentSkillsPanel({ agent, onSave, onDirty }: Props) {
         <button className="icon-button danger" aria-label={`${tr('Delete skill', '删除技能')} ${skill.name}`} onClick={() => { if (!window.confirm(tr('Delete this skill?', '删除这个技能？'))) return; change(skills.filter(item => item.id !== skill.id)); if (selected === skill.id) setSelected(undefined) }}><Trash2 size={15} /></button>
       </div>
     </article>)}</div>
-    {active && <SkillDetailDialog skill={active} onClose={() => setSelected(undefined)} />}
+    {active && <SkillDetailDialog skill={active} agentId={agent.id} onClose={() => setSelected(undefined)} />}
     {uploadOpen && <SkillUploadDialog remaining={50 - skills.length} onClose={() => setUploadOpen(false)} onUpload={uploaded => {
       const next = [...skills, ...uploaded]
       validateAgentSkills(next)
