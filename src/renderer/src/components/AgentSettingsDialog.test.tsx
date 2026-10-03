@@ -128,3 +128,22 @@ it('shows only the current agent private profile and memory in read-only tabs', 
   await click('Soul')
   expect(document.querySelector<HTMLTextAreaElement>('#agent-file-content')!.value).toBe('Unsaved soul')
 })
+
+it('edits startup arguments for an agent that runs on a runtime and shows a mistyped single argument as quoted', async () => {
+  const fastclaw = { ...agent, provider: 'local', localAgentId: 'custom:mini', startupArgs: ['-a agt_2834'] }
+  await act(async () => root.render(<AgentSettingsDialog agent={fastclaw} localAgents={[]} cloudModels={[]} onUpdate={update} onClose={close} onDelete={vi.fn()} onModelSettings={vi.fn()} onCreditsSettings={vi.fn()} />))
+  await click('Advanced')
+  const args = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Startup arguments"]')!
+  expect(args.value).toBe('"-a agt_2834"')
+  await input(args, '-a agt_2834')
+  await click('Save')
+  expect(update).toHaveBeenLastCalledWith('alpha', { startupArgs: ['-a', 'agt_2834'] })
+  await input(args, '')
+  await click('Save')
+  expect(update).toHaveBeenLastCalledWith('alpha', { startupArgs: [] })
+})
+
+it('hides startup arguments for agents that use a model service', async () => {
+  await click('Advanced')
+  expect(document.querySelector('textarea[aria-label="Startup arguments"]')).toBeNull()
+})

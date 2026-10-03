@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { configureLocalAgentRegistry } from './localAgents'
 import { testLocalAgent } from './localAgentTest'
-import { runLocalAgent } from './localAgentRuntime'
-import { appendLocalAgentArguments } from '../shared/localAgentArguments'
+import { runLocalAgent, withStartupArgs } from './localAgentRuntime'
+import { validateRemoteSpec } from './remoteValidate'
+import { appendLocalAgentArguments, formatStartupArgs, parseStartupArgsText, validateAgentStartupArgs } from '../shared/localAgentArguments'
 
 vi.mock('./shellPath', () => ({
   resolveExecutable: async (command: string) => command.startsWith('/') ? command : undefined,
@@ -68,5 +69,39 @@ describe('local agent draft connection test', () => {
     })
     expect(JSON.parse(reply.text)).toEqual(['--echo', 'a path with spaces', prompt, '$HOME'])
     expect(appendLocalAgentArguments(['-p', '--', prompt], ['--model', 'foo'])).toEqual(['-p', '--model', 'foo', '--', prompt])
+  })
+  it("appends an agent's own startup arguments after its runtime's", async () => {
+    const reply = await runLocalAgent({ id: 'probe', name: 'Test', localAgentId: 'custom:test', role: '', instructions: '', provider: 'local', model: 'default', color: '', createdAt: 0, startupArgs: ['-a', 'zhaocai'] }, 'Hello', undefined, [], {
+      agentOverride: { id: 'custom:test', name: 'Test', command, path: command, custom: true, installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', args: ['--echo'] }
+    })
+    expect(JSON.parse(reply.text)).toEqual(['--echo', '-a', 'zhaocai', 'Hello'])
+  })
+})
+
+describe('agent startup arguments', () => {
+  const remote = { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: ['--base-url', 'http://127.0.0.1:1'], allowSharing: false }
+  const runtime = { id: 'custom:mini', name: 'mini', command: 'fastclaw', custom: true, installed: true, discovered: true, chatSupported: true, status: 'ready' as const, authentication: 'unchecked' as const, args: remote.args, remote }
+
+  it('merges into the SSH spec so launch-time validation covers both', async () => {
+    const merged = withStartupArgs(runtime, ['-a', 'zhaocai'])
+    expect(merged.remote!.args).toEqual(['--base-url', 'http://127.0.0.1:1', '-a', 'zhaocai'])
+    expect(runtime.remote.args).toEqual(['--base-url', 'http://127.0.0.1:1'])
+    const codex = withStartupArgs({ ...runtime, remote: { ...remote, adapter: 'codex' } }, ['--sandbox', 'danger-full-access'])
+    await expect(validateRemoteSpec(codex.remote)).rejects.toThrow('not allowed: --sandbox')
+  })
+
+  it('rejects malformed values and runtime-only placeholders', () => {
+    expect(validateAgentStartupArgs(undefined)).toBeUndefined()
+    expect(validateAgentStartupArgs([])).toBeUndefined()
+    expect(validateAgentStartupArgs(parseStartupArgsText('-a\r\nzhaocai\n\n'))).toEqual(['-a', 'zhaocai'])
+    // Typed as in a terminal: `-a agt_x` must not become one "-a agt_x" argument.
+    expect(parseStartupArgsText('  -a agt_2834a7a1e660d509b83d ')).toEqual(['-a', 'agt_2834a7a1e660d509b83d'])
+    expect(parseStartupArgsText(`--profile "my work" --label 'a b'\n--flag`)).toEqual(['--profile', 'my work', '--label', 'a b', '--flag'])
+    expect(parseStartupArgsText('$HOME $(id) ;')).toEqual(['$HOME', '$(id)', ';'])
+    expect(() => parseStartupArgsText('--profile "unterminated')).toThrow('Close the quote')
+    for (const args of [['-a', 'zhaocai'], ['--profile', 'my work', 'say "hi"', "it's"]]) expect(parseStartupArgsText(formatStartupArgs(args))).toEqual(args)
+    expect(() => validateAgentStartupArgs(['a\nb'])).toThrow('valid startup arguments')
+    expect(() => validateAgentStartupArgs(Array(17).fill('-v'))).toThrow('up to 16')
+    expect(() => validateAgentStartupArgs(['{prompt}'])).toThrow('{prompt}')
   })
 })

@@ -274,6 +274,23 @@ describe('create agent terminology', () => {
     expect(JSON.stringify(onCreate.mock.calls)).not.toContain('apiKey')
   })
 
+  it('creates a runtime agent with its own startup arguments', async () => {
+    const onCreate = vi.fn(async () => undefined)
+    const fastclaw = { id: 'custom:mini', name: 'mini-local-fastclaw', command: 'fastclaw', custom: true, installed: true, discovered: true, chatSupported: true, status: 'ready' as const, authentication: 'unchecked' as const, args: [],
+      remote: { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: [], allowSharing: false } }
+    await act(async () => root.render(<BotModal localAgents={[fastclaw]} initialLocalAgentId="custom:mini" onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
+    const toggle = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Startup arguments (optional)')!
+    await act(async () => toggle.click())
+    const args = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Startup arguments"]')!
+    expect(args.placeholder).toBe('-a zhaocai')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(args, '-a zhaocai\n')
+      args.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ localAgentId: 'custom:mini', startupArgs: ['-a', 'zhaocai'] }))
+  })
+
   it('creates a manual agent with a blank description by default', async () => {
     const onCreate = vi.fn(async () => undefined)
     await act(async () => root.render(

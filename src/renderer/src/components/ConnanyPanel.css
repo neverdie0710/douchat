@@ -3,12 +3,17 @@
 .connany-panel button:disabled { opacity: .5; cursor: default; }
 .connany-panel button:focus-visible, .connany-panel summary:focus-visible { outline: 2px solid var(--accent, #3370ff); outline-offset: 3px; }
 .connany-description { color: var(--muted); margin: 18px 0 32px; font-size: 14px; line-height: 1.6; }
-.connany-list { display: grid; gap: 12px; }
-.connany-list-item { display: flex; gap: 16px; align-items: center; width: 100%; padding: 20px; text-align: left; border: 1px solid var(--line); border-radius: 16px; background: transparent; }
+.connany-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.connany-heading h1 { margin: 0; }
+.connany-filter { min-width: 150px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.connany-empty { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+.connany-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.connany-list-item { display: flex; gap: 12px; align-items: center; width: 100%; min-width: 0; padding: 16px; text-align: left; border: 1px solid var(--line); border-radius: 16px; background: transparent; }
 .connany-list-item:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 .connany-list-copy { flex: 1; min-width: 0; }
-.connany-list-copy strong { font-size: 16px; font-weight: 600; }
-.connany-list-copy small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.connany-list-copy strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; }
+/* One line keeps every card the same height; the full text is in the tooltip. */
+.connany-list-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.5; }
 .connany-icon { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; flex: 0 0 auto; background: #fff; border: 1px solid #e8e8e8; }
 .connany-icon img { display: block; width: 24px; height: 24px; }
 .connany-icon-letter { font-weight: 600; font-size: 16px; color: #333; }
@@ -58,6 +63,7 @@
 .connany-notice { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 9px; margin: 18px 0; flex-wrap: wrap; }
 .connany-spinner { animation: connany-spin 1.3s linear infinite; }
 @keyframes connany-spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .connany-list { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 620px) { .connany-actions { width: 100%; margin-left: 0; } .connany-list-item { gap: 12px; padding: 16px; flex-wrap: wrap; } .connany-list-copy small { display: none; } }
 @media (prefers-reduced-motion: reduce) { .connany-spinner { animation: none; } }
 .connany-accounts { display: grid; gap: 10px; }

@@ -11,9 +11,33 @@ import { LocalModelDialog } from './LocalModelDialog'
 import { AgentPermissionsDialog } from './AgentPermissions'
 import { IMChannelsDialog } from './IMChannelsDialog'
 import { AgentFilesPanel, AgentSkillsPanel } from './AgentCustomization'
+import { formatStartupArgs, parseStartupArgsText, validateAgentStartupArgs } from '../../../shared/localAgentArguments'
 import './AgentSettingsDialog.css'
 
-export type AgentSettingsTab = 'memory' | 'profile' | 'customize' | 'models' | 'skills' | 'permissions' | 'channels' | 'advanced'
+/** An agent's own arguments, e.g. FastClaw's `-a <agent>`, added after its runtime's. */
+function AgentStartupArgsPanel({ agent, runtime, onSave, onDirty }: {
+  agent: AgentConfig; runtime?: LocalAgent; onSave: (input: UpdateAgentInput) => Promise<void>; onDirty: () => void
+}) {
+  const [text, setText] = useState(() => formatStartupArgs(agent.startupArgs))
+  const [error, setError] = useState('')
+  const fastclaw = (runtime?.remote?.adapter ?? runtime?.id) === 'fastclaw'
+  const submit = async () => {
+    setError('')
+    try { await onSave({ startupArgs: validateAgentStartupArgs(parseStartupArgsText(text)) ?? [] }) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  }
+  return <div className="agent-settings-delete agent-startup-args">
+    <div><h2>{t('Startup arguments')}</h2>
+      <p>{t("Separate arguments with spaces and quote values that contain spaces. They are added after this agent runtime's arguments, so one runtime can run several agents, such as FastClaw's -a <agent>.")}</p>
+      <textarea aria-label={t('Startup arguments')} rows={2} spellCheck={false} value={text} placeholder={fastclaw ? '-a zhaocai' : '--profile work'}
+        onChange={event => { setText(event.target.value); setError(''); onDirty() }} />
+      {error && <p className="settings-error" role="alert">{t(error)}</p>}
+    </div>
+    <button type="button" className="secondary-button" onClick={() => void submit()}>{t('Save')}</button>
+  </div>
+}
+
+export type AgentSettingsTab ='memory' | 'profile' | 'customize' | 'models' | 'skills' | 'permissions' | 'channels' | 'advanced'
 export function AgentSettingsDialog({ agent, localAgents, cloudModels, initialTab = 'profile', onClose, onUpdate, onDelete, onModelSettings, onCreditsSettings }: {
   agent: AgentConfig; localAgents: LocalAgent[]; cloudModels: ModelOption[]; initialTab?: AgentSettingsTab
   onClose: () => void; onUpdate: (id: string, input: UpdateAgentInput) => Promise<void>; onDelete: (agent: AgentConfig) => void
@@ -71,7 +95,7 @@ export function AgentSettingsDialog({ agent, localAgents, cloudModels, initialTa
           {visited.map(section => <fieldset disabled={saving} hidden={tab !== section} key={section} className="agent-settings-panel" onChangeCapture={() => { if (['profile', 'models', 'permissions'].includes(section)) markDirty(section) }}>
             {!['customize', 'skills', 'memory'].includes(section) && <header className="settings-heading agent-settings-heading"><div><h1>{tabs.find(item => item.id === section)!.label}</h1></div></header>}
             {section === 'profile' && <div onClickCapture={event => { if ((event.target as HTMLElement).closest('.edit-contact-avatar-field button')) markDirty('profile') }}><BotModal agent={agent} localAgents={localAgents} cloudModels={cloudModels} onSettings={() => leave(onModelSettings)} onClose={noClose} onCreate={async () => {}} onUpdate={(_id, input) => save('profile', input)} /></div>}
-            {section === 'advanced' && <><AgentArchivePanel agent={agent} onBusyChange={value => { busy.current = value; setSaving(value) }} onImport={async input => {
+            {section === 'advanced' && <>{agent.localAgentId && <AgentStartupArgsPanel agent={agent} runtime={localAgents.find(item => item.id === agent.localAgentId)} onSave={input => save('advanced', input)} onDirty={() => markDirty('advanced')} />}<AgentArchivePanel agent={agent} onBusyChange={value => { busy.current = value; setSaving(value) }} onImport={async input => {
               await save('advanced', input)
               setVisited(current => current.filter(section => section !== 'customize' && section !== 'skills'))
               setDirty(current => { const next = new Set(current); next.delete('customize'); next.delete('skills'); return next })

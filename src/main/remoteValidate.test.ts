@@ -25,7 +25,8 @@ describe('shQuote', () => {
         expect(result.stdout, `${shell}: ${value}`).toBe(value)
       }
     }
-  })
+  // Spawns a real shell per value; allow for slow or busy machines (CI).
+  }, 30_000)
 
   it('rejects values that cannot stay on one line', () => {
     for (const value of ['a\nb', 'a\rb', 'a\0b']) expect(() => shQuote(value)).toThrow()

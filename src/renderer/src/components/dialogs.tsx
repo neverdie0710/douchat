@@ -6,6 +6,7 @@ import type { SocialSnapshot } from '../../../shared/social'
 import { LocalAgentSelect } from './LocalAgentSelect'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
+import { parseStartupArgsText, validateAgentStartupArgs } from '../../../shared/localAgentArguments'
 import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
 import { useContext, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
@@ -81,6 +82,8 @@ export function BotModal({
     ? { providerId: 'cloud', model: 'douchat-default' }
     : selectedProvider?.models.includes(customModel) ? { providerId: customProviderId, model: customModel } : undefined
   const localAgent = localAgents.find((item) => item.id === localAgentId)
+  const [startupArgsOpen, setStartupArgsOpen] = useState(false)
+  const [startupArgsText, setStartupArgsText] = useState('')
   const [error, setError] = useState('')
   const [name, setName] = useState(agent?.name ?? localAgents.find((item) => item.id === initialLocalAgentId)?.name ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
@@ -131,6 +134,7 @@ export function BotModal({
         onClose()
         return
       }
+      const startupArgs = agentSource === 'local' ? validateAgentStartupArgs(parseStartupArgsText(startupArgsText)) : undefined
       const input = {
         name: name.trim(),
         role: role.trim(),
@@ -138,6 +142,7 @@ export function BotModal({
         labels: labels.trim(),
         color,
         localAgentId: agentSource === 'local' ? localAgentId : '',
+        ...(startupArgs ? { startupArgs } : {}),
         ...(agentSource === 'custom' && customProviderId === 'cloud' && cloudModel !== 'douchat-default' ? { cloudModel: { model: cloudModel } } : {}),
         ...(agentSource === 'custom' && selectedCustomModel?.providerId !== 'cloud' ? { customModel: selectedCustomModel } : {})
       }
@@ -164,7 +169,7 @@ export function BotModal({
   }
 
   if (!agent) return (
-    <NativeDialog layoutKey={agentSource} className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()} onClose={onClose}>
+    <NativeDialog layoutKey={`${agentSource}:${startupArgsOpen}`} className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()} onClose={onClose}>
       <form className="agent-modal create-contact-modal" data-agent-source={agentSource} onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="create-contact-title">
         <div className="modal-heading">
           <h2 id="create-contact-title">{t('Create agent')}</h2>
@@ -191,6 +196,15 @@ export function BotModal({
           <LocalAgentSelect agents={localAgents.filter((item) => item.installed)} value={localAgentId} onChange={setLocalAgentId} />
         </div>}
         {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
+        {agentSource === 'local' && localAgent?.installed && <div className="field-row">
+          <button type="button" className="local-settings-link" aria-expanded={startupArgsOpen} onClick={() => setStartupArgsOpen(open => !open)}>{t(startupArgsOpen ? 'Hide startup arguments' : 'Startup arguments (optional)')}</button>
+          {startupArgsOpen && <>
+            <textarea aria-label={t('Startup arguments')} value={startupArgsText} rows={3} spellCheck={false} disabled={saving}
+              placeholder={(localAgent.remote?.adapter ?? localAgent.id) === 'fastclaw' ? '-a zhaocai' : '--profile work'}
+              onChange={(event) => setStartupArgsText(event.target.value)} />
+            <p className="settings-note">{t("Separate arguments with spaces and quote values that contain spaces. They are added after this agent runtime's arguments, so one runtime can run several agents, such as FastClaw's -a <agent>.")}</p>
+          </>}
+        </div>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         <div className="modal-footer">
           <button type="button" className="secondary-button" onClick={onClose} disabled={saving}>{t('Cancel')}</button>

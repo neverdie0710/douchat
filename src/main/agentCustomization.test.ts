@@ -85,6 +85,25 @@ it('keeps skill resource files out of snapshots and preserves them when a snapsh
   } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
+it('stores validated startup arguments only for agents that run on a local or remote runtime', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'douchat-startup-args-'))
+  const store = new DouchatStore(join(directory, 'test.db'))
+  store.setCurrentAccountId('test-owner')
+  try {
+    const base = { role: 'Assistant', instructions: '', color: '#0b5cff', provider: 'local', model: 'default' }
+    const agent = store.createAgent({ ...base, name: 'Zhaocai', localAgentId: 'custom:mini', startupArgs: ['-a', 'zhaocai'] })
+    expect(store.agent(agent.id)!.startupArgs).toEqual(['-a', 'zhaocai'])
+    const hosted = store.createAgent({ ...base, name: 'Hosted', provider: 'cloud', startupArgs: ['-a', 'zhaocai'] })
+    expect(store.agent(hosted.id)!.startupArgs).toBeUndefined()
+    expect(() => store.createAgent({ ...base, name: 'Bad', localAgentId: 'custom:mini', startupArgs: ['{prompt}'] })).toThrow('{prompt}')
+    expect(() => store.updateAgent(agent.id, { startupArgs: ['a\nb'] } as never)).toThrow('valid startup arguments')
+    store.updateAgent(agent.id, { startupArgs: ['-a', 'mike'] } as never)
+    expect(store.agent(agent.id)!.startupArgs).toEqual(['-a', 'mike'])
+    store.updateAgent(agent.id, { startupArgs: [] })
+    expect(store.agent(agent.id)!.startupArgs).toBeUndefined()
+  } finally { store.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 it('replaces built-in identity after customization and preserves it across manifest refreshes', () => {
   const directory = mkdtempSync(join(tmpdir(), 'douchat-identity-'))
   const file = join(directory, 'test.db')

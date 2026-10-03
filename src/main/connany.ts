@@ -100,8 +100,9 @@ export class ConnanyManager {
       return
     }
     if ((command.op === 'connect' || command.op === 'session') && !isConnectorName(command.connector)) throw new Error('Invalid connector.')
-    // The locale picks the language of the page that sends the browser back to Douchat.
-    const result = await this.call<Record<string, unknown>>(command.op === 'connect' || command.op === 'reconnect' ? { ...command, locale: this.locale(), ...(this.development ? { client: 'development' } : {}) } : command)
+    // The locale picks the language of connector descriptions and of the page
+    // that sends the browser back to Douchat.
+    const result = await this.call<Record<string, unknown>>(command.op === 'connect' || command.op === 'reconnect' ? { ...command, locale: this.locale(), ...(this.development ? { client: 'development' } : {}) } : command.op === 'list' ? { ...command, locale: this.locale() } : command)
     if (owner !== this.store.currentAccountId) throw new Error('Account changed. Try again.')
     if (command.op === 'list') {
       const raw = result as unknown as { connectors: ConnanyConnector[]; connections: ConnanyConnection[]; allow_writes?: boolean }

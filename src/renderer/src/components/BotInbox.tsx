@@ -213,13 +213,13 @@ export function BotInbox({
         <span className="conversation-avatar">
           <>{person ? <UserAvatar name={person.name} src={person.image || ''} size={36} /> : <ConversationAvatar conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} size={36} />}</>
           {!working && conversation.unread > 0 && <span className={`unread-badge ${conversation.muted ? 'muted' : ''}`}>{conversation.unread > 99 ? '99+' : conversation.unread}</span>}
+          <ContactKindBadge human={Boolean(person)} local={conversation.type === 'direct' && Boolean(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId)} remote={conversation.type === 'direct' ? remoteHost(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId) : undefined} />
           {working && <span className="conversation-loading" role="status" aria-label={t('Working…')}><LoaderCircle size={13} /></span>}
         </span>
         <span className="conversation-copy">
           <span className="conversation-line">
             <strong>
               {displayName || 'New chat'}
-              <ContactKindBadge human={Boolean(person)} local={conversation.type === 'direct' && Boolean(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId)} remote={conversation.type === 'direct' ? remoteHost(snapshot.agents.find((agent) => agent.id === conversation.agentIds[0])?.localAgentId) : undefined} />
               {conversation.pinned && <Pin size={11} className="pin-mark" />}
             </strong>
             <time>{new Date(lastMessageAt(conversation)).toDateString() === new Date(now).toDateString() ? formatTime(lastMessageAt(conversation)) : relativeTime(lastMessageAt(conversation), now)}</time>

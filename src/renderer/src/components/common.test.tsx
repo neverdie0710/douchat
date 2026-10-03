@@ -163,3 +163,28 @@ it('only offers owned agents and peers with published allow or ask permissions',
   expect(mentionableAgents(conversation, members).map((agent) => agent.id)).toEqual(['mine', 'admin'])
   expect(mentionableAgents({ ...conversation, socialRoom: undefined }, members)).toEqual(members)
 })
+
+it('gives a remote agent the icon of the agent it runs', async () => {
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const { agentIcons } = await import('../agentIcons')
+  setRemoteAgents([{ id: 'custom:gpu', name: 'GPU Codex', command: 'codex', installed: true, custom: true, remote: { transport: 'ssh', host: 'dev-box', adapter: 'codex', executable: 'codex', args: [] } } as never])
+  const agent = { id: 'remote', name: 'GPU Codex', localAgentId: 'custom:gpu', provider: 'local', model: 'codex' } as AgentConfig
+  const element = document.createElement('div')
+  element.innerHTML = renderToStaticMarkup(<AgentAvatar agent={agent} />)
+  expect(element.querySelector('img')?.getAttribute('src')).toBe(agentIcons.codex)
+  expect(element.querySelector('.local-agent-avatar')).not.toBeNull()
+  expect(element.querySelector('.avatar-eyes')).toBeNull()
+  // Before the first local agent scan, icons are unknown: show a quiet placeholder.
+  setRemoteAgents([], false)
+  element.innerHTML = renderToStaticMarkup(<AgentAvatar agent={agent} />)
+  expect(element.querySelector('.loading-agent-avatar')).not.toBeNull()
+  expect(element.querySelector('img, .avatar-eyes')).toBeNull()
+  // A custom agent without an icon gets a stable generated face, never the bare placeholder.
+  setRemoteAgents([])
+  element.innerHTML = renderToStaticMarkup(<AgentAvatar agent={{ ...agent, localAgentId: 'custom:other' }} />)
+  expect(element.querySelector('.generated-agent-avatar')).not.toBeNull()
+  expect(element.querySelector('.avatar-eyes')).toBeNull()
+  const again = document.createElement('div')
+  again.innerHTML = renderToStaticMarkup(<AgentAvatar agent={{ ...agent, localAgentId: 'custom:other' }} />)
+  expect(again.innerHTML).toBe(element.innerHTML)
+})

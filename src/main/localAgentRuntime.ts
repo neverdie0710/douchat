@@ -312,6 +312,15 @@ export function acquireLocalProcessSlot(signal?: AbortSignal): Promise<() => voi
   return processBudget.acquire(signal, evictIdleConnection)
 }
 const activeLocalRuns = new Set<{ agentId: string; sessionKey?: string; abort: AbortController }>()
+
+/** An agent's own arguments follow its runtime's. Remote arguments are merged into
+ * the SSH spec so the launch-time validation and safety checks cover both. */
+export function withStartupArgs(agent: LocalAgent, args: string[]): LocalAgent {
+  return agent.remote
+    ? { ...agent, args: [...(agent.args ?? []), ...args], remote: { ...agent.remote, args: [...agent.remote.args, ...args] } }
+    : { ...agent, args: [...(agent.args ?? []), ...args] }
+}
+
 export async function runLocalAgent(
   config: AgentConfig, prompt: string, signal?: AbortSignal,
   inputImages: LocalAgentImage[] = [], options: LocalRunOptions = {}
@@ -322,10 +331,11 @@ export async function runLocalAgent(
   let release: (() => void) | undefined
   try {
     // Custom entries may run on a server; resolve once so the adapter decides the protocol.
-    if (!options.agentOverride && config.localAgentId?.startsWith('custom:')) {
-      const agent = await validateLocalAgent(config.localAgentId)
+    if (!options.agentOverride && (config.localAgentId?.startsWith('custom:') || config.startupArgs?.length)) {
+      const agent = await validateLocalAgent(config.localAgentId!)
       options = { ...options, agentOverride: agent }
     }
+    if (options.agentOverride && config.startupArgs?.length) options = { ...options, agentOverride: withStartupArgs(options.agentOverride, config.startupArgs) }
     const kind = connectionKind(config, options)
     const connected = options.sessionKey && kind
     if (!connected) release = await processBudget.acquire(combined, evictIdleConnection)

@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
-import { remoteHost } from './RemoteMark'
+import { localAgentsReady, remoteAdapter, remoteHost } from './RemoteMark'
 import { GeneratedAgentAvatar } from '../generatedAvatar'
 import { t, tr } from '../preferences'
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarWidth } from '../sidebarWidth'
@@ -82,21 +82,26 @@ export function conversationDisplayName(conversation: Conversation, agents: Agen
 }
 
 export function AgentAvatar({ agent, size = 36 }: { agent: AgentConfig; size?: number }): ReactElement {
-  const logo = agent.localAgentId ? agentIcons[agent.localAgentId] : undefined
+  // Remote agents have custom ids; show the icon of the agent they run, as the picker does.
+  const logo = agent.localAgentId ? agentIcons[agent.localAgentId] ?? agentIcons[remoteAdapter(agent.localAgentId) ?? ''] : undefined
   const builtInPicture = isDrDou(agent) ? agentIcons['dr-dou-human'] : undefined
   const emoji = agent.avatarEmoji
   const picture = agent.avatar || (!emoji ? logo || builtInPicture : undefined)
-  const generated = !picture && !emoji && Boolean(agent.avatarSeed)
+  // Custom and remote agents learn their icon from the first local agent scan:
+  // show a quiet placeholder until then, and a stable generated face if none exists.
+  const loading = !picture && !emoji && Boolean(agent.localAgentId) && !localAgentsReady()
+  const seed = agent.avatarSeed || (agent.localAgentId ? agent.id : undefined)
+  const generated = !picture && !emoji && !loading && Boolean(seed)
   const displayName = agentDisplayName(agent)
   return (
     <span
-      className={`agent-avatar${logo && !agent.avatar && !emoji ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar && !emoji ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}${emoji ? ' emoji-agent-avatar' : ''}${generated ? ' generated-agent-avatar' : ''}`}
+      className={`agent-avatar${logo && !agent.avatar && !emoji ? ' local-agent-avatar' : ''}${builtInPicture && !agent.avatar && !emoji ? ' built-in-agent-avatar' : ''}${agent.avatar ? ' custom-agent-avatar' : ''}${emoji ? ' emoji-agent-avatar' : ''}${generated ? ' generated-agent-avatar' : ''}${loading ? ' loading-agent-avatar' : ''}`}
       data-agent={agent.localAgentId}
       style={{ '--agent-color': agent.color, '--avatar-size': `${size}px` } as CSSProperties}
       aria-label={displayName}
       title={displayName}
     >
-      {picture ? <img src={picture} alt="" /> : emoji ? <span className="avatar-emoji" aria-hidden="true">{emoji}</span> : generated ? <GeneratedAgentAvatar seed={agent.avatarSeed!} /> : <span className="avatar-eyes">
+      {picture ? <img src={picture} alt="" /> : emoji ? <span className="avatar-emoji" aria-hidden="true">{emoji}</span> : loading ? null : generated ? <GeneratedAgentAvatar seed={seed!} /> : <span className="avatar-eyes">
         <i />
         <i />
       </span>}

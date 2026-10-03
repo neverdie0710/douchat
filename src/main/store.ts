@@ -9,6 +9,7 @@ import { thinkingLevel } from '../shared/thinkingLevels'
 import { GameRuleError } from '../shared/gameText'
 import { agentPermissions } from '../shared/agentPermissions'
 import { validateAgentFiles, validateAgentSkills } from '../shared/agentCustomization'
+import { validateAgentStartupArgs } from '../shared/localAgentArguments'
 import { GroupMemoryStore } from './groupMemoryStore'
 import { UserMemoryStore } from './userMemoryStore'
 import { emptyUserMemory } from '../shared/userMemory'
@@ -1614,8 +1615,11 @@ export class DouchatStore {
     const avatar = validAvatar(input.avatar?.trim() ?? '') ? input.avatar?.trim() : ''
     const thinking = thinkingLevel(safeInput.thinkingLevel)
     delete safeInput.thinkingLevel
+    const startupArgs = safeInput.localAgentId ? validateAgentStartupArgs(safeInput.startupArgs) : undefined
+    delete safeInput.startupArgs
     const agent: AgentConfig = {
       ...safeInput,
+      ...(startupArgs ? { startupArgs } : {}),
       ...(safeInput.systemFiles ? { systemFiles: validateAgentFiles(safeInput.systemFiles) } : {}),
       ...(thinking ? { thinkingLevel: thinking } : {}),
       ownerId,
@@ -1683,6 +1687,7 @@ export class DouchatStore {
     }
     const fileChanges = next.systemFiles ? validateAgentFiles(next.systemFiles) : undefined
     if (next.permissions !== undefined) next.permissions = agentPermissions(next.permissions)
+    if ('startupArgs' in next) next.startupArgs = agent.localAgentId ? validateAgentStartupArgs(next.startupArgs) : undefined
     const thinkingChanged = 'thinkingLevel' in next
     const nextThinking = thinkingChanged ? thinkingLevel(next.thinkingLevel) : undefined
     if (thinkingChanged) next.thinkingLevel = nextThinking

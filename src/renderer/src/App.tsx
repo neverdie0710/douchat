@@ -125,8 +125,9 @@ function WorkspaceApp(): ReactElement {
 
   const [toast, setToast] = useState('')
   const [localAgents, setLocalAgents] = useState<LocalAgent[]>([])
-  // Labels elsewhere read remote hosts synchronously during render.
-  setRemoteAgents(localAgents)
+  const [localAgentsLoaded, setLocalAgentsLoaded] = useState(false)
+  // Labels and avatars elsewhere read remote hosts synchronously during render.
+  setRemoteAgents(localAgents, localAgentsLoaded)
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const scanInFlight = useRef(false)
@@ -141,7 +142,7 @@ function WorkspaceApp(): ReactElement {
       new Promise<LocalAgent[]>((_, reject) => { scanTimer = setTimeout(() => reject(new Error('检测暂未完成，请稍后点击检测重试。')), 20000) })
     ])) }
     catch (error) { setScanError(messageSendError(error)) }
-    finally { clearTimeout(scanTimer); scanInFlight.current = false; setScanning(false) }
+    finally { clearTimeout(scanTimer); scanInFlight.current = false; setScanning(false); setLocalAgentsLoaded(true) }
   }
   useEffect(() => {
     void scanAgents()

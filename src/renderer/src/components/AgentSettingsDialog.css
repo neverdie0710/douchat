@@ -197,3 +197,16 @@ html[data-platform='win32'] .agent-settings-dialog::backdrop { backdrop-filter: 
 .agent-archive-preview select { width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; }
 
 .agent-archive-panel .agent-settings-delete .agent-archive-export-status { margin-top: 8px; color: var(--accent-600); }
+
+/* Startup arguments: the field fills the card, matching other settings inputs. */
+.agent-startup-args { align-items: flex-end; margin-bottom: 16px; }
+.agent-startup-args > div { flex: 1; min-width: min(280px, 100%); }
+.agent-startup-args textarea {
+  display: block; box-sizing: border-box; width: 100%; min-height: 64px; margin-top: 12px; padding: 9px 11px;
+  border: 1px solid #dbdee5; border-radius: 9px; outline: none; resize: vertical;
+  background: var(--canvas, #fff); color: var(--ink);
+  font: calc(13px * var(--font-scale, 0.92))/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.agent-startup-args textarea::placeholder { color: #b2b4b7; }
+.agent-startup-args textarea:focus { border-color: var(--accent-300, #8e9196); box-shadow: 0 0 0 3px var(--brand-ring, transparent); }
+.agent-startup-args .settings-error { margin-top: 8px; }

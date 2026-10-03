@@ -83,6 +83,8 @@ export interface AgentConfig {
   localAgentId?: string
   /** Snapshot of a custom local runtime's display name for durable contact labels. */
   localAgentName?: string
+  /** This agent's own startup arguments, appended after its runtime's arguments. */
+  startupArgs?: string[]
 
   id: string
   name: string
@@ -525,6 +527,7 @@ export interface CreateAgentInput {
   cloudModel?: { model: string }
   localAgentId?: string
   localAgentName?: string
+  startupArgs?: string[]
 
   name: string
   avatar?: string
@@ -542,6 +545,8 @@ export type ResolvedCreateAgentInput = Omit<CreateAgentInput, 'thinkingLevel'> &
 export interface UpdateAgentInput {
   /** Reject a stale edit when a caller supplies its last observed version. */
   expectedRevision?: number
+  /** Replaces the agent's own startup arguments; an empty list clears them. */
+  startupArgs?: string[]
   expectedSystemFiles?: import('./agentCustomization').AgentFiles
   /** 'default' clears the override. */
   thinkingLevel?: ThinkingLevel | 'default'

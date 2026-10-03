@@ -28,6 +28,7 @@ export function errorText(error: unknown): string {
 }
 export function ConnanyPanel() {
   const [detail, setDetail] = useState<ConnectorName>()
+  const [filter, setFilter] = useState<'all' | 'connected' | 'disconnected'>('all')
   const [state, setState] = useState<ConnanyState>()
   const [sessions, setSessions] = useState<ConnanySession[]>([])
   const [busy, setBusy] = useState(false)
@@ -129,20 +130,37 @@ export function ConnanyPanel() {
     {error && <div role="alert" className="connany-error">{error} <button disabled={busy} onClick={() => void run({ op: 'list' })}>{t('Retry')}</button><button aria-label={t('Dismiss')} onClick={() => setError('')}><X size={14} /></button></div>}
     {detail ? <ConnanyDetails key={detail} connector={detail} state={state} session={sessions.find(s => s.connector === detail)} busy={busy} run={run} select={select} accountErrors={accountErrors} notices={notices} accessWaiting={Object.keys(accessWaiting)} dismissAccountError={id => setAccountErrors(errors => ({ ...errors, [id]: '' }))} dismissSession={() => { const session = sessions.find(s => s.connector === detail); if (session) dismissedSessions.current.add(session.id); setSessions(s => s.filter(x => x.connector !== detail)) }}
       stopWaiting={() => setSessions(s => s.filter(x => x.connector !== detail))} onBack={() => setDetail(undefined)} /> : <>
-      <h1>{t('Connectors')}</h1>
-      <p className="connany-description">{t('Connect external accounts so your agents can use their data.')}</p>
-      {!state && !error && <p role="status">{t('Loading…')}</p>}
-      {state && !state.connectors.length && <p className="connany-description">{t('No connectors are available yet.')}</p>}
-      <div className="connany-list">{(state?.connectors || []).map(item => {
-        const connector = item.name
-        const session = sessions.find(s => s.connector === connector)
-        const connections = state?.connections.filter(c => c.connector === connector) || []
-        const connected = connections.some(c => c.status === 'connected')
-        const status = session && waiting(session) ? t('Finish connecting in your browser…') : connected ? t('Connected') : connections.some(c => c.status === 'reauth_required') ? t('Reconnect required') : t('Not connected')
-        return <button className="connany-list-item" key={connector} onClick={() => setDetail(connector)} aria-label={item.title}>
-          <ConnectorIcon connector={item} /><span className="connany-list-copy"><strong>{item.title}</strong><small>{connectorDescription(item)}</small></span><span className={`connany-status ${connected ? 'is-connected' : ''}`}>{status}</span><ChevronRight size={17} />
-        </button>
-      })}</div>
+      {(() => {
+        // A connector counts as connected once it has any account, including one awaiting reconnection.
+        const hasAccount = (name: string) => Boolean(state?.connections.some(c => c.connector === name))
+        const all = state?.connectors || []
+        const counts = { all: all.length, connected: all.filter(c => hasAccount(c.name)).length, disconnected: all.filter(c => !hasAccount(c.name)).length }
+        const shown = all.filter(c => filter === 'all' || (filter === 'connected') === hasAccount(c.name))
+        const labels = { all: t('All'), connected: t('Connected'), disconnected: t('Not connected') }
+        return <>
+          <div className="connany-heading">
+            <h1>{t('Connectors')}</h1>
+            {all.length > 0 && <select className="connany-filter" aria-label={t('Filter connectors')} value={filter} onChange={event => setFilter(event.target.value as typeof filter)}>
+              {(['all', 'connected', 'disconnected'] as const).map(key => <option key={key} value={key}>{labels[key]} ({counts[key]})</option>)}
+            </select>}
+          </div>
+          <p className="connany-description">{t('Connect external accounts so your agents can use their data.')}</p>
+          {!state && !error && <p role="status">{t('Loading…')}</p>}
+          {state && !all.length && <p className="connany-description">{t('No connectors are available yet.')}</p>}
+          {state && all.length > 0 && !shown.length && <p className="connany-empty">{t(filter === 'connected' ? 'No connected accounts yet.' : 'Every connector has an account.')}</p>}
+          <div className="connany-list">{shown.map(item => {
+            const connector = item.name
+            const session = sessions.find(s => s.connector === connector)
+            const connections = state?.connections.filter(c => c.connector === connector) || []
+            const connected = connections.some(c => c.status === 'connected')
+            const status = session && waiting(session) ? t('Finish connecting in your browser…') : connected ? t('Connected') : connections.some(c => c.status === 'reauth_required') ? t('Reconnect required') : t('Not connected')
+            const description = connectorDescription(item)
+            return <button className="connany-list-item" key={connector} onClick={() => setDetail(connector)} aria-label={item.title}>
+              <ConnectorIcon connector={item} /><span className="connany-list-copy"><strong>{item.title}</strong><small title={description}>{description}</small></span><span className={`connany-status ${connected ? 'is-connected' : ''}`}>{status}</span><ChevronRight size={17} />
+            </button>
+          })}</div>
+        </>
+      })()}
     </>}
   </div>
 }

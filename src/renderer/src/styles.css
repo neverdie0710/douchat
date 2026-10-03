@@ -351,6 +351,12 @@ select:focus-visible {
   }
 }
 
+/* Placeholder while the local agent scan resolves an agent's icon. */
+.agent-avatar.loading-agent-avatar { background: color-mix(in srgb, var(--ink) 7%, var(--surface, #fff)); overflow: hidden; }
+.agent-avatar.loading-agent-avatar::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 45%) 50%, transparent 80%); transform: translateX(-100%); animation: agent-avatar-shimmer 1.4s ease-in-out infinite; }
+@keyframes agent-avatar-shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .agent-avatar.loading-agent-avatar::after { animation: none; } }
+
 .avatar-eyes {
   display: flex;
   gap: calc(var(--avatar-size) * 0.11);
@@ -6336,13 +6342,24 @@ html[data-platform='win32'] .messenger .app-rail {
 .member-name-label .member-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; color: inherit; }
 .member-avatar-wrap { position: relative; flex-shrink: 0; width: 40px; height: 40px; }
 .member-avatar-wrap .contact-kind-badge {
-  position: absolute; top: -4px; right: -4px; z-index: 1;
-  width: 16px; height: 16px; margin: 0; border-radius: 5px;
+  position: absolute; right: -2px; bottom: -2px; z-index: 1;
+  width: 13px; height: 13px; margin: 0; border-radius: 4px;
   background: var(--canvas); color: var(--muted);
   box-shadow: 0 0 0 2px var(--canvas);
 }
 
-.conversation-line .contact-kind-badge { transform: translateY(-2px); }
+/* Contact kind sits on the avatar's bottom-right corner, like member tiles;
+   unread counts and progress keep the top-right corner. */
+.conversation-avatar .contact-kind-badge {
+  position: absolute; right: -3px; bottom: -3px; z-index: 1;
+  width: 13px; height: 13px; margin: 0; border-radius: 4px;
+  background: var(--sidebar); color: var(--muted);
+  box-shadow: 0 0 0 2px var(--sidebar);
+}
+.conversation-item.active .conversation-avatar .contact-kind-badge { box-shadow: 0 0 0 2px #dcdddf; }
+.messenger .conversation-item.active .conversation-avatar .contact-kind-badge { box-shadow: 0 0 0 2px var(--accent-150); }
+.conversation-avatar .contact-kind-badge svg { width: 9px; height: 9px; }
+.member-avatar-wrap .contact-kind-badge svg { width: 9px; height: 9px; }
 
 .group-profile-pane { position: relative; }
 .group-profile-pane .group-profile-menu { position: absolute; top: 20px; right: 24px; z-index: 2; }
@@ -6803,10 +6820,6 @@ html.native-dialog-window,
   background: #a6a8ae;
   box-shadow: 0 0 0 2px var(--canvas);
 }
-.member-avatar-wrap:has(.member-unavailable) .contact-kind-badge {
-  top: auto;
-  bottom: -4px;
-}
 
 /* Local CLI settings use the same surfaces and controls in both themes. */
 .local-agent-heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -7034,7 +7047,9 @@ html.native-dialog-window,
 
 /* Remote agents: a small server glyph on the icon plus the host alias. */
 .local-agent-icon, .agent-select-logo { position: relative; }
-.remote-agent-mark { position: absolute; right: -3px; bottom: -3px; display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 50%; background: #3B82F6; color: #fff; border: 1.5px solid var(--canvas); }
-.local-agent-remote-badge { display: inline-flex; align-items: center; gap: 4px; color: #3B82F6; border-color: color-mix(in srgb, #3B82F6 35%, var(--line)); background: color-mix(in srgb, #3B82F6 8%, var(--surface)); }
+/* Same neutral corner badge as contact avatars (.contact-kind-badge). */
+.remote-agent-mark { position: absolute; right: -2px; bottom: -2px; display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border: 1px solid var(--border, rgba(128, 128, 128, 0.18)); border-radius: 4px; background: var(--canvas); color: var(--muted); box-shadow: 0 0 0 2px var(--canvas); }
+.remote-agent-mark svg { width: 9px; height: 9px; }
+/* Plain muted text like .local-agent-version next to it. */
+.local-agent-remote-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .agent-select-host { margin-left: 6px; color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
-.contact-kind-badge.remote { background: #3B82F6; color: #fff; }

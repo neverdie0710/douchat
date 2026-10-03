@@ -48,9 +48,11 @@ function setup(options: { allowWrites?: boolean } = {}) {
 
 describe('Connany executor', () => {
   it('registers tools only after the turn loads the user’s connections', async () => {
-    const { manager, tools } = setup()
+    const { manager, tools, bodies } = setup()
     expect(tools()).toEqual([])
     await manager.prepare()
+    // Connector descriptions come back in the interface language.
+    expect(bodies('list')[0]).toEqual({ op: 'list', locale: 'en' })
     expect(tools().map(t => t.name).sort()).toEqual(['connector_accounts', 'linear_call_tool', 'linear_list_tools', 'notion_call_tool', 'notion_list_tools', 'request_connection'])
     expect(tools().find(t => t.name === 'notion_list_tools')!.description).toContain('Work notes')
     expect(manager.createTools('stranger')).toEqual([])
