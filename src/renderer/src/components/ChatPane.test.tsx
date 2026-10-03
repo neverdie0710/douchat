@@ -36,6 +36,7 @@ vi.mock('./common', () => ({
   isDifferentDay: () => false
 }))
 
+import { setRemoteAgents } from "./RemoteMark"
 import {
   groupConversationMessages,
   groupDeliveryReplies,
@@ -925,6 +926,14 @@ describe('private delivery disclosure', () => {
     }
     await act(async () => root.render(<ChatActivity activity={activity} agents={agents} />))
     expect(container.textContent).toContain('Connecting to local agent')
+    setRemoteAgents([{ id: 'remote-codex', name: 'sg-codex', kind: 'custom', remote: { transport: 'ssh', host: 'build-sg', adapter: 'codex', executable: 'codex', args: [] } } as never])
+    const remoteAgents = agents.map((agent, index) => index === 0 ? { ...agent, localAgentId: 'remote-codex' } : agent)
+    await act(async () => root.render(<ChatActivity activity={activity} agents={remoteAgents} />))
+    expect(container.textContent).toContain('Connecting to remote agent on build-sg')
+    expect(container.textContent).not.toContain('local agent')
+    await act(async () => root.render(<ChatActivity activity={{ ...activity, localProgress: { phase: 'working', elapsedSeconds: 5, silentSeconds: 0 } }} agents={remoteAgents} />))
+    expect(container.textContent).toContain('Remote agent is running')
+    setRemoteAgents([])
     await act(async () => root.render(<ChatActivity activity={{ ...activity, localProgress: {
       phase: 'waiting', elapsedSeconds: 185, silentSeconds: 70, detail: 'Checking results'
     } }} agents={agents} />))

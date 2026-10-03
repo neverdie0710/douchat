@@ -35,6 +35,7 @@ import { ChatPane } from './components/ChatPane'
 import { InspectorRail } from './components/InspectorRail'
 import { AddMembersModal, BotModal, EndpointModal, GroupModal } from './components/dialogs'
 import { agentDisplayName, conversationMembers } from './components/common'
+import { setRemoteAgents } from './components/RemoteMark'
 import { LoginScreen } from './components/LoginScreen'
 import { CodeArtifactWindow } from './components/CodeArtifactWindow'
 import { isImeCommitEnter } from './ime'
@@ -124,6 +125,8 @@ function WorkspaceApp(): ReactElement {
 
   const [toast, setToast] = useState('')
   const [localAgents, setLocalAgents] = useState<LocalAgent[]>([])
+  // Labels elsewhere read remote hosts synchronously during render.
+  setRemoteAgents(localAgents)
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const scanInFlight = useRef(false)

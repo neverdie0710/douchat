@@ -27,6 +27,7 @@ import type { ProfileAnchor } from './MemberProfilePopover'
 import { summarizeRuntimeError, type RuntimeErrorSummary } from '../../../shared/bot/errors'
 import { insertMention, mentionQuery, updateSelectedMentions, type MentionQuery } from '../../../shared/bot/mentions'
 import { socialFollowUpTarget } from '../../../shared/socialFollowUp'
+import { remoteHost } from './RemoteMark'
 import { AgentAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName, dayLabel, formatTime, isDifferentDay } from './common'
 import {
   speechRecognitionConstructor,
@@ -320,14 +321,17 @@ export function MessageActions({ actions }: { actions?: MessageAction[] }): Reac
   )
 }
 
-function activityDetailLabel(activity: ConversationActivityState): string {
+function activityDetailLabel(activity: ConversationActivityState, agent?: AgentConfig): string {
   if (activity.localProgress) {
     const progress = activity.localProgress
-    if (progress.phase === 'connecting') return t('Connecting to local agent')
+    const host = remoteHost(agent?.localAgentId)
+    if (progress.phase === 'connecting') return host ? tr('Connecting to remote agent on {host}', { host }) : t('Connecting to local agent')
     if (progress.phase === 'approval') return t('Waiting for your approval; review the permission dialog')
     if (progress.phase === 'ready') return t('Task received; getting started')
     const elapsed = `${Math.floor(progress.elapsedSeconds / 60)}:${String(progress.elapsedSeconds % 60).padStart(2, '0')}`
-    const state = progress.silentSeconds >= 60 ? t('Waiting for new progress from local agent') : t('Local agent is running')
+    const state = host
+      ? (progress.silentSeconds >= 60 ? t('Waiting for new progress from remote agent') : t('Remote agent is running'))
+      : (progress.silentSeconds >= 60 ? t('Waiting for new progress from local agent') : t('Local agent is running'))
     const detail = progress.detail ? t(progress.detail).trim() : ''
     return `${state} · ${elapsed}${detail && detail !== state ? `\n${detail}` : ''}`
   }
@@ -368,7 +372,7 @@ export function ChatActivity({
     </div>
   )
 
-  return <>{(activeAgents.length ? activeAgents : [undefined]).map(agent => (
+  return <>{(activeAgents.length ? activeAgents : [undefined]).map(agent => { const detail = activityDetailLabel(activity, agent); return (
     <div className="typing-row" key={agent?.id ?? 'service'}>
       {agent && <AgentAvatar agent={agent} size={36} />}
       <div className="typing-content" role="status" aria-live="polite">
@@ -381,7 +385,7 @@ export function ChatActivity({
         </span>
       </div>
     </div>
-  ))}</>
+  )})}</>
 }
 
 function deliveryRecipientName(delivery: MessageDelivery): string {

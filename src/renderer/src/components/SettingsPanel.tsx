@@ -5,13 +5,14 @@ import { UserMemoryPanel } from './UserMemoryPanel'
 import { LocalAgentEditor } from './LocalAgentEditor'
 import { CustomModelSettings } from './CustomModelSettings'
 import { SchedulingSettings } from './SchedulingSettings'
+import { RemoteMark } from './RemoteMark'
 import { messageSendError } from '../messageQueue'
 import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { setPreferences, usePreferences, resolveInterfaceLanguage, t, tr, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, Server, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
@@ -110,13 +111,14 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   const row = (agent: LocalAgent): ReactElement => {
     const version = agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
     return <article className="local-agent-row" key={agent.id}>
-        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{(agent.avatar || agentIcons[agent.id]) ? <img src={agent.avatar || agentIcons[agent.id]} alt="" /> : <Bot size={22} />}</span>
+        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{(agent.avatar || agentIcons[agent.remote?.adapter ?? agent.id]) ? <img src={agent.avatar || agentIcons[agent.remote?.adapter ?? agent.id]} alt="" /> : <Bot size={22} />}{agent.remote && <RemoteMark />}</span>
         <div className="local-agent-copy">
           <strong>{agent.name}</strong>
-          <code title={agent.path || agent.desktopPath}>{agent.path || agent.desktopPath || agent.command}</code>
+          <code title={agent.remote ? agent.version : agent.path || agent.desktopPath}>{agent.remote ? agent.remote.executable : agent.path || agent.desktopPath || agent.command}</code>
         </div>
         <div className="local-agent-row-aside">
-          {version && <span className="local-agent-version" title={agent.version}>{version}</span>}
+          {agent.remote && <span className="local-agent-remote-badge" title={agent.version}><Server size={12} />{t('Remote')} · {agent.remote.host}</span>}
+          {version && !agent.remote && <span className="local-agent-version" title={agent.version}>{version}</span>}
           {agent.installed && !agent.custom && (!agent.updateStatus || agent.updateStatus === 'unknown') && <span className="local-agent-version" title={t('Could not confirm the latest version. Detect again later.')}>{t('Version unconfirmed')}</span>}
           {(!agent.custom && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
           <button type="button" className="secondary-button" aria-label={`${t('Edit')} ${agent.name}`} onClick={() => setEditingLocalAgent(agent)}>{t('Edit')}</button>
@@ -135,7 +137,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
         <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
         {CONNECTORS_ENABLED && <button id="connectors-tab" role="tab" aria-selected={tab === 'connectors'} aria-controls="settings-content" className={tab === 'connectors' ? 'active' : ''} onClick={() => onTab('connectors')}><Plug size={18} /><span>{t('Connectors')}</span></button>}
-        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Local agents')}</span></button>
+        <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Agents')}</span></button>
         <button id="scheduling-tab" role="tab" aria-selected={tab === 'scheduling'} aria-controls="settings-content" className={tab === 'scheduling' ? 'active' : ''} onClick={() => onTab('scheduling')}><Workflow size={18} /><span>{t('Scheduling')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -166,7 +168,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         onSetEnabled={onSetRoutineEnabled}
         onRunNow={onRunRoutineNow}
       /> : tab === 'agents'  ? <>
-        <header className="settings-heading local-proxy-heading"><div><h1>{t('Local agents')}</h1><p>{t('View the local agents available on this computer.')}</p></div>
+        <header className="settings-heading local-proxy-heading"><div><h1>{t('Agents')}</h1><p>{t('Agents on this computer and on your servers.')}</p></div>
           <div className="local-agent-heading-actions"><button className="secondary-button" onClick={() => setEditingLocalAgent('new')}><Plus size={15} />{t('Add')}</button>
           <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button></div>
         </header>

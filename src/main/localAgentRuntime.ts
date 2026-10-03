@@ -19,6 +19,10 @@ import { spawnEnvironment } from './shellPath'
 import { GrokStream } from './grokStream'
 import { GeminiStream, geminiImagePolicy } from './geminiStream'
 import { localWorkspace, resetLocalWorkspaces } from './localWorkspaces'
+import type { RemoteAgentSpec } from '../shared/types'
+import { RemoteRun, outboxPrompt } from './remoteFileChannel'
+import { assertArgvPrompt, probeRemoteAgent, remoteLaunch, remotePrompt, spawnLaunch } from './remoteTransport'
+import { PROMPT_ARG, customRemoteArguments, launchScript, markPromptArguments, type PromptChannel, type RemoteArg } from './remoteScript'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
  * Keep the official CLI untouched and retain strict sandbox arguments below. */
@@ -315,13 +319,25 @@ export async function runLocalAgent(
   const run = { agentId: config.id, sessionKey: options.sessionKey, abort: new AbortController() }
   activeLocalRuns.add(run)
   const combined = signal ? AbortSignal.any([signal, run.abort.signal]) : run.abort.signal
-  const connected = options.sessionKey && ['codex', 'claude'].includes(config.localAgentId!)
   let release: (() => void) | undefined
   try {
+    // Custom entries may run on a server; resolve once so the adapter decides the protocol.
+    if (!options.agentOverride && config.localAgentId?.startsWith('custom:')) {
+      const agent = await validateLocalAgent(config.localAgentId)
+      options = { ...options, agentOverride: agent }
+    }
+    const kind = connectionKind(config, options)
+    const connected = options.sessionKey && kind
     if (!connected) release = await processBudget.acquire(combined, evictIdleConnection)
     combined.throwIfAborted()
     return await executeLocalAgent(config, prompt, combined, inputImages, options)
   } finally { release?.(); activeLocalRuns.delete(run) }
+}
+
+/** Codex and Claude keep a protocol connection; remote entries use their adapter. */
+function connectionKind(config: AgentConfig, options: LocalRunOptions): 'codex' | 'claude' | undefined {
+  const id = options.agentOverride?.remote?.adapter ?? (options.agentOverride?.custom ? undefined : config.localAgentId)
+  return id === 'codex' || id === 'claude' ? id : undefined
 }
 
 async function executeLocalAgent(
@@ -332,10 +348,11 @@ async function executeLocalAgent(
   options: LocalRunOptions = {}
 ): Promise<LocalAgentReply> {
   options.onProgress?.({ phase: 'connecting', elapsedSeconds: 0, silentSeconds: 0 })
-  if (options.sessionKey && ['codex', 'claude'].includes(config.localAgentId!)) {
+  if (options.sessionKey && connectionKind(config, options)) {
     return runConnectedAgent(config, prompt, signal, inputImages, options)
   }
   const agent = options.agentOverride ?? await validateLocalAgent(config.localAgentId!)
+  if (agent.remote) return executeRemoteAgent(config, agent, agent.remote, prompt, signal, inputImages, options)
   const env = await spawnEnvironment()
   signal?.throwIfAborted()
   const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory) : undefined
@@ -455,14 +472,144 @@ async function executeLocalAgent(
 }
 
 
+/** The server's environment is unknown here; retry decisions rely on the error text. */
+const REMOTE_AUTH_ENV: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: 'remote' }
+const STDIN_ADAPTERS = new Set(['codex', 'openclaw'])
+
+function remoteImagePrompt(prompt: string, paths: string[]): string {
+  return paths.length
+    ? `${prompt}\n\nThe human attached ${paths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${paths.length === 1 ? '' : 's'} on this server before answering:\n${paths.join('\n')}`
+    : prompt
+}
+
+/** One-shot remote run. The prompt only travels on ssh stdin: the agent either
+ * inherits stdin or the script reads it into "$p". Nothing is written to disk. */
+async function executeRemoteAgent(
+  config: AgentConfig, agent: LocalAgent, input: RemoteAgentSpec, prompt: string,
+  signal: AbortSignal | undefined, inputImages: LocalAgentImage[], options: LocalRunOptions
+): Promise<LocalAgentReply> {
+  const spec = await probeRemoteAgent(input, signal)
+  signal?.throwIfAborted()
+  const adapter = spec.adapter
+  const custom = adapter === 'custom'
+  // Same session rule as local agents; the folder lives on the server.
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, undefined, { remote: true }) : undefined
+  const run = new RemoteRun(spec, workspace?.remoteKey)
+  try {
+    await run.prepare(signal)
+    const imagePaths = await run.uploadImages(inputImages, signal)
+    const channel: PromptChannel = custom || !STDIN_ADAPTERS.has(adapter) ? 'argv' : 'stdin'
+    const effectivePrompt = remotePrompt(`${remoteImagePrompt(prompt, imagePaths)}\n\n${outboxPrompt(run)}`)
+    if (channel === 'argv') assertArgvPrompt(effectivePrompt)
+    let policy: string | undefined
+    if (adapter === 'gemini') policy = await run.upload('policy.toml', Buffer.from(geminiImagePolicy(options.imageToolsAllowed !== false)), signal)
+    const geminiBefore = adapter === 'gemini' ? await run.geminiSnapshot(signal) : new Set<string>()
+    // A unique placeholder marks where "$p" goes; the prompt never enters the script.
+    const placeholder = `douchat-prompt-${randomUUID()}`
+    const output = `${run.directory}/reply.txt`
+    const args: RemoteArg[] = custom
+      ? customRemoteArguments(spec.args)
+      : [...markPromptArguments(appendLocalAgentArguments(withLocalModel(adapter, withLocalThinking(adapter, localAgentArgs(adapter, placeholder, output, true), config.thinkingLevel), config.model), spec.args), placeholder),
+          ...(policy ? ['--policy', policy] : [])]
+    if (args.some(arg => typeof arg === 'string' && arg.includes(placeholder))) throw new Error('Invalid remote agent arguments')
+    if (channel === 'stdin' && args.includes(PROMPT_ARG)) throw new Error('Invalid remote agent arguments')
+    const parser = { id: custom ? 'custom' : adapter, name: agent.name }
+    const runStarted = Date.now()
+    let grokStream: GrokStream | undefined
+    let geminiStream: GeminiStream | undefined
+    const execute = async (accountLogin: boolean): Promise<string> => {
+      const launch = await remoteLaunch(spec, launchScript({
+        runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args, channel, remotePath: spec.remotePath,
+        environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
+      }))
+      signal?.throwIfAborted()
+      return new Promise<string>((resolve, reject) => {
+        const child = spawnLaunch(launch)
+        let stdout = ''
+        let stderr = ''
+        let bytes = 0
+        let failure: Error | undefined
+        const kill = (): void => killLocalProcess(child)
+        const abort = (): void => { failure = new Error('Stopped'); kill(); void run.kill() }
+        const started = Date.now()
+        let lastOutput = started
+        const progress = (detail: string) => options.onProgress?.({ phase: 'working', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: 0, detail })
+        grokStream = adapter === 'grok' ? new GrokStream(progress) : undefined
+        geminiStream = adapter === 'gemini' ? new GeminiStream(progress) : undefined
+        const progressStream = grokStream ?? geminiStream
+        options.onProgress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
+        const timer = setInterval(() => options.onProgress?.({
+          phase: 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000),
+          silentSeconds: Math.floor((Date.now() - lastOutput) / 1000), detail: progressStream?.detail
+        }), progressStream ? 1000 : 15_000)
+        child.stdout.setEncoding('utf8')
+        child.stderr.setEncoding('utf8')
+        const collect = (text: string, stream: 'stdout' | 'stderr'): void => {
+          lastOutput = Date.now()
+          bytes += Buffer.byteLength(text)
+          if (bytes > 8 * 1024 * 1024) { failure = new Error(`${agent.name} produced too much output`); kill(); void run.kill(); return }
+          if (stream === 'stdout') { stdout += text; progressStream?.push(text) } else stderr += text
+        }
+        child.stdout.on('data', (text: string) => collect(text, 'stdout'))
+        child.stderr.on('data', (text: string) => collect(text, 'stderr'))
+        child.once('error', (error) => { failure = error; kill() })
+        child.once('close', (code) => {
+          clearInterval(timer)
+          signal?.removeEventListener('abort', abort)
+          kill()
+          if (failure) reject(failure)
+          else if (code !== 0) reject(localAgentExitError(parser, code, stdout, stderr))
+          else resolve(stdout)
+        })
+        signal?.addEventListener('abort', abort, { once: true })
+        if (signal?.aborted) abort()
+        child.stdin.on('error', () => { /* Process exit is reported by close. */ })
+        // Both channels read the prompt from stdin, then see EOF.
+        child.stdin.end(effectivePrompt)
+      })
+    }
+    let usedAccountLogin = false
+    let stdout: string
+    try { stdout = await execute(false) }
+    catch (cause) {
+      if (!shouldRetryClaudeWithAccountLogin(adapter, cause, REMOTE_AUTH_ENV)) throw cause
+      usedAccountLogin = true
+      stdout = await execute(true)
+    }
+    const grokResult = grokStream?.finish()
+    const geminiResult = geminiStream?.finish()
+    if (grokResult?.paths.length || geminiResult?.imageToolsSucceeded) options.onProgress?.({ phase: 'working', elapsedSeconds: Math.floor((Date.now() - runStarted) / 1000), silentSeconds: 0, detail: 'Attaching generated images' })
+    const images = adapter === 'codex' ? await run.codexImages(codexThreadId(stdout), signal)
+      : grokResult ? await run.grokImages(grokResult, signal)
+        : geminiResult?.imageToolsSucceeded ? await run.geminiImages(geminiBefore, signal) : []
+    const replyText = async (): Promise<string> => custom ? stdout.trim()
+      : adapter === 'codex' ? (await run.replyText(signal)).trim() : grokResult?.text ?? geminiResult?.text ?? localAgentText(adapter, stdout)
+    let text: string
+    try { text = await replyText() }
+    catch (cause) {
+      if (usedAccountLogin || !shouldRetryClaudeWithAccountLogin(adapter, cause, REMOTE_AUTH_ENV)) throw cause
+      stdout = await execute(true)
+      text = await replyText()
+    }
+    const files = await run.outboxFiles(signal)
+    const reply = files.length && !text && !images.length ? { text: '', images } : localAgentReply(agent.name, text, images)
+    return files.length ? { ...reply, files: files.map(file => ({ name: file.name, data: file.data })) } : reply
+  } finally {
+    await run.dispose(true)
+  }
+}
+
+
 interface ConnectedSession {
   evicted?: boolean
   persistent?: boolean
   config: AgentConfig
   sessionKey: string
   connection: LocalAgentConnection
+  /** Private server directory for a remote connection, removed on eviction. */
+  remoteRun?: Promise<RemoteRun | undefined>
   directory: Promise<string>
-  ready: Promise<{ agent: LocalAgent; env: NodeJS.ProcessEnv; directory: string }>
+  ready: Promise<{ agent: LocalAgent; env: NodeJS.ProcessEnv; directory: string; run?: RemoteRun }>
   busy: boolean
   idle?: NodeJS.Timeout
 }
@@ -481,6 +628,7 @@ function evictConnection(key: string, entry: ConnectedSession): void {
   if (connections.get(key) === entry) connections.delete(key)
   clearTimeout(entry.idle)
   entry.connection.close()
+  void entry.remoteRun?.then(run => run?.dispose(true)).catch(() => {})
   void entry.directory.then(async (directory) => {
     await entry.connection.disposed()
     if (!entry.persistent) await rm(directory, { recursive: true, force: true })
@@ -515,12 +663,16 @@ export function resetLocalAgentConversation(conversationId: string, topicId?: st
 async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
   images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
   signal?.throwIfAborted()
-  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory) : undefined
-  if (config.localAgentId === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
-  const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args]
+  const remoteSpec = options.agentOverride?.remote
+  const kind = connectionKind(config, options)!
+  // Remote sessions never use a folder on this computer; the server folder is derived from the session.
+  if (remoteSpec) options = { ...options, workspaceDirectory: undefined }
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory, { remote: Boolean(remoteSpec) }) : undefined
+  if (kind === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
+  const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args, remoteSpec ?? null]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
   let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
-  if (config.localAgentId === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
+  if (kind === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
     const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, true, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
     if (connections.has(accountKey)) { key = accountKey; options = { ...options, claudeAccountLogin: true } }
   }
@@ -528,8 +680,11 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
   if (entry && !entry.connection.alive) { evictConnection(key, entry); entry = undefined }
   if (entry?.busy) throw new Error('This local agent conversation is already working')
   if (!entry) {
-    const connection = new LocalAgentConnection(config.localAgentId as 'codex' | 'claude')
-    const directory = workspace ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
+    const connection = new LocalAgentConnection(kind)
+    const directory = workspace && !remoteSpec ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
+    let resolveRun!: (run: RemoteRun | undefined) => void
+    const remoteRun = new Promise<RemoteRun | undefined>(resolve => { resolveRun = resolve })
+    const accountLogin = Boolean(options.claudeAccountLogin)
     const ready = (async () => {
       const release = await processBudget.acquire(signal, evictIdleConnection)
       void connection.disposed().then(release)
@@ -537,11 +692,27 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
         signal?.throwIfAborted()
         const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
         signal?.throwIfAborted()
+        if (remoteSpec) {
+          const spec = await probeRemoteAgent(remoteSpec, signal)
+          const run = new RemoteRun(spec, workspace?.remoteKey)
+          resolveRun(run)
+          await run.prepare(signal)
+          signal?.throwIfAborted()
+          await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
+            cwd: run.workspace,
+            launch: async (agentArgs) => remoteLaunch(spec, launchScript({
+              runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args: agentArgs, channel: 'stdin', remotePath: spec.remotePath,
+              environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
+            }))
+          })
+          return { agent, env, directory: cwd, run }
+        }
+        resolveRun(undefined)
         await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args, config.thinkingLevel)
-        return { agent, env, directory: cwd }
-      } catch (error) { connection.close(); throw error }
+        return { agent, env, directory: cwd, run: undefined as RemoteRun | undefined }
+      } catch (error) { resolveRun(undefined); connection.close(); throw error }
     })()
-    entry = { config, sessionKey: options.sessionKey!, connection, directory, ready, busy: true, persistent: Boolean(workspace) }
+    entry = { config, sessionKey: options.sessionKey!, connection, directory, remoteRun, ready, busy: true, persistent: Boolean(workspace) }
     connections.set(key, entry)
     const created = entry
     void connection.disposed().then(() => evictConnection(key, created))
@@ -556,9 +727,21 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
   const connectingTimer = setInterval(() => options.onProgress?.({ phase: 'connecting', elapsedSeconds: Math.floor((Date.now() - connectingAt) / 1000), silentSeconds: 0 }), 15_000)
   let inputDirectory: string | undefined
   try {
-    const { agent, env, directory } = await current.ready
+    const { agent, env, directory, run } = await current.ready
     clearInterval(connectingTimer)
     signal?.throwIfAborted()
+    if (run) {
+      await run.beginTurn(signal)
+      const paths = await run.uploadImages(images, signal)
+      const base = current.connection.hasHistory ? options.continuationPrompt ?? prompt : prompt
+      const withImages = paths.length ? `${base}\n\nInspect these attached image files on this server before answering:\n${paths.join('\n')}` : base
+      const reply = await current.connection.turn(remotePrompt(`${withImages}\n\n${outboxPrompt(run)}`), signal, options.onProgress, options.onApproval)
+      if (kind === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
+      const outputImages = kind === 'codex' ? await run.codexImages(current.connection.thread, signal) : []
+      const files = await run.outboxFiles(signal)
+      const result = files.length && !reply && !outputImages.length ? { text: '', images: outputImages } : localAgentReply(agent.name, reply, outputImages)
+      return files.length ? { ...result, files: files.map(file => ({ name: file.name, data: file.data })) } : result
+    }
     // In a user's project folder, keep inputs in a removable hidden folder.
     if (options.workspaceDirectory && images.length) {
       inputDirectory = join(directory, `.douchat-input-${randomUUID()}`)
@@ -573,20 +756,20 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     const effective = paths.length ? `${text}\n\nInspect these attached image files before answering:\n${paths.join('\n')}` : text
     const started = Date.now()
     const reply = await current.connection.turn(effective, signal, options.onProgress, options.onApproval)
-    if (config.localAgentId === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
+    if (kind === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
     const outputImages = agent.id === 'codex' ? await generatedImages(current.connection.thread, env, started) : []
     return localAgentReply(agent.name, reply, outputImages)
   } catch (error) {
     // Authentication-only failures can retry once before any model work in this turn.
     // Existing conversation history is not evidence of side effects in the current turn.
     evictConnection(key, current)
-    if (config.localAgentId === 'claude' && current.persistent && !options.freshSessionRetry
+    if (kind === 'claude' && current.persistent && !options.freshSessionRetry
       && /No conversation found with session ID/i.test(String(error))) {
       localWorkspace(config, options.sessionKey, options.workspaceDirectory)?.remember(undefined)
       return runConnectedAgent(config, prompt, signal, images, { ...options, freshSessionRetry: true })
     }
-    if (config.localAgentId === 'claude' && !options.claudeAccountLogin && !signal?.aborted && current.connection.canRetryAuthentication
-      && shouldRetryClaudeWithAccountLogin(config.localAgentId!, error, await spawnEnvironment())) {
+    if (kind === 'claude' && !options.claudeAccountLogin && !signal?.aborted && current.connection.canRetryAuthentication
+      && shouldRetryClaudeWithAccountLogin('claude', error, remoteSpec ? REMOTE_AUTH_ENV : await spawnEnvironment())) {
       return runConnectedAgent(config, prompt, signal, images, { ...options, claudeAccountLogin: true })
     }
     throw error

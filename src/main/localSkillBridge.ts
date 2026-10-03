@@ -41,11 +41,13 @@ export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSign
   signal.addEventListener('abort', close, { once: true })
   if (signal.aborted) { close(); signal.throwIfAborted() }
   const endpoint = `http://127.0.0.1:${address.port}/tools`
-  return { close, isBridgeCommand: (command: unknown) => !active.aborted && isBridgeCurl(command, endpoint, token), prompt: [
+  const tools_ = JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
+  // port, token and tools let a remote agent's bridge forward to this one.
+  return { close, port: address.port, token, tools: tools_, isBridgeCommand: (command: unknown) => !active.aborted && isBridgeCurl(command, endpoint, token), prompt: [
     'Douchat skill tools for THIS TURN ONLY: use your native shell/HTTP tool to POST JSON {"tool":"tool_name","arguments":{...}} to the loopback endpoint below. This is the supported way to install skills into Douchat, including another owned agent. Do not write its database. Keep this private token out of replies and files; discard older endpoints from history. Wait for the response (owner approval can take several minutes). If your native shell needs permission, request it normally.',
     `Endpoint: ${endpoint}`, `Authorization: Bearer ${token}`,
     `Send Content-Type: application/json. Use exactly this shape, which Douchat runs without asking the human: curl -sS -X POST ${endpoint} -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' --data-binary @- <<'EOF' (JSON on the following lines, then EOF). Do not add pipes, other commands or files.`,
-    JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
+    tools_
   ].join('\n') }
 }
 

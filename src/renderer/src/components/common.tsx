@@ -3,6 +3,7 @@ import { useRef, useState } from 'react'
 import type { CSSProperties, ReactElement } from 'react'
 import type { AgentConfig, ChatMessage, Conversation } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
+import { remoteHost } from './RemoteMark'
 import { GeneratedAgentAvatar } from '../generatedAvatar'
 import { t, tr } from '../preferences'
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, setSidebarWidth, useSidebarWidth } from '../sidebarWidth'
@@ -29,7 +30,9 @@ export function localAgentDisplayName(localAgentId: string): string {
 
 export function agentSourceLabel(agent: AgentConfig): string {
   return agent.localAgentId
-    ? `${t('Local agent')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
+    ? remoteHost(agent.localAgentId)
+      ? `${t('Remote agent')} · ${remoteHost(agent.localAgentId)} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
+      : `${t('Agent')} · ${agent.localAgentName || localAgentDisplayName(agent.localAgentId)}`
     : agent.provider.startsWith('custom:') ? t('Custom model') : t('Douchat Cloud')
 }
 

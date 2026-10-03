@@ -8,6 +8,11 @@ import { executableCommand } from './windowsCommand'
 import { randomUUID } from 'node:crypto'
 import { codexComputerUseInstructions, codexComputerUseInventory } from './codexComputerUse'
 
+/** Process launch description (local executable or the system ssh client). */
+export interface LaunchSpec { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd?: string }
+/** Build the ssh launch for the agent's protocol arguments; `cwd` is remote. */
+export interface RemoteConnectionLaunch { cwd: string; launch: (agentArgs: string[]) => Promise<LaunchSpec> }
+
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
   if (!child.pid) return
@@ -55,16 +60,24 @@ export class LocalAgentConnection {
   get hasHistory(): boolean { return this.turnCount > 0 }
   get thread(): string | undefined { return this.threadId }
 
-  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false, resume?: { thread?: string; remember: (thread?: string) => void }, toolApprovals = false, extraArgs: string[] = [], thinking?: ThinkingLevel): Promise<void> {
-    const command = await executableCommand(path)
+  /** Remote launches reuse the exact protocol; only process placement differs. */
+  private remote = false
+
+  async connect(path: string, cwd: string, env: NodeJS.ProcessEnv, model?: string, discoveryOnly = false, resume?: { thread?: string; remember: (thread?: string) => void }, toolApprovals = false, extraArgs: string[] = [], thinking?: ThinkingLevel, remote?: RemoteConnectionLaunch): Promise<void> {
+    const command = remote ? undefined : await executableCommand(path)
     if (this.failure) throw this.failure
     const args = this.kind === 'codex'
       ? ['app-server']
       : ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', ...(resume ? resume.thread ? ['--resume', resume.thread] : [] : ['--no-session-persistence']), '--allowedTools', 'WebSearch,WebFetch', ...(toolApprovals ? ['--permission-prompt-tool', 'stdio'] : ['--permission-mode', 'dontAsk'])]
     this.rememberThread = resume?.remember
     if (this.kind === 'claude' && resume?.thread) { this.threadId = resume.thread; this.turnCount = 1 }
-    this.child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', withLocalThinking('claude', args, thinking), model) : args, extraArgs)], {
-      cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe']
+    const agentArgs = appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', withLocalThinking('claude', args, thinking), model) : args, extraArgs)
+    this.remote = Boolean(remote)
+    const launch: LaunchSpec = remote ? await remote.launch(agentArgs) : { file: command!.file, args: [...command!.prefix, ...agentArgs], env, cwd }
+    if (this.failure) throw this.failure
+    if (remote) cwd = remote.cwd
+    this.child = spawn(launch.file, launch.args, {
+      cwd: launch.cwd, env: launch.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], shell: false
     })
     this.child.stdout.setEncoding('utf8')
     this.child.stderr.setEncoding('utf8')
@@ -89,7 +102,7 @@ export class LocalAgentConnection {
           : 'never', sandbox: 'workspace-write',
         config: { 'sandbox_workspace_write.network_access': true, web_search: 'live',
           ...(thinking ? { model_reasoning_effort: clampThinking(thinking, localThinkingLevels('codex')) } : {}) },
-        ...(toolApprovals ? { developerInstructions: codexComputerUseInstructions } : {})
+        ...(toolApprovals && !this.remote ? { developerInstructions: codexComputerUseInstructions } : {})
       }
       let response: any
       if (resume?.thread) {
@@ -97,7 +110,7 @@ export class LocalAgentConnection {
           response = await this.request('thread/resume', { ...params, threadId: resume.thread })
           this.turnCount = response.thread?.turns?.length ? 1 : 0
         } catch (error) {
-          if (!/not found|no rollout|does not exist/i.test(String(error))) throw error
+          if (!/not found|no rollout|does not exist|already has an active writer/i.test(String(error))) throw error
           resume.remember(undefined)
         }
       }
@@ -309,7 +322,7 @@ export class LocalAgentConnection {
     signal?.addEventListener('abort', abort, { once: true })
     try {
       let computerContext = ''
-      if (this.kind === 'codex' && onApproval) {
+      if (this.kind === 'codex' && onApproval && !this.remote) {
         // Thread-scoped inventory reflects the actual plugin configuration. A
         // missing/old discovery API must not break ordinary coding conversations.
         try {

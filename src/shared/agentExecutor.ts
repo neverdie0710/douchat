@@ -26,6 +26,8 @@ export interface LocalAgentImage {
 export interface LocalAgentReply {
   text: string
   images: LocalAgentImage[]
+  /** Deliverables fetched from a remote agent's private outbox. */
+  files?: { name: string; data: Uint8Array }[]
 }
 
 export interface LocalRunOptions {

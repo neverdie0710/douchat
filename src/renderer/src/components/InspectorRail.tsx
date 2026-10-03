@@ -1,6 +1,7 @@
 import { NativeDialog } from './NativeDialog'
 import { GroupInviteDialog } from './GroupInviteDialog'
 import { ContactKindBadge } from './ContactKindBadge'
+import { remoteHost } from './RemoteMark'
 import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
 import type { SocialPerson } from '../../../shared/social'
 import type { ProfileAnchor } from './MemberProfilePopover'
@@ -131,7 +132,7 @@ export function InspectorRail({
                   onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}
                   title={`${agentDisplayName(member)} · ${agentDisplayRole(member)}`}
                 >
-                  <div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} /><ContactKindBadge local={Boolean(member.localAgentId)} />{availabilityDot(member.id)}</div>
+                  <div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} /><ContactKindBadge local={Boolean(member.localAgentId)} remote={remoteHost(member.localAgentId)} />{availabilityDot(member.id)}</div>
                   <span className="member-name-label"><span className="member-name-text">{agentDisplayName(member)}</span></span>
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>

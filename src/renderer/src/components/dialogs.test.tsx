@@ -238,16 +238,16 @@ describe('create agent terminology', () => {
     expect(container.textContent).toContain('Agent name')
     expect(container.textContent).toContain('Runs with')
     expect(container.textContent).toContain('Custom model')
-    expect(container.textContent).toContain('Local agent')
+    expect(container.textContent).toContain('AI tools on this computer or your servers')
     expect(container.textContent).not.toContain('Create contact')
-    expect([...container.querySelectorAll('[role="radio"] strong')].map(button => button.textContent)).toEqual(['Custom model', 'Local agent'])
+    expect([...container.querySelectorAll('[role="radio"] strong')].map(button => button.textContent)).toEqual(['Custom model', 'Agent'])
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Local agent'))!
+      .find((button) => button.textContent?.includes('AI tools on this computer or your servers'))!
     await act(async () => local.click())
 
-    expect(container.textContent).toContain('Local agent')
-    expect(container.textContent).toContain('No available local agents')
+    expect(container.textContent).toContain('AI tools on this computer or your servers')
+    expect(container.textContent).toContain('No available agents')
   })
 
   it('creates an agent with a saved custom model without exposing its key', async () => {
@@ -346,7 +346,7 @@ describe('create agent terminology', () => {
     ))
 
     const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('Local agent'))!
+      .find((button) => button.textContent?.includes('AI tools on this computer or your servers'))!
     await act(async () => local.click())
     await act(async () => container.querySelector<HTMLButtonElement>('.agent-select-trigger')!.click())
 

@@ -1,6 +1,6 @@
 import { executableCommand } from './windowsCommand'
 import { changedLocalAgentSettings } from './localAgentSettingsVersion'
-import type { CustomLocalAgentInput, LocalAgent } from '../shared/types'
+import type { CustomLocalAgentInput, LocalAgent, RemoteAgentSpec } from '../shared/types'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -9,6 +9,8 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { resolveExecutable, executableEnvironment } from './shellPath'
+import { normalizeRemoteSpec, remoteHostLabel, validateRemoteSpec } from './remoteValidate'
+import { forgetRemoteProbes, probeRemoteAgent } from './remoteTransport'
 
 const execFileAsync = promisify(execFile)
 let customRegistryPath: string | undefined
@@ -34,11 +36,26 @@ async function customDefinitions(): Promise<CustomLocalAgentDefinition[]> {
   if (!customRegistryPath) return []
   try {
     const parsed = JSON.parse(await readFile(customRegistryPath, 'utf8')) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75)
+    if (!Array.isArray(parsed)) { remoteSpecs.clear(); return [] }
+    const definitions = parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75)
+    remoteSpecs.clear()
+    for (const item of definitions) if (item.remote) remoteSpecs.set(item.id, item.remote)
+    return definitions
   } catch {
+    remoteSpecs.clear()
     return []
   }
+}
+
+/** Last validated remote settings, for synchronous labelling (group context, UI). */
+const remoteSpecs = new Map<string, RemoteAgentSpec>()
+export function cachedRemoteAgentSpec(id: string | undefined): RemoteAgentSpec | undefined {
+  return id ? remoteSpecs.get(id) : undefined
+}
+/** Fresh lookup from the registry; undefined for agents running on this computer. */
+export async function remoteAgentSpec(id: string | undefined): Promise<RemoteAgentSpec | undefined> {
+  if (!id || !CUSTOM_ID.test(id)) return undefined
+  return (await customDefinitions()).find(item => item.id === id)?.remote
 }
 
 async function writeCustomDefinitions(definitions: CustomLocalAgentDefinition[]): Promise<void> {
@@ -50,6 +67,15 @@ async function writeCustomDefinitions(definitions: CustomLocalAgentDefinition[])
 }
 
 export function validateLocalAgentInput(input: CustomLocalAgentInput): CustomLocalAgentInput {
+  if (input?.remote !== undefined && input.remote !== null) {
+    // Remote agents use structured fields only; `command` mirrors the remote executable.
+    const remote = normalizeRemoteSpec(input.remote)
+    const name = String(input?.name ?? '').trim()
+    if (!name || name.length > 80) throw new Error('Enter a local agent name of 80 characters or fewer.')
+    const avatar = input.avatar || undefined
+    if (avatar && (typeof avatar !== 'string' || avatar.length > 512_000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar))) throw new Error('Choose a PNG, JPEG or WebP avatar.')
+    return { name, command: remote.executable, args: [], avatar, remote }
+  }
   const name = String(input?.name ?? '').trim()
   const command = String(input?.command ?? '').trim()
   if (!name || name.length > 80) throw new Error('Enter a local agent name of 80 characters or fewer.')
@@ -73,21 +99,35 @@ function mutateRegistry(action: (definitions: CustomLocalAgentDefinition[]) => v
   registryWrite = work
   return work
 }
-export async function addCustomLocalAgent(input: CustomLocalAgentInput): Promise<void> {
+async function validatedInput(input: CustomLocalAgentInput): Promise<CustomLocalAgentInput> {
   const value = validateLocalAgentInput(input)
+  if (value.remote) {
+    // Resolve the identity file in main; renderer checks are only hints. Probe
+    // results are never accepted from the renderer: they are re-discovered.
+    const { remotePath: _path, remoteHome: _home, ...remote } = await validateRemoteSpec(value.remote)
+    value.remote = remote
+  }
+  return value
+}
+export async function addCustomLocalAgent(input: CustomLocalAgentInput): Promise<void> {
+  const value = await validatedInput(input)
   await mutateRegistry(definitions => {
     if (definitions.filter(item => CUSTOM_ID.test(item.id)).length >= 64) throw new Error('Up to 64 custom local agents can be registered.')
     definitions.push({ id: `custom:${randomUUID()}`, ...value })
   })
 }
 export async function updateLocalAgent(id: string, input: CustomLocalAgentInput): Promise<void> {
-  const value = validateLocalAgentInput(input)
+  const value = await validatedInput(input)
   await mutateRegistry(definitions => {
     const index = definitions.findIndex(item => item.id === id)
     if (index < 0 && !localAgentCatalog.some(item => item[0] === id)) throw new Error('Unknown local agent')
+    // Built-in entries describe CLIs on this computer; a remote agent is always a custom entry.
+    if (value.remote && !CUSTOM_ID.test(id)) throw new Error('Add a remote agent as a new custom agent.')
+    if (index >= 0 && Boolean(definitions[index].remote) !== Boolean(value.remote)) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
     if (index < 0) definitions.push({ id, ...value })
     else definitions[index] = { id, ...value }
   })
+  forgetRemoteProbes()
   changedLocalAgentSettings(id)
 }
 export async function removeCustomLocalAgent(id: string): Promise<void> {
@@ -100,10 +140,15 @@ export async function removeCustomLocalAgent(id: string): Promise<void> {
 }
 
 /** Resolve a draft without changing the registry or any existing conversation. */
-export async function resolveLocalAgentDraft(id: string | undefined, input: CustomLocalAgentInput): Promise<LocalAgent> {
-  const value = validateLocalAgentInput(input)
+export async function resolveLocalAgentDraft(id: string | undefined, input: CustomLocalAgentInput, signal?: AbortSignal): Promise<LocalAgent> {
+  const value = await validatedInput(input)
   const existing = id ? (await detectLocalAgents({ version: async () => undefined }, id))[0] : undefined
   if (id && !existing) throw new Error('Unknown local agent')
+  if (value.remote) {
+    if (id && !existing?.remote) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
+    const remote = await probeRemoteAgent(value.remote, signal, true)
+    return remoteLocalAgent(id ?? `custom:${randomUUID()}`, value.name, value.avatar, remote)
+  }
   const path = await resolveExecutable(value.command)
   if (!path) throw new Error('Executable not found. Check the path and executable permissions.')
   return { id: id ?? `custom:${randomUUID()}`, ...value, path, installed: true, discovered: true,
@@ -195,6 +240,8 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   ]
   return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const override = custom.find(item => item.id === id)
+    // Remote agents are not resolved through this computer's PATH; the server is probed at launch.
+    if (override?.remote && isCustom) return remoteLocalAgent(id, override.name, override.avatar, override.remote)
     name = override?.name ?? name
     command = override?.command ?? command
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
@@ -217,6 +264,13 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
       custom: isCustom || undefined
     }
   }))
+}
+
+function remoteLocalAgent(id: string, name: string, avatar: string | undefined, remote: RemoteAgentSpec): LocalAgent {
+  return {
+    id, name, command: remote.executable, args: remote.args, avatar, installed: true, discovered: true,
+    version: remoteHostLabel(remote), chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, remote
+  }
 }
 
 export async function validateLocalAgent(id: string): Promise<LocalAgent> {

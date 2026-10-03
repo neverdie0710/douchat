@@ -31,6 +31,33 @@ export interface LocalAgent {
   custom?: boolean
   avatar?: string
   args?: string[]
+  /** Present only for user-registered agents that run on a remote server over SSH. */
+  remote?: RemoteAgentSpec
+}
+
+export const REMOTE_AGENT_ADAPTERS = ['codex', 'claude', 'gemini', 'grok', 'cursor', 'opencode', 'kimi', 'openclaw', 'fastclaw', 'hermes', 'omp', 'custom'] as const
+export type RemoteAgentAdapter = typeof REMOTE_AGENT_ADAPTERS[number]
+
+/** Structured SSH launch settings. There is intentionally no free-form shell
+ * command and no custom ssh option field: every value is validated in main. */
+export interface RemoteAgentSpec {
+  transport: 'ssh'
+  host: string
+  port?: number
+  user?: string
+  /** Absolute path of a private key on this computer. */
+  identityFile?: string
+  adapter: RemoteAgentAdapter
+  /** Remote command name or absolute POSIX path. */
+  executable: string
+  /** One argument per entry; only the custom adapter may use {prompt}. */
+  args: string[]
+  /** Login PATH discovered by the connection probe on this server. */
+  remotePath?: string
+  /** Remote $HOME discovered by the connection probe. */
+  remoteHome?: string
+  /** Friends and other owners may call this agent only when enabled. */
+  allowSharing: boolean
 }
 
 export interface CustomLocalAgentInput {
@@ -40,6 +67,7 @@ export interface CustomLocalAgentInput {
   avatar?: string
   /** One argument per entry; custom commands may use {prompt}. */
   args?: string[]
+  remote?: RemoteAgentSpec
 }
 
 export interface AgentConfig {
@@ -641,6 +669,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   updateLocalAgent: (id: string, input: CustomLocalAgentInput) => Promise<LocalAgent[]>
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => Promise<{ reply: string; durationMs: number; version?: string }>
   cancelLocalAgentTest: () => Promise<void>
+  listSshHosts: () => Promise<string[]>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   getAttachmentData: (attachmentId: string) => Promise<string>
   getSnapshot: () => Promise<AppSnapshot>
