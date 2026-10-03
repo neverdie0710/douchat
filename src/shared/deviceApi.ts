@@ -9,6 +9,8 @@ export interface DesktopDeviceApi {
   saveInvitationImage: (dataUrl: string) => Promise<boolean>
   copyText: (text: string) => Promise<void>
   copyAttachment: (attachmentId: string) => Promise<void>
+  /** Copies a PNG data URL, for images that have no saved attachment yet. */
+  copyImageData: (dataUrl: string) => Promise<void>
   platform: string
   microphonePermissionOwner: 'Douchat' | 'Electron'
   windowAction: (action: 'close' | 'minimize' | 'fullscreen') => void

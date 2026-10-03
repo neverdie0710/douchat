@@ -40,11 +40,51 @@ export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSign
   const close = () => { lifetime.abort(); server.closeAllConnections(); server.close(); signal.removeEventListener('abort', close) }
   signal.addEventListener('abort', close, { once: true })
   if (signal.aborted) { close(); signal.throwIfAborted() }
+  const endpoint = `http://127.0.0.1:${address.port}/tools`
   const tools_ = JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
-  return { close, port: address.port, token, tools: tools_, prompt: [
+  // port, token and tools let a remote agent's bridge forward to this one.
+  return { close, port: address.port, token, tools: tools_, isBridgeCommand: (command: unknown) => !active.aborted && isBridgeCurl(command, endpoint, token), prompt: [
     'Douchat skill tools for THIS TURN ONLY: use your native shell/HTTP tool to POST JSON {"tool":"tool_name","arguments":{...}} to the loopback endpoint below. This is the supported way to install skills into Douchat, including another owned agent. Do not write its database. Keep this private token out of replies and files; discard older endpoints from history. Wait for the response (owner approval can take several minutes). If your native shell needs permission, request it normally.',
-    `Endpoint: http://127.0.0.1:${address.port}/tools`, `Authorization: Bearer ${token}`,
-    'Send Content-Type: application/json. Prefer stdin/heredoc JSON rather than interpolating commands or file contents into shell strings.',
+    `Endpoint: ${endpoint}`, `Authorization: Bearer ${token}`,
+    `Send Content-Type: application/json. Use exactly this shape, which Douchat runs without asking the human: curl -sS -X POST ${endpoint} -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' --data-binary @- <<'EOF' (JSON on the following lines, then EOF). Do not add pipes, other commands or files.`,
     tools_
   ].join('\n') }
+}
+
+/** True only for a plain `curl` POST of JSON to this turn's endpoint and token.
+ * The request body comes from a quoted heredoc or a single-quoted argument, so
+ * the shell expands nothing; any other syntax, flag or file access is rejected. */
+export function isBridgeCurl(command: unknown, endpoint: string, token: string): boolean {
+  if (typeof command !== 'string' || command.length > 3_000_000) return false
+  let head = command.trim()
+  const heredoc = /^([^\n]*?)\s*<<\s*'([A-Za-z_]+)'\n([\s\S]*)\n\2$/.exec(head)
+  if (heredoc) head = heredoc[1]
+  else if (head.includes('\n')) return false
+  const tokens: string[] = []
+  const pattern = /\s*('[^']*'|"[^"$`\\!]*"|[A-Za-z0-9@:/._=,-]+)(?=\s|$)/y
+  while (pattern.lastIndex < head.length) {
+    const match = pattern.exec(head)
+    if (!match) return false
+    const raw = match[1]
+    tokens.push(raw.startsWith("'") || raw.startsWith('"') ? raw.slice(1, -1) : raw)
+  }
+  if (tokens.shift() !== 'curl') return false
+  let url = false, auth = false, body = false
+  for (let i = 0; i < tokens.length; i++) {
+    const value = tokens[i]
+    if (value === endpoint) url = true
+    else if (['-s', '-S', '-sS', '--silent', '--show-error', '--fail', '-f', '--fail-with-body'].includes(value)) continue
+    else if (value === '-X' || value === '--request') { if (tokens[++i] !== 'POST') return false }
+    else if (value === '-m' || value === '--max-time') { if (!/^\d{1,4}$/.test(tokens[++i] ?? '')) return false }
+    else if (value === '-H' || value === '--header') {
+      const header = tokens[++i] ?? ''
+      if (/^authorization:\s*/i.test(header)) { if (header.replace(/^authorization:\s*/i, '') !== `Bearer ${token}`) return false; auth = true }
+      else if (!/^content-type:\s*application\/json$/i.test(header)) return false
+    } else if (['-d', '--data', '--data-binary', '--data-raw'].includes(value)) {
+      const data = tokens[++i]
+      if (data === undefined || body || (data === '@-') !== Boolean(heredoc) || (data !== '@-' && data.startsWith('@'))) return false
+      body = true
+    } else return false
+  }
+  return url && auth && body
 }

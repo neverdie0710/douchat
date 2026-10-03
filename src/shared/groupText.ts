@@ -62,6 +62,7 @@ export const groupTranslations: Record<string, string> = {
   "{member} could not finish planning. Trying the next available member.": "{member} 未能完成规划，正在自动切换下一位可用成员。",
   "Group planning exceeded {seconds} seconds and was paused. Retry later or change the decision model.": "群任务规划超过 {seconds} 秒，已暂停。请稍后重试或更换决策模型。",
   "The previous attempt was interrupted at this step and may have performed external actions. Check the results and send a new explicit instruction. This step will not be repeated automatically.": "上次执行在此步骤中断，可能已产生外部操作。请核对结果后发送新的明确指令，系统不会自动重做。",
+  "{member} was interrupted. Reason: {reason}\nExternal actions may have already run. Check the results before sending a new instruction; this task will not be repeated automatically.": "{member} 执行中断。原因：{reason}\n可能已有外部操作执行，请核对结果后再发送新的指令；系统不会自动重复执行此任务。",
   "A local agent was interrupted and may have performed external actions. Check the results and send a new explicit instruction.": "本地 Agent 执行中断，可能已产生外部操作。请核对结果后发送新的明确指令。",
   "{member} did not ask a clarification question. The task is paused. Clarify the scope to continue.": "{member} 未提出需要真人回答的澄清问题，任务已暂停。请明确补充任务范围后继续。",
   "{member} did not provide the required public contribution. The task is paused. Ask them to publish it before continuing.": "{member} 未提交所需的公开交付物，群任务已暂停。请要求该成员公开补充结果后继续。",

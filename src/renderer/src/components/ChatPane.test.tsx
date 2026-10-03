@@ -250,6 +250,66 @@ describe('private delivery disclosure', () => {
     if (!legacy) expect(container.querySelector('.user-bubble > .message-attachments img')?.getAttribute('alt')).toBe('new.png')
   })
 
+  it('removes pasted images with Backspace at the start and previews them on click', async () => {
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={[]} allMessages={[]} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}} />))
+    const textarea = container.querySelector('textarea')!
+    const paste = async (name: string) => {
+      // jsdom's File has no arrayBuffer(); supply the part the composer reads.
+      const file = { name, type: 'image/png', size: 4, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer }
+      const event = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', { value: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] } })
+      await act(async () => { textarea.dispatchEvent(event); await new Promise(resolve => setTimeout(resolve, 20)) })
+    }
+    await paste('first.png'); await paste('second.png')
+    const names = () => [...container.querySelectorAll('.composer-image img')].map(img => img.getAttribute('alt'))
+    expect(names()).toEqual(['first.png', 'second.png'])
+    const copyImageData = vi.fn().mockResolvedValue(undefined)
+    window.douchat = { ...window.douchat, copyImageData } as typeof window.douchat
+    await act(async () => (container.querySelector('.composer-image-open') as HTMLButtonElement).click())
+    const dialog = () => document.querySelector('dialog.chat-image-preview')!
+    const shown = () => dialog().querySelector('.chat-image-preview-stage img')?.getAttribute('alt')
+    expect(shown()).toBe('first.png')
+    expect(dialog().querySelector('.chat-image-preview-count')?.textContent).toBe('1 / 2')
+    await act(async () => (dialog().querySelector('.chat-image-preview-nav.is-next') as HTMLButtonElement).click())
+    expect(shown()).toBe('second.png')
+    await act(async () => { dialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })) })
+    expect(shown()).toBe('first.png')
+    const copy = [...dialog().querySelectorAll('button')].find(button => button.textContent?.includes('Copy image'))!
+    await act(async () => copy.click())
+    expect(copyImageData).toHaveBeenCalledWith(expect.stringMatching(/^data:image\/png;base64,/))
+    expect(dialog().textContent).toContain('Copied')
+    await act(async () => (dialog().querySelector('.chat-image-preview-toolbar button[aria-label]') as HTMLButtonElement).click())
+    expect(document.querySelector('dialog.chat-image-preview')).toBeNull()
+    const backspace = async () => act(async () => { textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true })) })
+    // Text before the caret is edited normally.
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, 'hi'); textarea.dispatchEvent(new Event('input', { bubbles: true })) })
+    textarea.setSelectionRange(2, 2)
+    await backspace()
+    expect(names()).toHaveLength(2)
+    textarea.setSelectionRange(0, 0)
+    await backspace()
+    expect(names()).toEqual(['first.png'])
+    await backspace()
+    expect(names()).toEqual([])
+  })
+
+  it('browses and copies every image of a message in one preview', async () => {
+    const images = ['a', 'b', 'c'].map(id => ({ id, kind: 'image' as const, name: `${id}.png`, mimeType: 'image/png' as const, size: 5 }))
+    const copyAttachment = vi.fn().mockResolvedValue(undefined)
+    window.douchat = { copyAttachment, getAttachmentData: vi.fn(async (id: string) => `data:image/png;base64,${id}`) } as unknown as typeof window.douchat
+    const message = { ...incomingReply, conversationId: directConversation.id, source: undefined, attachments: images }
+    await act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={[message]} allMessages={[message]} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}} />))
+    await act(async () => container.querySelectorAll<HTMLButtonElement>('.message-image-button')[2].click())
+    const dialog = () => document.querySelector('dialog.chat-image-preview')!
+    expect(dialog().querySelector('.chat-image-preview-stage img')?.getAttribute('src')).toBe('data:image/png;base64,c')
+    expect(dialog().querySelector('.chat-image-preview-count')?.textContent).toBe('3 / 3')
+    await act(async () => (dialog().querySelector('.chat-image-preview-nav.is-next') as HTMLButtonElement).click())
+    expect(dialog().querySelector('.chat-image-preview-stage img')?.getAttribute('src')).toBe('data:image/png;base64,a')
+    await act(async () => { [...dialog().querySelectorAll('button')].find(button => button.textContent === 'Copy image')!.click() })
+    expect(copyAttachment).toHaveBeenCalledWith('a')
+    await act(async () => (dialog().querySelector('[aria-label="Close"]') as HTMLButtonElement).click())
+  })
+
   it('keeps the latest message visible when the queue grows without pulling readers away from history', async () => {
     const messages = [{ ...incomingReply, conversationId: directConversation.id }]
     const render = async (count: number) => act(async () => root.render(<ChatPane userName="You" userAvatar="" conversation={directConversation} messages={messages} allMessages={messages} agents={agents} members={agents} offline={false} onConnect={() => {}} inspectorOpen={false} onToggleInspector={() => {}} onOpenAgentProfile={() => {}} onOpenUserProfile={() => {}} onSend={async () => {}} onStop={() => {}}

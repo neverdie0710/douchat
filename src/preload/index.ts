@@ -38,6 +38,7 @@ const api: DouchatApi = {
   saveInvitationImage: (dataUrl) => ipcRenderer.invoke('douchat:save-invitation-image', dataUrl),
   copyText: (text) => ipcRenderer.invoke('douchat:copy-text', text),
   copyAttachment: (id) => ipcRenderer.invoke('douchat:copy-attachment', id),
+  copyImageData: (dataUrl) => ipcRenderer.invoke('douchat:copy-image-data', dataUrl),
   getSocialSnapshot: () => ipcRenderer.invoke('douchat:social-snapshot'),
   socialAction: (input) => ipcRenderer.invoke('douchat:social-action', input),
   platform: process.platform,
@@ -89,6 +90,7 @@ const api: DouchatApi = {
   exportAgentArchive: id => ipcRenderer.invoke('douchat:export-agent-archive', id),
   parseAgentArchive: (data, root) => ipcRenderer.invoke('douchat:parse-agent-archive', data, root),
   parseSkillArchive: data => ipcRenderer.invoke('douchat:parse-skill-archive', data),
+  getAgentSkill: (agentId, skillId) => ipcRenderer.invoke('douchat:get-agent-skill', agentId, skillId),
   updateAgent: (agentId: string, input: UpdateAgentInput) => ipcRenderer.invoke('douchat:update-agent', agentId, input),
   deleteAgent: (agentId: string) => ipcRenderer.invoke('douchat:delete-agent', agentId),
   startDirectChat: (agentId: string) => ipcRenderer.invoke('douchat:start-direct-chat', agentId),
@@ -148,6 +150,11 @@ const api: DouchatApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: UpdateState): void => listener(state)
     ipcRenderer.on('douchat:update-state', handler)
     return () => ipcRenderer.removeListener('douchat:update-state', handler)
+  },
+  onConnanyChanged: (listener: () => void) => {
+    const handler = (): void => listener()
+    ipcRenderer.on('douchat:connany-changed', handler)
+    return () => ipcRenderer.removeListener('douchat:connany-changed', handler)
   },
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot): void => listener(snapshot)

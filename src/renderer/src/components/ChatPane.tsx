@@ -6,7 +6,7 @@ import { mentionableAgents } from './common'
 import type { SocialAgent, SocialPerson } from '../../../shared/social'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { t, tr } from '../preferences'
-import { AtSign, FolderOpen, FileText, Check, ChevronDown, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
+import { AtSign, FolderOpen, FileText, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerDownRight, LoaderCircle, Lock, Mic, MoreHorizontal, Smile, SquareTerminal, TriangleAlert, Sparkles, Square, Trash2, ListEnd, X } from 'lucide-react'
 import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent, KeyboardEvent, ReactElement } from 'react'
 import type {
@@ -85,31 +85,67 @@ async function copyMessage(message: ChatMessage): Promise<void> {
   await window.douchat.copyAttachment(message.attachments[0].id)
 }
 
-function ImagePreview({ source, attachment, onClose }: { source: string; attachment: MessageAttachment; onClose: () => void }): ReactElement {
+/** One image in a preview gallery; its data loads only when it is shown. */
+interface PreviewImage { key: string; name?: string; source: () => Promise<string>; copy: () => Promise<void> }
+
+/** The clipboard takes PNG; convert other formats (WebP, GIF) through a canvas first. */
+async function copyImageDataUrl(dataUrl: string): Promise<void> {
+  if (dataUrl.startsWith('data:image/png;base64,')) return window.douchat.copyImageData(dataUrl)
+  const image = new Image()
+  image.src = dataUrl
+  await image.decode()
+  const canvas = document.createElement('canvas')
+  canvas.width = image.naturalWidth
+  canvas.height = image.naturalHeight
+  canvas.getContext('2d')!.drawImage(image, 0, 0)
+  return window.douchat.copyImageData(canvas.toDataURL('image/png'))
+}
+
+/** Shared by message images and composer images: browse with arrows, copy any image. */
+function ImagePreview({ images, initialIndex = 0, onClose }: { images: PreviewImage[]; initialIndex?: number; onClose: () => void }): ReactElement {
   const dialog = useRef<HTMLDialogElement>(null)
-  const [copied, setCopied] = useState(false)
+  const [index, setIndex] = useState(Math.min(initialIndex, images.length - 1))
+  const [sources, setSources] = useState<Record<string, string>>({})
+  const [failed, setFailed] = useState<Record<string, boolean>>({})
+  const [copied, setCopied] = useState('')
   const [error, setError] = useState('')
+  const current = images[index]
   useLayoutEffect(() => {
     const element = dialog.current!
     if (element.showModal) element.showModal()
     else element.setAttribute('open', '')
     return () => { element.close?.() }
   }, [])
+  useEffect(() => {
+    if (!current || sources[current.key] || failed[current.key]) return
+    let active = true
+    void current.source().then(source => { if (active) setSources(all => ({ ...all, [current.key]: source })) })
+      .catch(() => { if (active) setFailed(all => ({ ...all, [current.key]: true })) })
+    return () => { active = false }
+  }, [current?.key])
+  const go = (step: number) => { setIndex(value => (value + step + images.length) % images.length); setError('') }
+  if (!current) return <></>
+  const source = sources[current.key]
   return createPortal(<dialog ref={dialog} className="chat-image-preview" aria-label={t('Image preview')}
-    onCancel={event => { event.preventDefault(); onClose() }} onClick={event => { if (event.target === event.currentTarget) onClose() }}>
+    onCancel={event => { event.preventDefault(); onClose() }} onClick={event => { if (event.target === event.currentTarget) onClose() }}
+    onKeyDown={event => { if (images.length > 1 && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) { event.preventDefault(); go(event.key === 'ArrowLeft' ? -1 : 1) } }}>
     <div className="chat-image-preview-panel">
-      <div className="chat-image-preview-toolbar"><span>{attachment.name || t('Image')}</span>
-        <button type="button" onClick={() => { void window.douchat.copyAttachment(attachment.id).then(() => { setCopied(true); setError('') }).catch(() => setError(t('Image could not be copied'))) }}><Copy size={16} />{t(copied ? 'Copied' : 'Copy image')}</button>
+      <div className="chat-image-preview-toolbar"><span>{current.name || t('Image')}</span>
+        {images.length > 1 && <span className="chat-image-preview-count">{index + 1} / {images.length}</span>}
+        <button type="button" disabled={!source} onClick={() => { void current.copy().then(() => { setCopied(current.key); setError('') }).catch(() => setError(t('Image could not be copied'))) }}><Copy size={16} />{t(copied === current.key ? 'Copied' : 'Copy image')}</button>
         <button type="button" aria-label={t('Close')} onClick={onClose}><X size={20} /></button>
       </div>
-      <img src={source} alt={attachment.name || t('Image')} />
+      <div className="chat-image-preview-stage">
+        {images.length > 1 && <button type="button" className="chat-image-preview-nav is-previous" aria-label={t('Previous image')} onClick={() => go(-1)}><ChevronLeft size={24} /></button>}
+        {source ? <img src={source} alt={current.name || t('Image')} /> : <div className="chat-image-preview-state">{failed[current.key] ? t('Image could not be loaded') : t('Loading image')}</div>}
+        {images.length > 1 && <button type="button" className="chat-image-preview-nav is-next" aria-label={t('Next image')} onClick={() => go(1)}><ChevronRight size={24} /></button>}
+      </div>
       {error && <div role="alert">{error}</div>}
     </div>
   </dialog>, document.body)
 }
 
-function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactElement {
-  const [preview, setPreview] = useState(false)
+function MessageImage({ attachment, onOpen }: { attachment: MessageAttachment; onOpen: () => void }): ReactElement {
   const [source, setSource] = useState('')
   const [failed, setFailed] = useState(false)
 
@@ -127,16 +163,22 @@ function MessageImage({ attachment }: { attachment: MessageAttachment }): ReactE
 
   if (failed) return <div className="message-image-state">{t('Image could not be loaded')}</div>
   if (!source) return <div className="message-image-state is-loading" aria-label={t('Loading image')} />
-  return <><button type="button" className="message-image-button" aria-label={t('View image')} onClick={() => setPreview(true)}>
+  return <button type="button" className="message-image-button" aria-label={t('View image')} onClick={onOpen}>
     <img className="message-image" src={source} alt={attachment.name || t('Agent generated image')} />
-  </button>{preview && <ImagePreview source={source} attachment={attachment} onClose={() => setPreview(false)} />}</>
+  </button>
 }
 
 function MessageAttachments({ attachments }: { attachments?: MessageAttachment[] }): ReactElement | null {
+  const [preview, setPreview] = useState<number | null>(null)
   if (!attachments?.length) return null
   return (
     <div className={`message-attachments count-${Math.min(attachments.length, 4)}`}>
-      {attachments.map((attachment) => <MessageImage key={attachment.id} attachment={attachment} />)}
+      {attachments.map((attachment, index) => <MessageImage key={attachment.id} attachment={attachment} onOpen={() => setPreview(index)} />)}
+      {preview !== null && <ImagePreview initialIndex={preview} onClose={() => setPreview(null)} images={attachments.map(attachment => ({
+        key: attachment.id, name: attachment.name,
+        source: () => window.douchat.getAttachmentData(attachment.id),
+        copy: () => window.douchat.copyAttachment(attachment.id)
+      }))} />}
     </div>
   )
 }
@@ -1196,6 +1238,7 @@ export function ChatPane({
   const followUpTarget = socialFollowUpTarget(conversation, messages, draft, Math.max(followUpTime, Date.now()))
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([])
   const [attachmentError, setAttachmentError] = useState('')
+  const [previewImage, setPreviewImage] = useState<PendingImage | null>(null)
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [mention, setMention] = useState<MentionQuery | null>(null)
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -1559,6 +1602,14 @@ export function ChatPane({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.nativeEvent.isComposing) return
+    // Attachments sit before the text, so Backspace at the very start removes the
+    // nearest one: the last image or file, then the quoted message.
+    const atStart = event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0
+    if (event.key === 'Backspace' && atStart && pendingImages.length && !event.currentTarget.readOnly) {
+      event.preventDefault()
+      removePendingImage(pendingImages[pendingImages.length - 1].id)
+      return
+    }
     if (event.key === 'Backspace' && !event.currentTarget.value && quotedMessage && !event.currentTarget.readOnly) {
       event.preventDefault()
       setQuotedMessage(null)
@@ -1742,12 +1793,16 @@ export function ChatPane({
             attachments={quotedMessage.attachments}
             onCancel={() => setQuotedMessage(null)}
           />}
+          {previewImage && pendingImages.some(image => image.id === previewImage.id) && <ImagePreview
+            initialIndex={pendingImages.filter(image => !image.isFile).findIndex(image => image.id === previewImage.id)}
+            onClose={() => { setPreviewImage(null); window.setTimeout(() => textareaRef.current?.focus()) }}
+            images={pendingImages.filter(image => !image.isFile).map(image => ({ key: image.id, name: image.name, source: async () => image.previewUrl, copy: () => copyImageDataUrl(image.previewUrl) }))} />}
           {pendingImages.length > 0 && (
             <div className="composer-images" aria-label={t('Images ready to send')}>
               {pendingImages.map((image) => (
                 <div className={image.isFile ? 'composer-file' : 'composer-image'} key={image.id}>
-                  {image.isFile ? <><FileText size={28} aria-hidden="true" /><span className="composer-file-info"><strong title={image.name}>{image.name}</strong><small>{image.size < 1024 ? `${image.size} B` : image.size < 1024 * 1024 ? `${(image.size / 1024).toFixed(1)} KB` : `${(image.size / 1024 / 1024).toFixed(1)} MB`}</small></span></> : <img src={image.previewUrl} alt={image.name || t('Pasted image')} />}
-                  <button type="button" onClick={() => removePendingImage(image.id)} aria-label={image.isFile ? '移除文件' : t('Remove image')} title={image.isFile ? '移除文件' : t('Remove image')}>
+                  {image.isFile ? <><FileText size={28} aria-hidden="true" /><span className="composer-file-info"><strong title={image.name}>{image.name}</strong><small>{image.size < 1024 ? `${image.size} B` : image.size < 1024 * 1024 ? `${(image.size / 1024).toFixed(1)} KB` : `${(image.size / 1024 / 1024).toFixed(1)} MB`}</small></span></> : <button type="button" className="composer-image-open" aria-label={t('View image')} onClick={() => setPreviewImage(image)}><img src={image.previewUrl} alt={image.name || t('Pasted image')} /></button>}
+                  <button type="button" className="composer-attachment-remove" onClick={() => removePendingImage(image.id)} aria-label={image.isFile ? '移除文件' : t('Remove image')} title={image.isFile ? '移除文件' : t('Remove image')}>
                     <X size={13} strokeWidth={2.2} />
                   </button>
                 </div>

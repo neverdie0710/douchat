@@ -40,6 +40,8 @@ export function toolCapability(name: string): SensitiveCapability {
   if (name === 'computer_open') return 'network'
   if (name.startsWith('computer_')) return 'browserControl'
   if (/^(email|mail)_/.test(name)) return /send|delete|move|mark|draft|reply/.test(name) ? 'accountWrite' : 'accountRead'
+  // Connector writes get their own confirmation inside the call; see ConnanyManager.
+  if (/^[a-z]+_(list_tools|call_tool)$/.test(name) || name === 'connector_accounts' || name === 'request_connection') return 'accountRead'
   if (name === 'create_routine') return 'automation'
   return 'otherTools'
 }
@@ -83,7 +85,7 @@ export class AgentPermissionBroker {
     for (const [taskId, task] of this.tasks) if (task.agentId === id) this.endTask(taskId)
     for (const entry of this.pending.values()) if (entry.request.agentId === id) entry.finish('cancelled')
   }
-  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details' | 'context'>, signal?: AbortSignal, forceAsk = false, taskId?: string, native?: NativeAppSession): Promise<void> {
+  async authorize(config: AgentConfig, input: Pick<PermissionRequest, 'requester' | 'requesterId' | 'requesterKind' | 'roomName' | 'capability' | 'operation' | 'details' | 'context' | 'connect'>, signal?: AbortSignal, forceAsk = false, taskId?: string, native?: NativeAppSession): Promise<void> {
     signal?.throwIfAborted()
     if (!config.ownerId || config.ownerId !== this.currentOwner()) throw new Error('Agent account changed')
     if (input.details.length > 64000) throw new Error('Operation is too large to review; split it into smaller requests')

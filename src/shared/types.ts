@@ -687,6 +687,8 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   exportAgentArchive: (agentId: string) => Promise<boolean>
   parseAgentArchive: (data: Uint8Array, root?: string) => Promise<import('./agentArchive').AgentArchivePreview>
   parseSkillArchive: (data: Uint8Array) => Promise<import('./agentCustomization').AgentSkill[]>
+  /** The full skill, including the resource files snapshots leave out. */
+  getAgentSkill: (agentId: string, skillId: string) => Promise<import('./agentCustomization').AgentSkill>
   updateAgent: (agentId: string, input: UpdateAgentInput) => Promise<AppSnapshot>
   deleteAgent: (agentId: string) => Promise<AppSnapshot>
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
@@ -728,5 +730,6 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   onAuthState: (listener: (state: DesktopAuthState) => void) => () => void
   onCreditsUpdated: (listener: () => void) => () => void
   onUpdateState: (listener: (state: UpdateState) => void) => () => void
+  onConnanyChanged: (listener: () => void) => () => void
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => () => void
 }

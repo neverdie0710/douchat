@@ -4,6 +4,8 @@ export const CREDITS_CALLBACK_HOST = 'payment'
 export const CREDITS_CALLBACK_PATH = '/callback'
 export const DESKTOP_AUTH_CLIENT_ID = 'douchat-desktop'
 export const DOUCHAT_PRODUCTION_ORIGIN = 'https://douchat.ai'
+/** Registered only by the development host, so its browser returns never open the packaged app. */
+export const DEVELOPMENT_APP_SCHEME = 'douchat-dev'
 
 export interface AuthCallbackPayload {
   code: string
@@ -89,6 +91,17 @@ export function parseDesktopGroupUrl(input: string): string | undefined {
     const url = new URL(input)
     const room = url.searchParams.get('room') ?? ''
     if (url.protocol === 'douchat:' && url.hostname === 'group' && url.pathname === '/open' && !url.username && !url.password && !url.port && /^[A-Za-z0-9_-]{1,200}$/.test(room)) return room
+  } catch { /* Ignore unrelated app links. */ }
+  return undefined
+}
+
+/** douchat://connectors/callback?connany_session_id=… opened by the backend's
+ * return page after a connector authorization. Returns the (untrusted) session ID. */
+export function parseDesktopConnectorsUrl(input: string, scheme = 'douchat'): string | undefined {
+  try {
+    const url = new URL(input)
+    const id = url.searchParams.get('connany_session_id') ?? ''
+    if (url.protocol === `${scheme}:` && url.hostname === 'connectors' && url.pathname === '/callback' && !url.username && !url.password && !url.port && /^[A-Za-z0-9_-]{0,200}$/.test(id)) return id
   } catch { /* Ignore unrelated app links. */ }
   return undefined
 }

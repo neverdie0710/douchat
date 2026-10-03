@@ -11,6 +11,9 @@ const projectRoot = resolve(import.meta.dirname, '..')
 const entitlements = join(projectRoot, 'resources', 'entitlements.mac.plist')
 const developmentBundleId = 'ai.thinkany.douchat.dev'
 const developmentAppName = 'Douchat Dev'
+// Packaged Douchat owns douchat://. The development host gets its own scheme so
+// browser returns (e.g. connector authorization) reach this process instead.
+const developmentUrlScheme = 'douchat-dev'
 const launchServicesRegister = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister'
 const microphoneUsageDescription = 'Douchat uses the microphone only for voice typing. / Douchat 仅在语音输入时使用麦克风。'
 const speechRecognitionUsageDescription = 'Douchat converts your speech into message text only while voice input is active. / Douchat 仅在语音输入期间将你的语音转换为消息文字。'
@@ -70,6 +73,7 @@ function hasPreparedBundleMetadata() {
       || plistValue('NSDownloadsFolderUsageDescription') !== downloadsUsageDescription
       || plistValue('NSDesktopFolderUsageDescription') !== desktopUsageDescription
       || plistValue('NSDocumentsFolderUsageDescription') !== documentsUsageDescription
+      || plistValue('CFBundleURLTypes.0.CFBundleURLSchemes.0') !== developmentUrlScheme
     ) return false
     return helperBundles.every((helper) => (
       plistValue('CFBundleIdentifier', helper.infoPlist) === helper.bundleId
@@ -120,6 +124,7 @@ setPlistString('NSSpeechRecognitionUsageDescription', speechRecognitionUsageDesc
 setPlistString('NSDownloadsFolderUsageDescription', downloadsUsageDescription)
 setPlistString('NSDesktopFolderUsageDescription', desktopUsageDescription)
 setPlistString('NSDocumentsFolderUsageDescription', documentsUsageDescription)
+execFileSync('/usr/bin/plutil', ['-replace', 'CFBundleURLTypes', '-json', JSON.stringify([{ CFBundleURLName: developmentBundleId, CFBundleURLSchemes: [developmentUrlScheme] }]), infoPlist], { stdio: 'inherit' })
 for (const helper of helperBundles) {
   setPlistString('CFBundleIdentifier', helper.bundleId, helper.infoPlist)
   setPlistString('CFBundleName', helper.name, helper.infoPlist)
