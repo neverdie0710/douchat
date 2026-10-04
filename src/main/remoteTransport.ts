@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, chmod, lstat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
@@ -6,6 +6,7 @@ import type { RemoteAgentSpec } from '../shared/types'
 import { REMOTE_BOOTSTRAP, encodePayload, probeScript } from './remoteScript'
 import { parseRemoteProbe, validateRemoteSpec } from './remoteValidate'
 import { killLocalProcess, type LaunchSpec } from './localAgentConnection'
+import { loginShellSshAuthSock } from './shellPath'
 export type { LaunchSpec } from './localAgentConnection'
 
 let controlDirectory: string | undefined
@@ -43,9 +44,10 @@ export function controlSocketPath(directory: string, name: string): string | und
   return Buffer.byteLength(path) + CONTROL_TEMP_SUFFIX <= UNIX_SOCKET_PATH_MAX ? path : undefined
 }
 
-function resolveTarget(spec: RemoteAgentSpec): Promise<string | undefined> {
+async function resolveTarget(spec: RemoteAgentSpec): Promise<string | undefined> {
+  const env = await sshLaunchEnvironment()
   return new Promise(resolve => {
-    const child = spawn(sshBinary(), [...sshIdentityArgs(spec), '-G', '--', spec.host], { env: sshEnvironment(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], shell: false })
+    const child = spawn(sshBinary(), [...sshIdentityArgs(spec), '-G', '--', spec.host], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], shell: false })
     let output = ''
     const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(undefined) }, 5000)
     child.stdout.setEncoding('utf8')
@@ -98,6 +100,35 @@ export function sshEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.
   return env
 }
 
+/** Exit status 0 means the agent at this socket is reachable and holds at least one key. */
+function agentHasKeys(socket: string): Promise<boolean> {
+  return new Promise(resolve => {
+    execFile('/usr/bin/ssh-add', ['-l'], { env: { SSH_AUTH_SOCK: socket }, timeout: 3000, killSignal: 'SIGKILL' }, error => resolve(!error))
+  })
+}
+
+let terminalAgentSocket: Promise<string | undefined> | undefined
+/** A Finder-launched app gets launchd's default agent, while Terminal may export
+ * another one from a shell startup file. Prefer the terminal's agent only when it
+ * holds keys: `eval "$(ssh-agent)"` in an rc file starts an empty agent per shell. */
+async function sshAgentSocket(): Promise<string | undefined> {
+  const current = process.env.SSH_AUTH_SOCK
+  if (process.platform === 'win32') return current
+  const terminal = await loginShellSshAuthSock()
+  if (!terminal || terminal === current) return current
+  terminalAgentSocket ??= agentHasKeys(terminal).then(usable => usable ? terminal : undefined)
+  const chosen = await terminalAgentSocket
+  // Recheck later: the agent may be unlocked or loaded after Douchat started.
+  if (!chosen) terminalAgentSocket = undefined
+  return chosen ?? current
+}
+
+/** The ssh environment for an actual launch, using the terminal's agent when needed. */
+export async function sshLaunchEnvironment(): Promise<NodeJS.ProcessEnv> {
+  const socket = await sshAgentSocket()
+  return sshEnvironment({ ...process.env, ...(socket ? { SSH_AUTH_SOCK: socket } : {}) })
+}
+
 export function sshIdentityArgs(spec: RemoteAgentSpec): string[] {
   return [
     ...(spec.port ? ['-p', String(spec.port)] : []),
@@ -142,7 +173,7 @@ function hostKey(spec: RemoteAgentSpec): string { return JSON.stringify([spec.ho
 export async function remoteLaunch(spec: RemoteAgentSpec, script: string): Promise<LaunchSpec> {
   const control = await controlPath(spec)
   if (control) usedHosts.set(hostKey(spec), { spec, control })
-  return { file: sshBinary(), args: sshArgs(spec, script, control), env: sshEnvironment() }
+  return { file: sshBinary(), args: sshArgs(spec, script, control), env: await sshLaunchEnvironment() }
 }
 
 export function spawnLaunch(launch: LaunchSpec): ChildProcessWithoutNullStreams {
@@ -193,7 +224,7 @@ export function sshFailure(spec: RemoteAgentSpec, stderr: string, code: number |
   if (/Host key verification failed|No .*host key is known|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(stderr)) {
     return new Error(`The host key for ${host} is not trusted yet. Run "ssh ${host}" once in Terminal to verify its fingerprint, then try again.`)
   }
-  if (/Permission denied|Too many authentication failures/i.test(stderr)) return new Error(`SSH authentication to ${host} failed. Configure key-based login (ssh-agent or an identity file); passwords are not supported.`)
+  if (/Permission denied|Too many authentication failures/i.test(stderr)) return new Error(`SSH authentication to ${host} failed. Douchat runs /usr/bin/ssh without prompts, so it cannot enter a password or key passphrase. Check with "/usr/bin/ssh -o BatchMode=yes ${host} true" in Terminal; if that fails, load the key into ssh-agent (ssh-add) or set its identity file.`)
   if (/Could not resolve hostname|Name or service not known/i.test(stderr)) return new Error(`Could not resolve ${host}.`)
   if (/Connection refused|Connection timed out|Operation timed out|No route to host/i.test(stderr)) return new Error(`Could not connect to ${host}.`)
   const text = stderr.replace(/\x1B\[[0-9;]*[A-Za-z]/g, '').trim().slice(-800)
@@ -240,10 +271,11 @@ export function forgetRemoteProbes(): void { probes.clear() }
 export async function closeRemoteConnections(spec?: RemoteAgentSpec): Promise<void> {
   const targets = spec ? [usedHosts.get(hostKey(spec))].filter(Boolean) as { spec: RemoteAgentSpec; control: string }[] : [...usedHosts.values()]
   if (spec) controls.delete(hostKey(spec)); else controls.clear()
+  const env = await sshLaunchEnvironment()
   await Promise.all(targets.map(({ spec: target, control }) => new Promise<void>(resolve => {
     usedHosts.delete(hostKey(target))
     const child = spawn(sshBinary(), ['-o', controlPathOption(control), '-O', 'exit', ...sshIdentityArgs(target), '--', target.host], {
-      env: sshEnvironment(), windowsHide: true, stdio: 'ignore', shell: false
+      env, windowsHide: true, stdio: 'ignore', shell: false
     })
     const timer = setTimeout(() => { child.kill('SIGKILL'); resolve() }, 3000)
     child.once('error', () => { clearTimeout(timer); resolve() })

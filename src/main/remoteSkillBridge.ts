@@ -3,7 +3,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { RemoteAgentSpec } from '../shared/types'
 import { openLocalSkillBridge } from './localSkillBridge'
 import { bridgeCheckScript, bridgeCleanupScript, bridgeSocketPath } from './remoteScript'
-import { remoteExec, sshBinary, sshBridgeArgs, sshEnvironment, spawnLaunch } from './remoteTransport'
+import { remoteExec, sshBinary, sshBridgeArgs, sshLaunchEnvironment, spawnLaunch } from './remoteTransport'
 import { killLocalProcess } from './localAgentConnection'
 
 export interface SkillBridge { close: () => void; prompt: string }
@@ -17,7 +17,7 @@ export async function openRemoteSkillBridge(
   const local = await openLocalSkillBridge(tools, signal)
   const id = randomUUID()
   const socket = bridgeSocketPath(spec.remoteHome, id)
-  const child = spawnLaunch({ file: sshBinary(), args: sshBridgeArgs(spec, socket, local.port), env: sshEnvironment() })
+  const child = spawnLaunch({ file: sshBinary(), args: sshBridgeArgs(spec, socket, local.port), env: await sshLaunchEnvironment() })
   let exited = false
   child.once('exit', () => { exited = true })
   child.once('error', () => { exited = true })

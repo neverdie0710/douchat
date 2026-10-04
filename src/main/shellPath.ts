@@ -113,6 +113,17 @@ async function loginShellCliEnvironment(): Promise<NodeJS.ProcessEnv> {
 export function resetShellPath(): void {
   cachedPath = undefined;
   cachedCliEnvironment = undefined;
+  cachedSshAuthSock = undefined;
+}
+
+let cachedSshAuthSock: Promise<string | undefined> | undefined;
+
+/** The ssh-agent socket a terminal would use, e.g. 1Password, Secretive or
+ * gpg-agent exported from a shell startup file instead of ~/.ssh/config. */
+export function loginShellSshAuthSock(): Promise<string | undefined> {
+  if (IS_WIN) return Promise.resolve(undefined);
+  cachedSshAuthSock ??= loginShellValue("$SSH_AUTH_SOCK").catch(() => undefined);
+  return cachedSshAuthSock;
 }
 
 export function loginShellPath(): Promise<string | undefined> {
