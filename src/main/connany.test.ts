@@ -14,7 +14,7 @@ function setup(options: { allowWrites?: boolean } = {}) {
   ]
   const store = { getConnanyNames: () => ({ ...names }), setConnanyName: (_: string, id: string, name: string) => { names[id] = name }, currentAccountId: 'user-a', accountAgents: [{ id: 'agent-a' }, { id: 'agent-b' }, { id: 'local', localAgentId: 'cli' }], getConnanySelections: () => selections, setConnanySelections: (_: string, b: ConnectorSelection[]) => { selections = b } } as unknown as DouchatStore
   const fail = (code: string, status = 409) => Response.json({ code: -1, message: `Connector error: ${code}` }, { status })
-  const handlers: Record<string, (body: any) => Response | undefined> = {}
+  const handlers: Record<string, (body: any) => Response | Promise<Response> | undefined> = {}
   const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body))
     const custom = handlers[body.op]?.(body)
@@ -58,6 +58,21 @@ describe('Connany executor', () => {
     expect(manager.createTools('stranger')).toEqual([])
     // Local CLI agents get the same tools through the loopback bridge.
     expect(manager.createTools('local').map(t => t.name)).toContain('linear_list_tools')
+  })
+  it('waits for the account list only on the first turn, then refreshes it in the background', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const { manager, bodies, handlers } = setup()
+      await Promise.all([manager.prepareForTurn(), manager.prepareForTurn()])
+      expect(bodies('list')).toHaveLength(1)
+      vi.setSystemTime(Date.now() + 60_000)
+      let release!: () => void
+      handlers.list = () => new Promise<Response>(resolve => { release = () => resolve(Response.json({ code: 0, data: { connectors: [], connections: [] } })) })
+      // A stale list doesn't hold up the turn; the refresh happens alongside it.
+      await manager.prepareForTurn()
+      expect(bodies('list')).toHaveLength(2)
+      release()
+    } finally { vi.useRealTimers() }
   })
   it('lists and calls tools with the resolved connection; the model never chooses an ID', async () => {
     const { manager, tool, bodies, output } = setup()

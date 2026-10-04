@@ -720,6 +720,8 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   deleteTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
   setActiveTopic: (conversationId: string, topicId: string) => Promise<AppSnapshot>
   sendMessage: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) => Promise<void>
+  /** Hint that the user is about to send; starts a local agent's process early. */
+  prewarmConversation: (conversationId: string) => Promise<void>
   stopConversation: (conversationId: string) => Promise<void>
   clearConversation: (conversationId: string) => Promise<AppSnapshot>
   resetConversationContext: (conversationId: string) => Promise<AppSnapshot>

@@ -7,7 +7,7 @@ import { configurableLocalAgents, type LocalModel, type LocalModelList } from '.
 import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 import { executableCommand } from './windowsCommand'
-import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
+import { LocalAgentConnection, killLocalProcess, spawnOwnedProcess } from './localAgentConnection'
 import { acquireLocalProcessSlot, localAgentExecutable } from './localAgentRuntime'
 import type { LocalAgent, RemoteAgentSpec } from '../shared/types'
 import { RemoteRun } from './remoteFileChannel'
@@ -90,7 +90,7 @@ async function discoverLocalAgentModels(id: string, signal: AbortSignal): Promis
     const args = id === 'openclaw' ? ['models', 'list', '--json'] : id === 'omp' ? ['models', '--json'] : ['models']
     signal.throwIfAborted()
     const output = await new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...appendLocalAgentArguments(args, agent.args)], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+      const child = spawnOwnedProcess(command.file, [...command.prefix, ...appendLocalAgentArguments(args, agent.args)], { cwd, env, windowsHide: true })
       let stdout = ''
       let failure: Error | undefined
       const stop = (error: Error): void => { failure = error; killLocalProcess(child) }

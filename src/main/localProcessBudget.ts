@@ -4,6 +4,8 @@ export class LocalProcessBudget {
   private readonly waiting: Array<{ grant: () => void; cancel: () => void }> = []
   constructor(private readonly limit: number) {}
   get hasWaiters(): boolean { return this.waiting.length > 0 }
+  /** Slots free right now, without making anyone wait or evicting a session. */
+  get available(): number { return this.waiting.length ? 0 : this.limit - this.used }
   acquire(signal?: AbortSignal, pressure?: () => void): Promise<() => void> {
     return new Promise((resolve, reject) => {
       const remove = () => {

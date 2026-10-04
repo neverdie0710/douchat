@@ -3,15 +3,32 @@ export type { LocalProgress, ProgressListener, LocalToolApproval, LocalApprovalH
 import { appendLocalAgentArguments } from '../shared/localAgentArguments'
 import { localModelId, withLocalModel } from '../shared/localModels'
 import { clampThinking, localThinkingLevels, withLocalThinking, type ThinkingLevel } from '../shared/thinkingLevels'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { executableCommand } from './windowsCommand'
 import { randomUUID } from 'node:crypto'
-import { codexComputerUseInstructions, codexComputerUseInventory } from './codexComputerUse'
+import { COMPUTER_USE_SERVERS, codexComputerUseInstructions, codexComputerUseInventory } from './codexComputerUse'
 
 /** Process launch description (local executable or the system ssh client). */
 export interface LaunchSpec { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd?: string }
 /** Build the ssh launch for the agent's protocol arguments; `cwd` is remote. */
 export interface RemoteConnectionLaunch { cwd: string; launch: (agentArgs: string[]) => Promise<LaunchSpec> }
+
+const ownedProcesses = new Set<ChildProcessWithoutNullStreams>()
+
+/** Every CLI Douchat starts runs in its own process group and is tracked until it
+ * closes, so quitting can reap whatever a dispose path missed. */
+export function spawnOwnedProcess(file: string, args: string[], options: Omit<SpawnOptions, 'detached' | 'stdio'>): ChildProcessWithoutNullStreams {
+  const child = spawn(file, args, { ...options, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] }) as ChildProcessWithoutNullStreams
+  ownedProcesses.add(child)
+  child.once('close', () => ownedProcesses.delete(child))
+  child.once('error', () => { if (!child.pid) ownedProcesses.delete(child) })
+  return child
+}
+
+/** Last line of defense on quit: kill every owned process group still alive. */
+export function killAllLocalProcesses(): void {
+  for (const child of ownedProcesses) killLocalProcess(child)
+}
 
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
@@ -26,7 +43,21 @@ export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
   } catch { /* Already exited. */ }
 }
 
+/** Let an idle CLI shut down its MCP servers (browsers, file locks) itself:
+ * closing stdin ends Codex and Claude cleanly. Escalate if it doesn't exit, and
+ * sweep the group afterwards for children that outlived the CLI. */
+export function stopLocalProcess(child: ChildProcessWithoutNullStreams, graceMs = 2_000): void {
+  if (!child.pid || child.exitCode !== null || child.signalCode !== null) { killLocalProcess(child); return }
+  const terminate = setTimeout(() => {
+    try { if (process.platform !== 'win32') process.kill(-child.pid!, 'SIGTERM') } catch { /* Already exited. */ }
+  }, graceMs)
+  const force = setTimeout(() => killLocalProcess(child), graceMs * 2)
+  child.once('exit', () => { clearTimeout(terminate); clearTimeout(force); killLocalProcess(child) })
+  try { child.stdin.end() } catch { killLocalProcess(child) }
+}
+
 type Packet = Record<string, any>
+const UNVERIFIED_COMPUTER_USE = 'Douchat could not verify the native Computer Use inventory for this session. This does not prove the tools are absent. Inspect your exposed tools and report any actual tool failure precisely.'
 type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 
 /** One private stdio connection per Douchat conversation/topic/agent. No TCP listener. */
@@ -41,6 +72,7 @@ export class LocalAgentConnection {
   private failTurn?: (error: Error) => void
   private failure?: Error
   private turnCount = 0
+  private computerInventory?: { at: number; context: Promise<string> }
   private turnActivity = false
   private turnInProgress = false
   private readonly nativeSessionId = randomUUID()
@@ -76,9 +108,7 @@ export class LocalAgentConnection {
     const launch: LaunchSpec = remote ? await remote.launch(agentArgs) : { file: command!.file, args: [...command!.prefix, ...agentArgs], env, cwd }
     if (this.failure) throw this.failure
     if (remote) cwd = remote.cwd
-    this.child = spawn(launch.file, launch.args, {
-      cwd: launch.cwd, env: launch.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], shell: false
-    })
+    this.child = spawnOwnedProcess(launch.file, launch.args, { cwd: launch.cwd, env: launch.env, windowsHide: true, shell: false })
     this.child.stdout.setEncoding('utf8')
     this.child.stderr.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => this.read(chunk))
@@ -118,6 +148,7 @@ export class LocalAgentConnection {
       if (typeof response.thread?.id !== 'string') throw new Error('Codex did not return a thread ID')
       this.threadId = response.thread.id
       resume?.remember(this.threadId)
+      if (toolApprovals && !this.remote) void this.computerUseContext()
     }
   }
 
@@ -296,6 +327,33 @@ export class LocalAgentConnection {
     if (!this.failure && Buffer.byteLength(this.buffer, 'utf8') > maxFrameBytes) this.close(new Error('Local agent protocol frame exceeds 64 MB'))
   }
 
+  /** What the model should know about native Computer Use, checked once per
+   * session (re-checked after 5 minutes, or next turn if it couldn't be verified).
+   * Started when the session connects, so a warmed session already has it. */
+  private computerUseContext(): Promise<string> {
+    if (this.computerInventory && Date.now() - this.computerInventory.at < 5 * 60_000) return this.computerInventory.context
+    const entry = { at: Date.now(), context: this.loadComputerUseInventory().catch(() => UNVERIFIED_COMPUTER_USE) }
+    this.computerInventory = entry
+    void entry.context.then(text => { if (text === UNVERIFIED_COMPUTER_USE && this.computerInventory === entry) this.computerInventory = undefined })
+    return entry.context
+  }
+
+  /** Ask only for the Computer Use servers, tools and auth only: the full
+   * inventory lists every app connector (hundreds of tools) and took 5-9 s,
+   * longer than the timeout, so each turn waited and then gave up. */
+  private async loadComputerUseInventory(): Promise<string> {
+    const query = async (serverName: string): Promise<unknown[]> => {
+      const result = await this.request('mcpServerStatus/list', { threadId: this.threadId, limit: 100, serverName, detail: 'toolsAndAuthOnly' }, false, 5_000)
+      if (!Array.isArray(result?.data)) throw new Error('Invalid native tool inventory')
+      return result.data
+    }
+    const [primary, ...legacy] = COMPUTER_USE_SERVERS
+    const first = await query(primary)
+    // An older Codex ignores the filter and already returned every server.
+    if (first.some(server => !COMPUTER_USE_SERVERS.includes(String((server as Packet)?.name)))) return codexComputerUseInventory(first)
+    return codexComputerUseInventory([...first, ...(await Promise.all(legacy.map(query))).flat()])
+  }
+
   async turn(prompt: string, signal: AbortSignal | undefined, progress?: ProgressListener, onApproval?: LocalApprovalHandler): Promise<string> {
     signal?.throwIfAborted()
     if (this.failure) throw this.failure
@@ -323,23 +381,7 @@ export class LocalAgentConnection {
     try {
       let computerContext = ''
       if (this.kind === 'codex' && onApproval && !this.remote) {
-        // Thread-scoped inventory reflects the actual plugin configuration. A
-        // missing/old discovery API must not break ordinary coding conversations.
-        try {
-          const servers: unknown[] = []
-          let cursor: string | undefined
-          for (let page = 0; page < 4; page++) {
-            const result = await this.request('mcpServerStatus/list', { threadId: this.threadId, limit: 100, ...(cursor ? { cursor } : {}) }, false, 5_000)
-            if (!Array.isArray(result?.data)) throw new Error('Invalid native tool inventory')
-            servers.push(...result.data)
-            cursor = typeof result.nextCursor === 'string' ? result.nextCursor : undefined
-            if (!cursor) break
-            if (page === 3) throw new Error('Native tool inventory was incomplete')
-          }
-          computerContext = codexComputerUseInventory(servers)
-        } catch {
-          computerContext = 'Douchat could not verify the native Computer Use inventory for this session. This does not prove the tools are absent. Inspect your exposed tools and report any actual tool failure precisely.'
-        }
+        computerContext = await this.computerUseContext()
         signal?.throwIfAborted()
       }
       return await new Promise<string>((resolve, reject) => {
@@ -420,7 +462,8 @@ export class LocalAgentConnection {
     }
   }
 
-  close(error = new Error('Local agent session closed')): void {
+  /** `graceful` is for idle sessions being released; errors and Stop kill at once. */
+  close(error = new Error('Local agent session closed'), graceful = false): void {
     if (this.failure) return
     this.failure = error
     this.nativeSessionLifetime.abort()
@@ -429,7 +472,7 @@ export class LocalAgentConnection {
     this.pending.clear()
     this.failTurn?.(error)
     this.buffer = ''
-    if (this.child) killLocalProcess(this.child)
+    if (this.child) (graceful && !this.turnInProgress ? stopLocalProcess : killLocalProcess)(this.child)
     else this.resolveClosed()
   }
   async disposed(): Promise<void> { await this.closedPromise }

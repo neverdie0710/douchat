@@ -54,6 +54,8 @@ export interface LocalRunOptions {
 export interface AgentExecutor {
   run(config: AgentConfig, prompt: string, signal?: AbortSignal, images?: LocalAgentImage[], options?: LocalRunOptions): Promise<LocalAgentReply>
   releaseIdleConnections?(conversationId: string, directAgentIds?: string[]): void
+  /** Start a conversation's long-lived process ahead of its next turn. */
+  prepare?(config: AgentConfig, options: LocalRunOptions): Promise<void>
   disposeAgent(agentId: string): void
   resetConversation(conversationId: string, topicId?: string, directAgentIds?: string[], ownerId?: string): void
 }

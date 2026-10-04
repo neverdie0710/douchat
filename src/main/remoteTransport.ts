@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path'
 import type { RemoteAgentSpec } from '../shared/types'
 import { REMOTE_BOOTSTRAP, encodePayload, probeScript } from './remoteScript'
 import { parseRemoteProbe, validateRemoteSpec } from './remoteValidate'
-import { killLocalProcess, type LaunchSpec } from './localAgentConnection'
+import { killLocalProcess, spawnOwnedProcess, type LaunchSpec } from './localAgentConnection'
 import { loginShellSshAuthSock } from './shellPath'
 export type { LaunchSpec } from './localAgentConnection'
 
@@ -177,9 +177,7 @@ export async function remoteLaunch(spec: RemoteAgentSpec, script: string): Promi
 }
 
 export function spawnLaunch(launch: LaunchSpec): ChildProcessWithoutNullStreams {
-  return spawn(launch.file, launch.args, {
-    cwd: launch.cwd, env: launch.env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], shell: false
-  })
+  return spawnOwnedProcess(launch.file, launch.args, { cwd: launch.cwd, env: launch.env, windowsHide: true, shell: false })
 }
 
 export interface RemoteExecResult { code: number | null; stdout: Buffer; stderr: string }

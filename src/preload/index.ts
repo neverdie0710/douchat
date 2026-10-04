@@ -123,6 +123,7 @@ const api: DouchatApi = {
     ipcRenderer.invoke('douchat:set-active-topic', conversationId, topicId),
   sendMessage: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) =>
     ipcRenderer.invoke('douchat:send-message', conversationId, text, images, files, mentions),
+  prewarmConversation: (conversationId: string) => ipcRenderer.invoke('douchat:prewarm-conversation', conversationId),
   stopConversation: (conversationId: string) => ipcRenderer.invoke('douchat:stop-conversation', conversationId),
   clearConversation: (conversationId: string) => ipcRenderer.invoke('douchat:clear-conversation', conversationId),
   resetConversationContext: (conversationId: string) => ipcRenderer.invoke('douchat:reset-conversation-context', conversationId),

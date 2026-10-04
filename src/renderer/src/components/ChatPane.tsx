@@ -1249,6 +1249,16 @@ export function ChatPane({
   const scrollRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Starting a local agent takes seconds; begin while the user is still typing.
+  const prewarmedAt = useRef(new Map<string, number>())
+  const prewarm = (): void => {
+    if (!conversation || conversation.type !== 'direct') return
+    if (!agents.find(agent => agent.id === conversation.agentIds[0])?.localAgentId) return
+    const now = Date.now()
+    if (now - (prewarmedAt.current.get(conversation.id) ?? 0) < 30_000) return
+    prewarmedAt.current.set(conversation.id, now)
+    void window.douchat.prewarmConversation?.(conversation.id).catch(() => {})
+  }
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [readingFiles, setReadingFiles] = useState(false)
   const selectedConversationRef = useRef(conversation?.id)
@@ -1812,9 +1822,11 @@ export function ChatPane({
           <textarea
             ref={textareaRef}
             value={draft}
+            onFocus={prewarm}
             onChange={(event) => {
               setDraft(event.target.value)
               trackMention(event.target.value, event.target.selectionStart)
+              prewarm()
             }}
             onKeyUp={(event) => trackMention(event.currentTarget.value, event.currentTarget.selectionStart)}
             onClick={(event) => trackMention(event.currentTarget.value, event.currentTarget.selectionStart)}

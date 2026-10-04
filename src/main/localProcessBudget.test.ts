@@ -22,3 +22,16 @@ it('grants FIFO leases only after release and drops cancelled waiters', async ()
   releaseThird()
   expect(budget.hasWaiters).toBe(false)
 })
+
+it('reports free slots only when nobody is waiting, so a prewarm never queues', async () => {
+  const budget = new LocalProcessBudget(1)
+  expect(budget.available).toBe(1)
+  const release = await budget.acquire()
+  expect(budget.available).toBe(0)
+  const waiting = budget.acquire()
+  release()
+  const releaseWaiting = await waiting
+  expect(budget.available).toBe(0)
+  releaseWaiting()
+  expect(budget.available).toBe(1)
+})

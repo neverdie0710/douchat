@@ -4184,6 +4184,30 @@ Not sure where to start? Tell me what you'd like to accomplish, and we'll try it
     this.emit()
   }
 
+  /** The user is about to message a local agent: start its process (and refresh
+   * connectors) now, so the turn doesn't wait for launch and session resume.
+   * Mirrors the options of a direct local turn so the turn reuses this process. */
+  async prewarmConversation(conversationId: string): Promise<void> {
+    const conversation = this.store.conversation(conversationId)
+    if (!conversation || conversation.type !== 'direct' || conversation.ownerId !== this.store.currentAccountId || conversation.agentIds.length !== 1) return
+    const config = this.store.agent(conversation.agentIds[0])
+    if (!config?.localAgentId || !this.localExecutor.prepare) return
+    const topicId = this.store.activeTopicId(conversationId)
+    const sessionKey = `direct:${conversationId}:${topicId}`
+    if (this.activeConversation.has(sessionKey)) return
+    const remote = await remoteAgentSpec(config.localAgentId)
+    const approvals = remote ? remote.adapter === 'codex' || remote.adapter === 'claude' : config.localAgentId === 'codex' || config.localAgentId === 'claude'
+    await Promise.all([
+      this.connectors.createLocalTools ? this.prepareConnectors() : undefined,
+      this.localExecutor.prepare(config, {
+        sessionKey,
+        workspaceDirectory: remote ? undefined : this.conversationWorkspace(conversationId, sessionKey, config),
+        // Only its presence selects the process mode; each turn supplies its own handler.
+        onApproval: approvals ? async () => { throw new Error('No turn is running') } : undefined
+      })
+    ]).catch(() => { /* The turn reports any real failure. */ })
+  }
+
   private retainIdleSession(sessionKey: string): void {
     const session = this.sessions.get(sessionKey)
     if (!session) return

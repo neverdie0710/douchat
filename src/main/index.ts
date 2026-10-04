@@ -11,6 +11,7 @@ import { IMChannelManager } from './imChannels'
 import { testLocalAgent } from './localAgentTest'
 import { listSshHosts } from './sshHosts'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
+import { disposeAllLocalAgentSessions } from './localAgentRuntime'
 import { localModelId, configurableLocalAgents } from '../shared/localModels'
 import { thinkingLevel } from '../shared/thinkingLevels'
 import { authorizeTokenDance } from './tokenDanceAuth'
@@ -630,7 +631,7 @@ app.whenReady().then(() => {
         .resize({ width: 256, height: 256, quality: 'best' })
         .toDataURL()
     }
-  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: (id, hooks) => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [])], prepare: () => CONNECTORS_ENABLED ? connany.prepare() : Promise.resolve(), createLocalTools: (id, hooks) => CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [] })
+  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: (id, hooks) => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [])], prepare: () => CONNECTORS_ENABLED ? connany.prepareForTurn() : Promise.resolve(), createLocalTools: (id, hooks) => CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [] })
   runtime.notifyChangesWith(scheduleBroadcast)
   imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
     encrypt: value => {
@@ -1238,6 +1239,10 @@ app.whenReady().then(() => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     await runtime.sendMessage(conversationId, text, images, files, mentions)
   })
+  ipcMain.handle('douchat:prewarm-conversation', (_event, conversationId: unknown) => {
+    if (typeof conversationId !== 'string' || !store.accountConversations.some((conversation) => conversation.id === conversationId)) return
+    void runtime.prewarmConversation(conversationId)
+  })
   ipcMain.handle('douchat:stop-conversation', (_event, conversationId: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
     runtime.stopConversation(conversationId)
@@ -1334,6 +1339,8 @@ app.on('before-quit', () => {
   imChannels?.stop()
   if (localWorkBlocker !== undefined) { powerSaveBlocker.stop(localWorkBlocker); localWorkBlocker = undefined }
   for (const agent of store?.agents ?? []) runtime?.disposeAgent(agent.id)
+  // Also covers transient and removed agents' processes the loop above can't name.
+  disposeAllLocalAgentSessions()
   scheduler?.dispose()
   computer?.dispose()
   void closeRemoteConnections()

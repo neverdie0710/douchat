@@ -6,9 +6,12 @@ export const codexComputerUseInstructions = [
   'Honor tool denials and operating-system permissions. Report the exact failing step; ERR_ABORTED and ERR_CONNECTION_CLOSED alone do not establish a security policy. Never bypass a denied action with another tool.'
 ].join('\n')
 
+/** MCP server names Codex has used for native Computer Use, newest first. */
+export const COMPUTER_USE_SERVERS = ['cua_repl', 'computer-use', 'computer_use']
+
 export function codexComputerUseInventory(servers: unknown[]): string {
   const native = servers.filter((s): s is Record<string, unknown> => Boolean(s && typeof s === 'object' &&
-    ['cua_repl', 'computer-use', 'computer_use'].includes(String((s as Record<string, unknown>).name))))
+    COMPUTER_USE_SERVERS.includes(String((s as Record<string, unknown>).name))))
   if (!native.length) return 'No native Computer Use MCP server was returned by this Codex session. Do not claim native desktop access. Ask the user to enable the Computer Use plugin in Codex/ChatGPT desktop, grant macOS Screen Recording and Accessibility when prompted, then start a new Douchat conversation. Ordinary coding tools remain usable.'
   return native.map(server => {
     const tools = server.tools && typeof server.tools === 'object' ? Object.keys(server.tools).filter(name => /^[\w.-]{1,100}$/.test(name)) : []

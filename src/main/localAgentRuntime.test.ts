@@ -84,6 +84,11 @@ describe('local agent output', () => {
       '--allow', 'Read', 'Grep', 'WebFetch', 'WebSearch', 'image_gen', 'image_edit'
     ]))
     expect(localAgentArgs('grok', 'Research', '/tmp/output')).not.toContain('--always-approve')
+    // Grok ends the whole turn as `cancelled` when a dontAsk call is denied, so it
+    // must only see the tools it may run (no terminal, writes or MCP meta tools).
+    const grok = localAgentArgs('grok', 'Research', '/tmp/output')
+    expect(grok.at(grok.indexOf('--tools') + 1)?.split(',').sort()).toEqual(['grep', 'image_edit', 'image_gen', 'list_dir', 'read_file', 'web_fetch', 'web_search'])
+    expect(grok.at(grok.indexOf('--disallowed-tools') + 1)).toBe('search_tool,use_tool')
   })
   it('links Codex image output to the exact CLI thread', () => {
     expect(codexThreadId([

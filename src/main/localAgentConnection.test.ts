@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
-import { LocalAgentConnection } from './localAgentConnection'
-import { runLocalAgent, disposeLocalAgentSessions, resetLocalAgentConversation } from './localAgentRuntime'
+import { LocalAgentConnection, spawnOwnedProcess, stopLocalProcess } from './localAgentConnection'
+import { runLocalAgent, disposeLocalAgentSessions, disposeAllLocalAgentSessions, prepareLocalAgentSession, resetLocalAgentConversation } from './localAgentRuntime'
 import { validateLocalAgent } from './localAgents'
 import { configureLocalWorkspaces } from './localWorkspaces'
 import { changedLocalAgentSettings } from './localAgentSettingsVersion'
@@ -39,7 +39,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(p.method==='thread/start') {model=p.params.model;approvalPolicy=p.params.approvalPolicy;send({id:p.id,result:{thread:{id:'thread-'+process.pid}}});}
  if(p.method==='thread/resume') {if(p.params.threadId==='missing'){send({id:p.id,error:{message:'thread not found'}});return;}threadId=p.params.threadId;count=1;send({id:p.id,result:{thread:{id:threadId,turns:[{}]}}});}
  if(p.method==='model/list') send({id:p.id,result:{data:[{model:'test-model',displayName:'Test model'}],nextCursor:null}});
- if(p.method==='mcpServerStatus/list') send({id:p.id,result:{data:[{name:'cua_repl',runtimeStatus:'connected',tools:{js:{},js_reset:{}}}],nextCursor:null}});
+ if(p.method==='mcpServerStatus/list') send({id:p.id,result:{data:p.params.serverName&&p.params.serverName!=='cua_repl'?[]:[{name:'cua_repl',runtimeStatus:'connected',tools:{js:{},js_reset:{}}}],nextCursor:null}});
  const prompt=p.method==='turn/start'?p.params.input[0].text:p.type==='user'?p.message.content:null;
  if(prompt===null)return;
  count++;
@@ -138,6 +138,64 @@ describe('persistent local agent connections', () => {
     const reply = JSON.parse(result.text)
     expect(reply.capabilityContext).toContain('cua_repl is connected')
     expect(reply.capabilityContext).toContain('js, js_reset')
+  })
+  it('hands a prewarmed process to the next turn without reconnecting', async () => {
+    await prepareLocalAgentSession(config, options)
+    const progress = vi.fn()
+    const first = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], { ...options, onProgress: progress })).text)
+    expect(progress.mock.calls.map(([event]) => event.phase)).not.toContain('connecting')
+    await prepareLocalAgentSession(config, options)
+    const second = JSON.parse((await runLocalAgent(config, 'again', undefined, [], options)).text)
+    expect(second.pid).toBe(first.pid)
+    expect(second.count).toBe(2)
+  })
+  it('closes the old process of a conversation when its settings change', async () => {
+    const first = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], options)).text)
+    const edited = JSON.parse((await runLocalAgent({ ...config, model: 'other-model' }, 'hello', undefined, [], options)).text)
+    expect(edited.pid).not.toBe(first.pid)
+    expect(() => process.kill(first.pid, 0)).toThrow()
+  })
+  it('lets an idle process exit on its own, and forces one that ignores stdin', async () => {
+    const polite = spawnOwnedProcess(process.execPath, ['-e', 'process.stdin.resume(); process.stdin.on("end", () => process.exit(0))'], {})
+    const stubborn = spawnOwnedProcess(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], {})
+    const closed = (child: typeof polite) => new Promise<string>(resolve => child.once('exit', (code, signal) => resolve(String(signal ?? code))))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    const [politeExit, stubbornExit] = [closed(polite), closed(stubborn)]
+    stopLocalProcess(polite, 200)
+    stopLocalProcess(stubborn, 200)
+    expect(await politeExit).toBe('0')
+    expect(await stubbornExit).toBe('SIGKILL')
+  })
+  it('kills every local process on quit, whichever agent owns it', async () => {
+    const first = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], options)).text)
+    const other = JSON.parse((await runLocalAgent({ ...config, id: 'removed-agent' }, 'hello', undefined, [], options)).text)
+    disposeAllLocalAgentSessions()
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(() => process.kill(first.pid, 0)).toThrow()
+    expect(() => process.kill(other.pid, 0)).toThrow()
+  })
+  it('says connecting only when a session starts, not on every turn', async () => {
+    const phases = (calls: unknown[][]) => calls.map(([event]) => (event as { phase: string }).phase)
+    const first = vi.fn(), second = vi.fn()
+    await runLocalAgent(config, 'hello', undefined, [], { ...options, onProgress: first })
+    await runLocalAgent(config, 'again', undefined, [], { ...options, onProgress: second })
+    expect(phases(first.mock.calls)[0]).toBe('connecting')
+    expect(phases(second.mock.calls)).not.toContain('connecting')
+    expect(phases(second.mock.calls)[0]).toBe('ready')
+  })
+  it('checks the native tool inventory once per session instead of every turn', async () => {
+    const child = await connected()
+    const request = vi.spyOn(child as unknown as { request: (...args: unknown[]) => Promise<unknown> }, 'request')
+    const approve = vi.fn(async () => {})
+    const inventory = () => request.mock.calls.filter(([method]) => method === 'mcpServerStatus/list')
+    const one = JSON.parse(await child.turn('first', undefined, undefined, approve))
+    const checked = inventory().length
+    const two = JSON.parse(await child.turn('second', undefined, undefined, approve))
+    expect(inventory()).toHaveLength(checked)
+    expect(two.capabilityContext).toBe(one.capabilityContext)
+    // Only the Computer Use servers, without the slow full app-connector catalog.
+    expect(inventory().every(([, params]) => (params as { serverName?: string; detail?: string }).detail === 'toolsAndAuthOnly'
+      && ['cua_repl', 'computer-use', 'computer_use'].includes((params as { serverName: string }).serverName))).toBe(true)
   })
   it.each(['approval-legacy', 'approval-extended'])('forwards supported native confirmation %s', async prompt => {
     const child = await connected()
@@ -369,7 +427,7 @@ describe('persistent local agent connections', () => {
   it('evicts idle processes and removes owned temporary workspaces', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     const reply = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], options)).text)
-    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
     vi.useRealTimers()
     await vi.waitFor(async () => { await expect(readdir(reply.cwd)).rejects.toMatchObject({ code: 'ENOENT' }) })
     expect(() => process.kill(reply.pid, 0)).toThrow()
@@ -406,14 +464,13 @@ describe('persistent local agent connections', () => {
       await Promise.all(tasks)
     }
   })
-  it('keeps only two idle processes and resumes the evicted thread on demand', async () => {
+  it('keeps four idle processes and resumes the evicted thread on demand', async () => {
     configureLocalWorkspaces(join(directory, 'idle-cap-profile'))
-    const first = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], { sessionKey: 'idle:first' })).text)
-    const second = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], { sessionKey: 'idle:second' })).text)
-    const third = JSON.parse((await runLocalAgent(config, 'hello', undefined, [], { sessionKey: 'idle:third' })).text)
+    const replies = []
+    for (const name of ['first', 'second', 'third', 'fourth', 'fifth']) replies.push(JSON.parse((await runLocalAgent(config, 'hello', undefined, [], { sessionKey: `idle:${name}` })).text))
+    const [first, ...kept] = replies
     await vi.waitFor(() => expect(() => process.kill(first.pid, 0)).toThrow())
-    expect(() => process.kill(second.pid, 0)).not.toThrow()
-    expect(() => process.kill(third.pid, 0)).not.toThrow()
+    for (const reply of kept) expect(() => process.kill(reply.pid, 0)).not.toThrow()
     const resumed = JSON.parse((await runLocalAgent(config, 'next', undefined, [], { sessionKey: 'idle:first' })).text)
     expect(resumed.pid).not.toBe(first.pid)
     expect(resumed.cwd).toBe(first.cwd)

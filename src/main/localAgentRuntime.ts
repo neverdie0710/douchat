@@ -5,7 +5,7 @@ import { localAgentSettingsVersion } from './localAgentSettingsVersion'
 import { LocalProcessBudget } from './localProcessBudget'
 import { withLocalModel } from '../shared/localModels'
 import { withLocalThinking } from '../shared/thinkingLevels'
-import { LocalAgentConnection, killLocalProcess } from './localAgentConnection'
+import { LocalAgentConnection, killAllLocalProcesses, killLocalProcess, spawnOwnedProcess } from './localAgentConnection'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { executableCommand } from './windowsCommand'
@@ -40,9 +40,14 @@ export function localAgentArgs(id: string, prompt: string, output: string, appOw
     case 'codex': return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'web_search="live"', '--output-last-message', output, '-']
     case 'claude': return ['-p', '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch', '--', prompt]
     case 'gemini': return ['-p', prompt, '--output-format', 'stream-json']
+    // Offer Grok only the tools it may run: in dontAsk mode a denied call (e.g.
+    // run_terminal_command for "list my Downloads") ends the whole turn as
+    // `cancelled` instead of letting the model try a permitted tool.
     case 'grok': return [
       '--no-auto-update', '-p', prompt, '--output-format', 'streaming-json',
       '--permission-mode', 'dontAsk',
+      '--tools', 'read_file,list_dir,grep,web_search,web_fetch,image_gen,image_edit',
+      '--disallowed-tools', 'search_tool,use_tool',
       '--allow', 'Read', '--allow', 'Grep', '--allow', 'WebFetch', '--allow', 'WebSearch',
       '--allow', 'image_gen', '--allow', 'image_edit',
       '--sandbox', 'strict'
@@ -330,12 +335,7 @@ export async function runLocalAgent(
   const combined = signal ? AbortSignal.any([signal, run.abort.signal]) : run.abort.signal
   let release: (() => void) | undefined
   try {
-    // Custom entries may run on a server; resolve once so the adapter decides the protocol.
-    if (!options.agentOverride && (config.localAgentId?.startsWith('custom:') || config.startupArgs?.length)) {
-      const agent = await validateLocalAgent(config.localAgentId!)
-      options = { ...options, agentOverride: agent }
-    }
-    if (options.agentOverride && config.startupArgs?.length) options = { ...options, agentOverride: withStartupArgs(options.agentOverride, config.startupArgs) }
+    options = await withAgentOverride(config, options)
     const kind = connectionKind(config, options)
     const connected = options.sessionKey && kind
     if (!connected) release = await processBudget.acquire(combined, evictIdleConnection)
@@ -357,10 +357,11 @@ async function executeLocalAgent(
   inputImages: LocalAgentImage[] = [],
   options: LocalRunOptions = {}
 ): Promise<LocalAgentReply> {
-  options.onProgress?.({ phase: 'connecting', elapsedSeconds: 0, silentSeconds: 0 })
+  // Long-lived sessions report connecting only when they actually start a process.
   if (options.sessionKey && connectionKind(config, options)) {
     return runConnectedAgent(config, prompt, signal, inputImages, options)
   }
+  options.onProgress?.({ phase: 'connecting', elapsedSeconds: 0, silentSeconds: 0 })
   const agent = options.agentOverride ?? await validateLocalAgent(config.localAgentId!)
   if (agent.remote) return executeRemoteAgent(config, agent, agent.remote, prompt, signal, inputImages, options)
   const env = await spawnEnvironment()
@@ -395,9 +396,8 @@ async function executeLocalAgent(
     let grokStream: GrokStream | undefined
     let geminiStream: GeminiStream | undefined
     const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
-      const child = spawn(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, withLocalThinking(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.thinkingLevel), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
-        cwd: directory, env: childEnvironment, windowsHide: true, detached: process.platform !== 'win32',
-        stdio: ['pipe', 'pipe', 'pipe']
+      const child = spawnOwnedProcess(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, withLocalThinking(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.thinkingLevel), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
+        cwd: directory, env: childEnvironment, windowsHide: true
       })
       let stdout = ''
       let stderr = ''
@@ -624,8 +624,10 @@ interface ConnectedSession {
   idle?: NodeJS.Timeout
 }
 const connections = new Map<string, ConnectedSession>()
-const IDLE_CONNECTION_MS = 5 * 60_000
-const MAX_IDLE_CONNECTIONS = 2
+// Reconnecting costs seconds (launch, MCP servers, session resume); an idle
+// process costs only memory. Keep a few for switching between chats.
+const IDLE_CONNECTION_MS = 10 * 60_000
+const MAX_IDLE_CONNECTIONS = 4
 
 function evictIdleConnection(): void {
   const idle = [...connections].find(([, entry]) => !entry.busy)
@@ -637,12 +639,19 @@ function evictConnection(key: string, entry: ConnectedSession): void {
   entry.evicted = true
   if (connections.get(key) === entry) connections.delete(key)
   clearTimeout(entry.idle)
-  entry.connection.close()
+  entry.connection.close(undefined, true)
   void entry.remoteRun?.then(run => run?.dispose(true)).catch(() => {})
   void entry.directory.then(async (directory) => {
     await entry.connection.disposed()
     if (!entry.persistent) await rm(directory, { recursive: true, force: true })
   }).catch(() => { /* Startup already reports its error. */ })
+}
+
+/** Quit: stop every run and process, whichever agent or account owns it. */
+export function disposeAllLocalAgentSessions(): void {
+  for (const run of activeLocalRuns) run.abort.abort(new Error('Stopped'))
+  for (const [key, entry] of connections) { entry.connection.close(); evictConnection(key, entry) }
+  killAllLocalProcesses()
 }
 
 export function disposeLocalAgentSessions(agentId: string): void {
@@ -670,9 +679,17 @@ export function resetLocalAgentConversation(conversationId: string, topicId?: st
   for (const [key, entry] of connections) if (matches(entry.sessionKey)) evictConnection(key, entry)
 }
 
-async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
-  images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
-  signal?.throwIfAborted()
+interface ConnectionPlan {
+  key: string
+  kind: 'codex' | 'claude'
+  options: LocalRunOptions
+  remoteSpec?: RemoteAgentSpec
+  workspace?: ReturnType<typeof localWorkspace>
+}
+
+/** Everything that decides which process may serve a turn. Prewarming uses the
+ * same plan, so a warmed process is exactly the one the next turn picks up. */
+function connectionPlan(config: AgentConfig, options: LocalRunOptions): ConnectionPlan {
   const remoteSpec = options.agentOverride?.remote
   const kind = connectionKind(config, options)!
   // Remote sessions never use a folder on this computer; the server folder is derived from the session.
@@ -681,52 +698,110 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
   if (kind === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
   const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args, remoteSpec ?? null]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
-  let key = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, options.claudeAccountLogin, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
-  if (kind === 'claude' && !connections.has(key) && !options.claudeAccountLogin) {
-    const accountKey = JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, true, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
-    if (connections.has(accountKey)) { key = accountKey; options = { ...options, claudeAccountLogin: true } }
+  const keyFor = (accountLogin: boolean | undefined): string => JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, accountLogin, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
+  let key = keyFor(options.claudeAccountLogin)
+  if (kind === 'claude' && !connections.has(key) && !options.claudeAccountLogin && connections.has(keyFor(true))) {
+    key = keyFor(true); options = { ...options, claudeAccountLogin: true }
   }
+  return { key, kind, options, remoteSpec, workspace }
+}
+
+function createConnection(config: AgentConfig, plan: ConnectionPlan, signal: AbortSignal | undefined, busy: boolean): ConnectedSession {
+  const { key, kind, options, remoteSpec, workspace } = plan
+  const connection = new LocalAgentConnection(kind)
+  const directory = workspace && !remoteSpec ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
+  let resolveRun!: (run: RemoteRun | undefined) => void
+  const remoteRun = new Promise<RemoteRun | undefined>(resolve => { resolveRun = resolve })
+  const accountLogin = Boolean(options.claudeAccountLogin)
+  // The same conversation can't keep two processes: an older one (from before a
+  // model or persona edit) still owns the Codex thread / Claude session, and a
+  // resume beside it fails with "active writer", silently losing the context.
+  const superseded = [...connections].filter(([other, candidate]) => other !== key && !candidate.busy
+    && candidate.config.id === config.id && candidate.sessionKey === options.sessionKey)
+  for (const [other, candidate] of superseded) evictConnection(other, candidate)
+  const ready = (async () => {
+    const release = await processBudget.acquire(signal, evictIdleConnection)
+    void connection.disposed().then(release)
+    try {
+      await Promise.all(superseded.map(([, candidate]) => candidate.connection.disposed()))
+      signal?.throwIfAborted()
+      const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
+      signal?.throwIfAborted()
+      if (remoteSpec) {
+        const spec = await probeRemoteAgent(remoteSpec, signal)
+        const run = new RemoteRun(spec, workspace?.remoteKey)
+        resolveRun(run)
+        await run.prepare(signal)
+        signal?.throwIfAborted()
+        await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
+          cwd: run.workspace,
+          launch: async (agentArgs) => remoteLaunch(spec, launchScript({
+            runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args: agentArgs, channel: 'stdin', remotePath: spec.remotePath,
+            environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
+          }))
+        })
+        return { agent, env, directory: cwd, run }
+      }
+      resolveRun(undefined)
+      await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args, config.thinkingLevel)
+      return { agent, env, directory: cwd, run: undefined as RemoteRun | undefined }
+    } catch (error) { resolveRun(undefined); connection.close(); throw error }
+  })()
+  const created: ConnectedSession = { config, sessionKey: options.sessionKey!, connection, directory, remoteRun, ready, busy, persistent: Boolean(workspace) }
+  connections.set(key, created)
+  void connection.disposed().then(() => evictConnection(key, created))
+  return created
+}
+
+/** Keep an idle process for reuse: most recently used last, trimmed to the limit. */
+function retainIdle(key: string, entry: ConnectedSession): void {
+  if (connections.get(key) !== entry) return
+  clearTimeout(entry.idle)
+  connections.delete(key); connections.set(key, entry)
+  entry.idle = setTimeout(() => evictConnection(key, entry), IDLE_CONNECTION_MS)
+  entry.idle.unref()
+  const idle = [...connections].filter(([, candidate]) => !candidate.busy)
+  for (const [idleKey, candidate] of idle.slice(0, Math.max(0, idle.length - MAX_IDLE_CONNECTIONS))) evictConnection(idleKey, candidate)
+}
+
+async function withAgentOverride(config: AgentConfig, options: LocalRunOptions): Promise<LocalRunOptions> {
+  // Custom entries may run on a server; resolve once so the adapter decides the protocol.
+  if (!options.agentOverride && (config.localAgentId?.startsWith('custom:') || config.startupArgs?.length)) {
+    options = { ...options, agentOverride: await validateLocalAgent(config.localAgentId!) }
+  }
+  if (options.agentOverride && config.startupArgs?.length) options = { ...options, agentOverride: withStartupArgs(options.agentOverride, config.startupArgs) }
+  return options
+}
+
+/** Start a conversation's process before its first message (e.g. while the user
+ * types) so the turn skips launch, initialization and session resume. Only uses a
+ * free process slot: a guess never evicts a session someone is using. */
+export async function prepareLocalAgentSession(config: AgentConfig, options: LocalRunOptions): Promise<void> {
+  options = await withAgentOverride(config, options)
+  if (!options.sessionKey || options.transient || !connectionKind(config, options)) return
+  const plan = connectionPlan(config, options)
+  const existing = connections.get(plan.key)
+  if (existing?.connection.alive) return
+  if (existing) evictConnection(plan.key, existing)
+  if (processBudget.available < 1) return
+  const entry = createConnection(config, plan, undefined, false)
+  retainIdle(plan.key, entry)
+  // A failed warm-up is not an error: the turn starts its own process.
+  await entry.ready.catch(() => { if (!entry.busy) evictConnection(plan.key, entry) })
+}
+
+async function runConnectedAgent(config: AgentConfig, prompt: string, signal: AbortSignal | undefined,
+  images: LocalAgentImage[], options: LocalRunOptions): Promise<LocalAgentReply> {
+  signal?.throwIfAborted()
+  const plan = connectionPlan(config, options)
+  const { key, kind, remoteSpec, workspace } = plan
+  options = plan.options
   let entry = connections.get(key)
   if (entry && !entry.connection.alive) { evictConnection(key, entry); entry = undefined }
   if (entry?.busy) throw new Error('This local agent conversation is already working')
-  if (!entry) {
-    const connection = new LocalAgentConnection(kind)
-    const directory = workspace && !remoteSpec ? Promise.resolve(workspace.directory) : mkdtemp(join(tmpdir(), 'douchat-session-'))
-    let resolveRun!: (run: RemoteRun | undefined) => void
-    const remoteRun = new Promise<RemoteRun | undefined>(resolve => { resolveRun = resolve })
-    const accountLogin = Boolean(options.claudeAccountLogin)
-    const ready = (async () => {
-      const release = await processBudget.acquire(signal, evictIdleConnection)
-      void connection.disposed().then(release)
-      try {
-        signal?.throwIfAborted()
-        const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
-        signal?.throwIfAborted()
-        if (remoteSpec) {
-          const spec = await probeRemoteAgent(remoteSpec, signal)
-          const run = new RemoteRun(spec, workspace?.remoteKey)
-          resolveRun(run)
-          await run.prepare(signal)
-          signal?.throwIfAborted()
-          await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
-            cwd: run.workspace,
-            launch: async (agentArgs) => remoteLaunch(spec, launchScript({
-              runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args: agentArgs, channel: 'stdin', remotePath: spec.remotePath,
-              environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
-            }))
-          })
-          return { agent, env, directory: cwd, run }
-        }
-        resolveRun(undefined)
-        await connection.connect(agent.path!, cwd, localAgentEnvironment(agent.id, env, options.claudeAccountLogin), config.model, false, workspace, Boolean(options.onApproval), agent.args, config.thinkingLevel)
-        return { agent, env, directory: cwd, run: undefined as RemoteRun | undefined }
-      } catch (error) { resolveRun(undefined); connection.close(); throw error }
-    })()
-    entry = { config, sessionKey: options.sessionKey!, connection, directory, remoteRun, ready, busy: true, persistent: Boolean(workspace) }
-    connections.set(key, entry)
-    const created = entry
-    void connection.disposed().then(() => evictConnection(key, created))
-  }
+  // A reused session is already connected; don't tell the user it is reconnecting.
+  options.onProgress?.({ phase: entry ? 'ready' : 'connecting', elapsedSeconds: 0, silentSeconds: 0 })
+  entry ??= createConnection(config, plan, signal, true)
   entry.busy = true
   clearTimeout(entry.idle)
   const current = entry
@@ -789,13 +864,6 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     signal?.removeEventListener('abort', abort)
     current.busy = false
     if (connections.get(key) === current && (options.transient || processBudget.hasWaiters)) evictConnection(key, current)
-    if (connections.get(key) === current) {
-      // Map order is the idle LRU order, rather than the connection's creation order.
-      connections.delete(key); connections.set(key, current)
-      current.idle = setTimeout(() => evictConnection(key, current), IDLE_CONNECTION_MS)
-      current.idle.unref()
-      const idle = [...connections].filter(([, candidate]) => !candidate.busy)
-      for (const [idleKey, candidate] of idle.slice(0, Math.max(0, idle.length - MAX_IDLE_CONNECTIONS))) evictConnection(idleKey, candidate)
-    }
+    retainIdle(key, current)
   }
 }

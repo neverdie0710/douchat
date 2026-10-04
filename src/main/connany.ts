@@ -174,7 +174,22 @@ export class ConnanyManager {
     if (!owner || !this.token()) return
     const state = this.states.get(owner)
     if (state && Date.now() - state.loadedAt < maxAge) return
-    await this.command({ op: 'list' })
+    // Concurrent turns share one listing instead of each asking the backend.
+    if (!this.listing || this.listing.owner !== owner) {
+      const listing = { owner, done: this.command({ op: 'list' }).then(() => undefined).finally(() => { if (this.listing === listing) this.listing = undefined }) }
+      this.listing = listing
+    }
+    await this.listing.done
+  }
+  private listing?: { owner: string; done: Promise<void> }
+
+  /** Before a chat turn: a known account list starts the turn at once and is
+   * refreshed in the background (events also keep it current). Only the first
+   * turn, with nothing cached, waits for the backend. */
+  async prepareForTurn(): Promise<void> {
+    const owner = this.store.currentAccountId
+    if (owner && this.states.has(owner)) { void this.prepare().catch(() => { /* Keep the last known accounts. */ }); return }
+    await this.prepare()
   }
   private async current(maxAge = STATE_MAX_AGE) {
     await this.prepare(maxAge)

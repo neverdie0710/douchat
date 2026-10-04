@@ -8,7 +8,7 @@ import { Type, type Static } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { isSafeSkillPath, validateAgentSkills, type AgentSkill } from '../shared/agentCustomization'
 import { spawnEnvironment } from './shellPath'
-import { killLocalProcess } from './localAgentConnection'
+import { killLocalProcess, spawnOwnedProcess } from './localAgentConnection'
 
 const MAX_FILE = 20 * 1024 * 1024
 export interface ArtifactHost {
@@ -43,7 +43,7 @@ export async function runPackagedScript(skill: AgentSkill, path: string, args: s
     for (const key of ['PATH', 'HOME', 'USERPROFILE', 'SYSTEMROOT', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL']) if (sourceEnv[key]) env[key] = sourceEnv[key]
     if (extension !== '.py') env.ELECTRON_RUN_AS_NODE = '1'
     const log = await new Promise<string>((resolve, reject) => {
-      const child = spawn(extension === '.py' ? 'python3' : process.execPath, [join(cwd, path), ...args], { cwd, env, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })
+      const child = spawnOwnedProcess(extension === '.py' ? 'python3' : process.execPath, [join(cwd, path), ...args], { cwd, env, shell: false })
       child.stdin.end()
       let output = '', failure: Error | undefined
       const stop = (error: Error) => { failure ??= error; killLocalProcess(child) }
