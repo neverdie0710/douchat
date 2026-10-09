@@ -16,7 +16,7 @@ npx vitest run src
 | `src/shared/conversationWorkspace.test.ts` | 只在保存时的目标和版本一致时才使用目录；旧 `workspacePath` 只回退给本机成员；共享房间里只能设置自己的 agent |
 | `src/main/remoteScript.test.ts` | 在 sh/bash/zsh/dash/ksh 里真实执行：在自选目录原地运行；目录被换成符号链接或被删除时拒绝启动；含 `$(...)`、引号、反引号的目录名只当数据；目录浏览只列一层、跳过隐藏目录和符号链接 |
 | `src/main/remoteWorkspace.test.ts` | 拒绝 `/`、系统目录、`$HOME`、`~/.ssh`、`~/.douchat-remote`、`~/.douchat-host` 及其祖先；以服务器返回的真实路径为准并再校验一次；与 `pwd -P` 解析后的 HOME 比较（`/home` 链接到 `/var/home` 时仍可选项目、仍拒绝 `~/.ssh`）；macOS 服务器忽略大小写（`~/.SSH` 同样拒绝）；界面只传"父路径 + 子目录名"；终端命令里的路径只出现在 base64 载荷中 |
-| `src/main/localWorkspaces.test.ts` | 本机 agent 的 fingerprint 与旧公式逐字节一致；远程 agent 换目录、换服务器、改服务器配置都会开新 thread；修改过服务器的 agent 使用新的托管目录，未修改的沿用升级前的托管目录 |
+| `src/main/localWorkspaces.test.ts` | 本机 agent 的 fingerprint 与旧公式逐字节一致；升级前就有、服务器没改过、也没选目录的远程 agent 接着原 thread 和原托管目录；选目录、换目录、改服务器配置（包括改回原值）都会开新 thread，改过服务器的使用新的托管目录 |
 | `src/main/localAgents.test.ts` | 默认端口归一化；修改 host/port/user/key 时目标版本加一，改回原值也继续加 |
 | `src/main/runtimeWorkspace.test.ts` | 各成员拿到各自目标上的目录；远程成员拿不到本机目录；版本失效后按未设置处理并在提示词中说明；共享房间任务用主人设置的目录；同一服务器同一目录串行、不同目标并行；成员移出或删除时清掉对应条目 |
 | `src/main/localAgentRemoteWorkspace.test.ts` | 发给服务器的脚本里，目录只在目标一致时出现；本机路径永远不会发到服务器；prewarm 和正式执行用同一目录 |
@@ -41,9 +41,9 @@ npx vitest run src
 
 ### 2.2 远程成员
 
-4a. 升级兼容：用一个升级前就在用、没改过服务器配置的远程 agent，在服务器上看 `~/.douchat-remote/w/` 下它原来的目录。升级后对话，预期仍在这个目录运行（`pwd` 不变，之前生成的文件还在）。
-    远程 agent 的 thread 会重新开始，这是预期的：它的 fingerprint 现在包含服务器身份。
-
+4a. 升级兼容：用一个升级前就在用、没改过服务器配置的远程 agent，先在旧版本里让它记住一件事（例如"记住暗号是 42"），并在服务器上看一下 `~/.douchat-remote/w/` 下它的目录。升级后直接问"暗号是多少"。
+    预期：它能答出 42，说明接着原来的 CLI 会话；`pwd` 仍是原来的托管目录，之前生成的文件还在。
+    之后一旦给它选了服务器目录，或者改了它的 SSH 配置，会开新会话，这是预期行为。
 4. 和远程 agent 单聊，详情 → 工作区。预期：显示"运行于 user@host"，按钮是「选择服务器目录」，不会弹出本机文件夹选择框。
 5. 浏览进入 `proj-a`，点「使用此文件夹」。让它执行 `cat marker.txt` 和 `pwd`，预期输出 `A` 和 `/home/<user>/proj-a`。
 6. 点「复制路径」，粘贴出来应是完整的服务器路径。点「在终端打开」，应打开终端并 SSH 进入该目录：macOS 上用 Terminal.app，Windows 上会直接打开 ssh.exe 窗口。

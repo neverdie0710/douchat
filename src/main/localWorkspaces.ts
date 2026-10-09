@@ -91,10 +91,15 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
   mkdirSync(records, { recursive: true, mode: 0o700 })
   const file = join(records, id + '.json')
   // The folder is part of the binding: a native thread must not resume against other files.
-  // Agents on this computer keep the original formula so existing threads resume.
   const remote = placement.remote
+  // A remote agent saved before targets existed, whose server was never edited
+  // and that has no chosen folder, runs exactly where it did before the upgrade.
+  // It keeps the original formula (and managed folder), so its thread resumes.
+  // An agent's server only changes through an edit, which raises the revision.
+  const unchangedRemote = Boolean(remote && !remote.workspace && remote.target.executionTargetId.startsWith('ssh-legacy:') && remote.target.targetRevision === 0)
+  // Agents on this computer keep the original formula so existing threads resume.
   const fingerprint = hash(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model, ...(config.thinkingLevel ? [config.thinkingLevel] : []),
-    ...(remote ? [{ target: remote.target.executionTargetId, revision: remote.target.targetRevision, folder: remote.workspace?.path ?? null }] : customDirectory ? [{ folder: customDirectory }] : [])]))
+    ...(remote && !unchangedRemote ? [{ target: remote.target.executionTargetId, revision: remote.target.targetRevision, folder: remote.workspace?.path ?? null }] : !remote && customDirectory ? [{ folder: customDirectory }] : [])]))
   const old = read(file)
   const record: RecordData = { owner: config.ownerId, agent: config.id, sessionKey: key,
     generation: old?.generation && /^[a-f0-9-]{36}$/.test(old.generation) ? old.generation : randomUUID(), fingerprint,
@@ -102,9 +107,8 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
     ...(config.localAgentId === 'claude' && old?.claudeAccountLogin === true ? { claudeAccountLogin: true } : {}) }
   save(file, record)
   // Remote agents keep files on the server; the key names that folder there and
-  // the conversation's run owner. Agents saved before targets existed keep their
-  // folder (each agent has one server until it is edited); an edited target
-  // never reuses the managed folder of the previous one.
+  // the conversation's run owner. A never-edited server keeps the folder it had
+  // before the upgrade; an edited target never reuses the previous one's folder.
   const legacyTarget = !remote || (remote.target.executionTargetId.startsWith('ssh-legacy:') && remote.target.targetRevision === 0)
   const remoteKey = hash(JSON.stringify(legacyTarget ? [id, record.generation] : [id, record.generation, remote!.target.executionTargetId, remote!.target.targetRevision]))
   let directory = customDirectory

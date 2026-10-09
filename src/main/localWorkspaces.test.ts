@@ -112,6 +112,9 @@ it('keeps the local fingerprint unchanged and binds remote threads to the server
   const directory = mkdtempSync(join(tmpdir(), 'douchat-workspaces-remote-'))
   const config = { id: 'agent', ownerId: 'alice', localAgentId: 'custom:x', model: 'default', name: 'Agent', role: '', instructions: '' } as AgentConfig
   const server = { executionTargetId: 'ssh-legacy:aaa', targetRevision: 0 }
+  const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+  const recordFile = (key: string) => join(directory, 'user-data', 'local-workspaces', 'sessions', sha(JSON.stringify(['alice', 'agent', key])) + '.json')
+  const original = sha(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model]))
   try {
     configureLocalWorkspaces(join(directory, 'user-data'))
     // Existing local records were written with the original formula; they must keep resuming.
@@ -119,38 +122,54 @@ it('keeps the local fingerprint unchanged and binds remote threads to the server
     before.remember('local-thread')
     expect(localWorkspace(config, 'k')!.thread).toBe('local-thread')
     // Byte-for-byte the formula released before execution targets existed.
-    const sha = (value: string) => createHash('sha256').update(value).digest('hex')
-    const record = JSON.parse(readFileSync(join(directory, 'user-data', 'local-workspaces', 'sessions', sha(JSON.stringify(['alice', 'agent', 'k'])) + '.json'), 'utf8'))
-    expect(record.fingerprint).toBe(sha(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model])))
+    expect(JSON.parse(readFileSync(recordFile('k'), 'utf8')).fingerprint).toBe(original)
     const project = join(directory, 'project'); mkdirSync(project)
     localWorkspace(config, 'k2', project)
-    const custom = JSON.parse(readFileSync(join(directory, 'user-data', 'local-workspaces', 'sessions', sha(JSON.stringify(['alice', 'agent', 'k2'])) + '.json'), 'utf8'))
-    expect(custom.fingerprint).toBe(sha(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model, { folder: project }])))
+    expect(JSON.parse(readFileSync(recordFile('k2'), 'utf8')).fingerprint).toBe(sha(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model, { folder: project }])))
+  } finally { configureLocalWorkspaces(); rmSync(directory, { recursive: true, force: true }) }
+})
 
-    const managed = localWorkspace(config, 'k', undefined, { remote: { target: server } })!
-    expect(managed.directory).toBe('')
-    managed.remember('remote-thread')
-    expect(localWorkspace(config, 'k', undefined, { remote: { target: server } })!.thread).toBe('remote-thread')
-    const managedKey = managed.remoteKey
+it('resumes an upgraded remote agent until its server is edited or a folder is chosen', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'douchat-workspaces-remote-'))
+  const config = { id: 'agent', ownerId: 'alice', localAgentId: 'custom:x', model: 'default', name: 'Agent', role: '', instructions: '' } as AgentConfig
+  const server = { executionTargetId: 'ssh-legacy:aaa', targetRevision: 0 }
+  const sha = (value: string) => createHash('sha256').update(value).digest('hex')
+  const id = sha(JSON.stringify(['alice', 'agent', 'k']))
+  const file = join(directory, 'user-data', 'local-workspaces', 'sessions', id + '.json')
+  try {
+    configureLocalWorkspaces(join(directory, 'user-data'))
+    // A thread saved by the previous release, which passed no placement for remote agents.
+    const previous = localWorkspace(config, 'k')!
+    previous.remember('pre-upgrade-thread')
+    const { generation, fingerprint } = JSON.parse(readFileSync(file, 'utf8'))
 
-    // A chosen folder, another server, or an edited server each start a new thread.
+    // After the upgrade the same agent on the same, never-edited server resumes it,
+    // in the same managed folder and with the same run owner on the server.
+    const upgraded = localWorkspace(config, 'k', undefined, { remote: { target: server } })!
+    expect(upgraded.thread).toBe('pre-upgrade-thread')
+    expect(upgraded.remoteKey).toBe(sha(JSON.stringify([id, generation])))
+    expect(JSON.parse(readFileSync(file, 'utf8')).fingerprint).toBe(fingerprint)
+
+    // Choosing a folder starts a new thread; going back to the default folder
+    // again matches the pre-upgrade thread only if it is still the remembered one.
     const chosen = localWorkspace(config, 'k', undefined, { remote: { target: server, workspace: { path: '/srv/p', ...server } } })!
     expect(chosen).toMatchObject({ custom: true, thread: undefined })
     chosen.remember('chosen-thread')
+    expect(localWorkspace(config, 'k', undefined, { remote: { target: server, workspace: { path: '/srv/p', ...server } } })!.thread).toBe('chosen-thread')
     expect(localWorkspace(config, 'k', undefined, { remote: { target: server, workspace: { path: '/srv/q', ...server } } })!.thread).toBeUndefined()
-    const other = localWorkspace(config, 'k', undefined, { remote: { target: { executionTargetId: 'ssh-legacy:bbb', targetRevision: 0 } } })!
-    expect(other.thread).toBeUndefined()
-    // Agents saved before targets existed keep their managed server folder and run owner.
-    const legacy = { executionTargetId: 'ssh-legacy:aaa', targetRevision: 0 }
-    const id = sha(JSON.stringify(['alice', 'agent', 'k']))
-    const generation = JSON.parse(readFileSync(join(directory, 'user-data', 'local-workspaces', 'sessions', id + '.json'), 'utf8')).generation
-    expect(localWorkspace(config, 'k', undefined, { remote: { target: legacy } })!.remoteKey).toBe(sha(JSON.stringify([id, generation])))
-    // A different server has its own identity; it still starts a new thread above.
-    expect(other.remoteKey).toBe(managedKey)
-    const edited = localWorkspace(config, 'k', undefined, { remote: { target: { ...server, targetRevision: 1 } } })!
+
+    // Editing the server (any change raises the revision) starts a new thread
+    // in a new managed folder, even with the default folder.
+    const managed = localWorkspace(config, 'k', undefined, { remote: { target: server } })!
+    managed.remember('default-thread')
+    const edited = localWorkspace(config, 'k', undefined, { remote: { target: { executionTargetId: 'ssh-legacy:bbb', targetRevision: 1 } } })!
     expect(edited.thread).toBeUndefined()
-    expect(edited.remoteKey).not.toBe(managedKey)
-    expect(localWorkspace(config, 'k', undefined, { remote: { target: server } })!.remoteKey).toBe(managedKey)
+    expect(edited.remoteKey).not.toBe(managed.remoteKey)
+    edited.remember('edited-thread')
+    // Changing back to the original values is still an edit: the old thread is not revived.
+    const reverted = localWorkspace(config, 'k', undefined, { remote: { target: { ...server, targetRevision: 2 } } })!
+    expect(reverted.thread).toBeUndefined()
+    expect(reverted.remoteKey).not.toBe(managed.remoteKey)
   } finally { configureLocalWorkspaces(); rmSync(directory, { recursive: true, force: true }) }
 })
 
