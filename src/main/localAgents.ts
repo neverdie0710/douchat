@@ -1,8 +1,8 @@
 import { executableCommand } from './windowsCommand'
 import { changedLocalAgentSettings } from './localAgentSettingsVersion'
-import type { CustomLocalAgentInput, LocalAgent, RemoteAgentSpec } from '../shared/types'
+import type { CustomLocalAgentInput, ExecutionTarget, LocalAgent, RemoteAgentSpec } from '../shared/types'
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -15,7 +15,20 @@ import { forgetRemoteProbes, probeRemoteAgent } from './remoteTransport'
 const execFileAsync = promisify(execFile)
 let customRegistryPath: string | undefined
 
-interface CustomLocalAgentDefinition extends CustomLocalAgentInput { id: string }
+interface CustomLocalAgentDefinition extends CustomLocalAgentInput {
+  id: string
+  /** Main-only: increased whenever the server identity of a remote agent changes. */
+  remoteTargetRevision?: number
+}
+
+/** Stable identity of an SSH target. Defaults are normalized, so `host` and
+ * `host:22` are the same server; any change of host, port, user or key is a new target. */
+export function remoteTargetId(spec: Pick<RemoteAgentSpec, 'host' | 'port' | 'user' | 'identityFile'>): string {
+  return `ssh-legacy:${createHash('sha256').update(JSON.stringify([spec.host.toLowerCase(), spec.port ?? 22, spec.user ?? '', spec.identityFile ?? ''])).digest('hex').slice(0, 32)}`
+}
+function remoteTarget(definition: Pick<CustomLocalAgentDefinition, 'remote' | 'remoteTargetRevision'>): ExecutionTarget | undefined {
+  return definition.remote ? { executionTargetId: remoteTargetId(definition.remote), targetRevision: definition.remoteTargetRevision ?? 0 } : undefined
+}
 
 const CUSTOM_ID = /^custom:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -28,27 +41,40 @@ function customDefinition(value: unknown): CustomLocalAgentDefinition | undefine
   const input = value as Record<string, unknown>
   const id = String(input.id ?? '').trim()
   if (!CUSTOM_ID.test(id) && !localAgentCatalog.some(item => item[0] === id)) return undefined
-  try { return { id, ...validateLocalAgentInput(input as unknown as CustomLocalAgentInput) } }
-  catch { return undefined }
+  const revision = input.remoteTargetRevision
+  try {
+    return { id, ...validateLocalAgentInput(input as unknown as CustomLocalAgentInput),
+      ...(Number.isSafeInteger(revision) && (revision as number) > 0 ? { remoteTargetRevision: revision as number } : {}) }
+  } catch { return undefined }
 }
 
 async function customDefinitions(): Promise<CustomLocalAgentDefinition[]> {
   if (!customRegistryPath) return []
   try {
     const parsed = JSON.parse(await readFile(customRegistryPath, 'utf8')) as unknown
-    if (!Array.isArray(parsed)) { remoteSpecs.clear(); return [] }
+    if (!Array.isArray(parsed)) { remoteSpecs.clear(); remoteTargets.clear(); return [] }
     const definitions = parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75)
-    remoteSpecs.clear()
-    for (const item of definitions) if (item.remote) remoteSpecs.set(item.id, item.remote)
+    remoteSpecs.clear(); remoteTargets.clear()
+    for (const item of definitions) if (item.remote) { remoteSpecs.set(item.id, item.remote); remoteTargets.set(item.id, remoteTarget(item)!) }
     return definitions
   } catch {
-    remoteSpecs.clear()
+    remoteSpecs.clear(); remoteTargets.clear()
     return []
   }
 }
 
 /** Last validated remote settings, for synchronous labelling (group context, UI). */
 const remoteSpecs = new Map<string, RemoteAgentSpec>()
+const remoteTargets = new Map<string, ExecutionTarget>()
+export function cachedRemoteAgentTarget(id: string | undefined): ExecutionTarget | undefined {
+  return id ? remoteTargets.get(id) : undefined
+}
+/** Fresh lookup of a remote agent's settings together with its server identity. */
+export async function remoteAgentPlacement(id: string | undefined): Promise<{ spec: RemoteAgentSpec; target: ExecutionTarget } | undefined> {
+  if (!id || !CUSTOM_ID.test(id)) return undefined
+  const definition = (await customDefinitions()).find(item => item.id === id)
+  return definition?.remote ? { spec: definition.remote, target: remoteTarget(definition)! } : undefined
+}
 export function cachedRemoteAgentSpec(id: string | undefined): RemoteAgentSpec | undefined {
   return id ? remoteSpecs.get(id) : undefined
 }
@@ -125,7 +151,13 @@ export async function updateLocalAgent(id: string, input: CustomLocalAgentInput)
     if (value.remote && !CUSTOM_ID.test(id)) throw new Error('Add a remote agent as a new custom agent.')
     if (index >= 0 && Boolean(definitions[index].remote) !== Boolean(value.remote)) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
     if (index < 0) definitions.push({ id, ...value })
-    else definitions[index] = { id, ...value }
+    else {
+      // Editing the server makes every folder chosen on the old one stale, even
+      // if the old values come back later.
+      const previous = definitions[index]
+      const revision = (previous.remoteTargetRevision ?? 0) + (previous.remote && value.remote && remoteTargetId(previous.remote) !== remoteTargetId(value.remote) ? 1 : 0)
+      definitions[index] = { id, ...value, ...(revision ? { remoteTargetRevision: revision } : {}) }
+    }
   })
   forgetRemoteProbes()
   changedLocalAgentSettings(id)
@@ -241,7 +273,7 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const override = custom.find(item => item.id === id)
     // Remote agents are not resolved through this computer's PATH; the server is probed at launch.
-    if (override?.remote && isCustom) return remoteLocalAgent(id, override.name, override.avatar, override.remote)
+    if (override?.remote && isCustom) return remoteLocalAgent(id, override.name, override.avatar, override.remote, remoteTarget(override))
     name = override?.name ?? name
     command = override?.command ?? command
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
@@ -266,10 +298,11 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   }))
 }
 
-function remoteLocalAgent(id: string, name: string, avatar: string | undefined, remote: RemoteAgentSpec): LocalAgent {
+function remoteLocalAgent(id: string, name: string, avatar: string | undefined, remote: RemoteAgentSpec, target?: ExecutionTarget): LocalAgent {
   return {
     id, name, command: remote.executable, args: remote.args, avatar, installed: true, discovered: true,
-    version: remoteHostLabel(remote), chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, remote
+    version: remoteHostLabel(remote), chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, remote,
+    ...(target ? { remoteTarget: target } : {})
   }
 }
 

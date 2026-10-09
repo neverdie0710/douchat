@@ -4,10 +4,10 @@ import { createArtifactTools, artifactPrompt } from './agentArtifacts'
 import { createSkillInstallationTools, skillInstallationPrompt } from './skillInstallation'
 import { openLocalSkillBridge } from './localSkillBridge'
 import { openRemoteSkillBridge, remoteBridgeUnavailablePrompt } from './remoteSkillBridge'
-import { cachedRemoteAgentSpec, remoteAgentSpec } from './localAgents'
+import { cachedRemoteAgentSpec, remoteAgentPlacement, remoteAgentSpec } from './localAgents'
 import { probeRemoteAgent } from './remoteTransport'
 import { remoteHostLabel } from './remoteValidate'
-import type { RemoteAgentSpec } from '../shared/types'
+import type { AgentWorkspaceBinding, ExecutionTarget, RemoteAgentSpec } from '../shared/types'
 import { editableIdentityFiles, identityFileSnapshot, identityEditingPrompt, localAgentFileEdits, FILE_EDIT_OPEN, FILE_EDIT_CLOSE, type AgentFileEdit } from '../shared/agentFileEdits'
 import { createSkillTools } from './skillTools'
 import { skillResourcePrompt } from '../shared/skillResources'
@@ -37,8 +37,8 @@ import type { SocialImage, SocialFile, SocialTaskReply } from '../shared/social'
 import type { AgentExecutor } from '../shared/agentExecutor'
 import { desktopAgentExecutor } from './desktopAgentExecutor'
 import { createWorkspaceTools } from './workspaceTools'
-import { resolveSavedWorkspace, localWorkspace } from './localWorkspaces'
-import { canAssignConversationWorkspace } from '../shared/conversationWorkspace'
+import { resolveSavedWorkspace, localWorkspace, localExecutionTarget } from './localWorkspaces'
+import { canAssignConversationWorkspace, memberWorkspace } from '../shared/conversationWorkspace'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, statSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -1230,7 +1230,10 @@ export class DouchatRuntime {
     if (!agent || agent.ownerId !== this.store.currentAccountId || this.sharedCallers.has(sessionKey)
       || !conversation || !conversation.agentIds.includes(agentId)
       || !canAssignConversationWorkspace(conversation, this.store.accountAgents, this.store.currentAccountId)) throw new Error('Workspace unavailable in this conversation')
-    if (conversation.workspacePath) return resolveSavedWorkspace(conversation.workspacePath)
+    // Hosted tools run on this computer, so only a folder chosen on this computer applies.
+    const chosen = memberWorkspace(conversation, agent, { ...localExecutionTarget(), location: 'local' }, this.store.accountAgents, this.store.currentAccountId)
+    const path = chosen.binding?.path ?? chosen.legacyPath
+    if (path) return resolveSavedWorkspace(path)
     const topic = this.activeTopic.get(sessionKey) ?? this.store.activeTopicId(conversation.id)
     const key = conversation.type === 'direct' ? `direct:${conversation.id}:${topic}` : groupMemberSessionId(conversation.id, agentId, topic)
     const directory = localWorkspace(agent, key)?.directory
@@ -1301,7 +1304,7 @@ export class DouchatRuntime {
     })
     if (!this.store.agent(agentId)?.localAgentId) tools.push(...createWorkspaceTools(
       () => { current(); return this.hostedWorkspace(agentId, sessionKey) },
-      (directory, signal) => this.acquireWorkspace(directory, signal)
+      (directory, signal) => this.acquireWorkspace(`local:${directory}`, signal)
     ).map(tool => ({ ...tool, execute: async (...args: Parameters<typeof tool.execute>) => {
       const agent = current()
       this.hostedWorkspace(agentId, sessionKey)
@@ -2213,14 +2216,27 @@ export class DouchatRuntime {
     ]
   }
 
-  /** The user's folder applies only to this chat's own member turns and routines,
-   * and only while every member still belongs to the owner. */
-  private conversationWorkspace(conversationId: string, sessionKey: string, config: AgentConfig): string | undefined {
+  /** The chat a turn belongs to, for workspace purposes. Shared-room tasks run
+   * under a synthetic conversation id; their folder is the local copy of the room. */
+  private workspaceConversation(conversationId: string, sessionKey: string): Conversation | undefined {
+    const roomId = this.sharedCallers.get(sessionKey)?.roomId
+    if (roomId) return sessionKey.startsWith('social:') ? this.store.accountConversations.find(item => item.remoteRoomId === roomId) : undefined
     const conversation = this.store.conversation(conversationId)
-    if (!conversation?.workspacePath || !conversation.agentIds.includes(config.id)) return undefined
     const own = sessionKey.startsWith(`direct:${conversationId}:`) || sessionKey.startsWith(`group:${encodeURIComponent(conversationId)}:`) || sessionKey.startsWith('routine:')
-    if (!own || !canAssignConversationWorkspace(conversation, this.store.accountAgents, this.store.currentAccountId)) return undefined
-    return resolveSavedWorkspace(conversation.workspacePath)
+    return own ? conversation : undefined
+  }
+
+  /** The folder a member works in, for this chat's own member turns, routines and
+   * the owner's shared rooms. A local member gets a validated folder on this
+   * computer; a remote member a folder bound to its server. A folder chosen on
+   * another target is never used, and a remote member never inherits a local folder. */
+  private memberWorkspace(conversationId: string, sessionKey: string, config: AgentConfig, remote?: ExecutionTarget): { local?: string; remote?: AgentWorkspaceBinding; stale?: boolean } {
+    const conversation = this.workspaceConversation(conversationId, sessionKey)
+    const target = remote ? { ...remote, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
+    const resolved = memberWorkspace(conversation, config, target, this.store.accountAgents, this.store.currentAccountId)
+    if (remote) return { ...(resolved.binding ? { remote: resolved.binding } : {}), ...(resolved.stale ? { stale: true } : {}) }
+    const path = resolved.binding?.path ?? resolved.legacyPath
+    return { ...(path ? { local: resolveSavedWorkspace(path) } : {}), ...(resolved.stale ? { stale: true } : {}) }
   }
 
   private async acquireWorkspace(directory: string, signal: AbortSignal): Promise<() => void> {
@@ -2416,7 +2432,8 @@ export class DouchatRuntime {
       const identityGuidance = identityWritable ? identityEditingPrompt : ''
       if (config.localAgentId) {
         let skillBridge: { close: () => void; prompt: string; isBridgeCommand?: (command: unknown) => boolean } | undefined
-        const remote = await remoteAgentSpec(config.localAgentId)
+        const placement = await remoteAgentPlacement(config.localAgentId)
+        const remote = placement ? { ...placement.spec, target: placement.target } : undefined
         const remoteLabel = remote ? remoteHostLabel(remote) : ''
         const localRoutineAllowed = Boolean(routineRequest)
           && !toolsDisabled
@@ -2438,8 +2455,10 @@ export class DouchatRuntime {
         this.localRuns.set(config.id, runs)
         let releaseWorkspace: (() => void) | undefined
         try {
-          // A folder on this computer is meaningless to an agent on a server.
-          const workspaceDirectory = remote || context === 'controller' || toolsDisabled ? undefined : this.conversationWorkspace(conversationId, sessionKey, config)
+          // A folder on this computer is meaningless to an agent on a server, and the other way around.
+          const workspace = context === 'controller' || toolsDisabled ? {} : this.memberWorkspace(conversationId, sessionKey, config, remote?.target)
+          const workspaceDirectory = workspace.local
+          const remoteWorkspace = workspace.remote
           let bridgeUnavailable = false
           let connectorTools: AgentTool[] = []
           if (context !== 'controller' && !toolsDisabled && this.connectors.createLocalTools) {
@@ -2484,11 +2503,15 @@ export class DouchatRuntime {
               : '',
             context !== 'controller' ? 'Before starting substantial work, briefly explain what you will do. During long tasks, provide concise progress updates based on completed actions, and state blockers honestly.' : '',
             workspaceDirectory ? `Your working directory is the human's project folder: ${workspaceDirectory}. Work on its files in place. Other agents in this chat share this folder and take turns, so check the current state of files before changing them. Do not delete or rewrite unrelated files.` : '',
+            remoteWorkspace ? `Your working directory is the human's project folder on ${remoteLabel}: ${remoteWorkspace.path}. Work on its files in place. Other agents may use this folder too, so check the current state of files before changing them. Do not delete or rewrite unrelated files.` : '',
+            workspace.stale ? 'The folder previously chosen for you in this chat belongs to another computer or server, so you are working in your default folder instead.' : '',
             prompt
           ].filter(Boolean)
-          if (workspaceDirectory) {
+          // Serial only within this process: a lock per real path on this computer, or per path on one server.
+          const lockKey = workspaceDirectory ? `local:${workspaceDirectory}` : remoteWorkspace ? `remote:${remoteWorkspace.executionTargetId}:${remoteWorkspace.path}` : undefined
+          if (lockKey) {
             this.setActivity(conversationId, topicId, 'replying', [config.id], config.name, { localProgress: { phase: 'waiting', elapsedSeconds: 0, silentSeconds: 0, detail: 'Waiting for another agent to finish in this workspace' }, action: undefined }, config.id)
-            releaseWorkspace = await this.acquireWorkspace(workspaceDirectory, abort.signal)
+            releaseWorkspace = await this.acquireWorkspace(lockKey, abort.signal)
           }
           const reply = await withReplyDeadline(() => this.localExecutor.run(config, [history ? `Conversation so far:\n${history}` : '', ...promptParts].filter(Boolean).join('\n\n'), abort.signal, images?.map((image, index) => ({
             name: `input-image-${index + 1}`,
@@ -2497,6 +2520,7 @@ export class DouchatRuntime {
           })), {
             sessionKey,
             workspaceDirectory,
+            remoteWorkspace,
             transient: context === 'controller' || sessionKey.startsWith('social-task:') || sessionKey.startsWith('handoff-summary:'),
             imageToolsAllowed: context !== 'controller' && !toolsDisabled,
             continuationPrompt: promptParts.join('\n\n'),
@@ -4195,13 +4219,18 @@ Not sure where to start? Tell me what you'd like to accomplish, and we'll try it
     const topicId = this.store.activeTopicId(conversationId)
     const sessionKey = `direct:${conversationId}:${topicId}`
     if (this.activeConversation.has(sessionKey)) return
-    const remote = await remoteAgentSpec(config.localAgentId)
+    const placement = await remoteAgentPlacement(config.localAgentId)
+    const remote = placement?.spec
     const approvals = remote ? remote.adapter === 'codex' || remote.adapter === 'claude' : config.localAgentId === 'codex' || config.localAgentId === 'claude'
+    // The same resolution as the turn, so the warmed process is the one the turn reuses.
+    let workspace: ReturnType<DouchatRuntime['memberWorkspace']>
+    try { workspace = this.memberWorkspace(conversationId, sessionKey, config, placement?.target) } catch { return }
     await Promise.all([
       this.connectors.createLocalTools ? this.prepareConnectors() : undefined,
       this.localExecutor.prepare(config, {
         sessionKey,
-        workspaceDirectory: remote ? undefined : this.conversationWorkspace(conversationId, sessionKey, config),
+        workspaceDirectory: workspace.local,
+        remoteWorkspace: workspace.remote,
         // Only its presence selects the process mode; each turn supplies its own handler.
         onApproval: approvals ? async () => { throw new Error('No turn is running') } : undefined
       })
@@ -4247,7 +4276,7 @@ Not sure where to start? Tell me what you'd like to accomplish, and we'll try it
   /** Folder changes keep chat context; idle processes from the old folder close now. */
   workspaceChanged(conversationId: string): void {
     const conversation = this.store.conversation(conversationId)
-    this.localExecutor.releaseIdleConnections?.(conversationId, conversation?.type === 'direct' ? conversation.agentIds : [])
+    this.localExecutor.releaseIdleConnections?.(conversationId, conversation?.type === 'direct' ? conversation.agentIds : [], conversation?.remoteRoomId)
   }
 
   resetConversation(conversationId: string, topicId?: string): void {

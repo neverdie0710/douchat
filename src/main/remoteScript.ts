@@ -24,14 +24,38 @@ export function assertWorkspaceKey(key: string): string {
   if (!WORKSPACE_KEY.test(key)) throw new Error('Invalid remote workspace')
   return key
 }
-export function workspaceDirectory(runId: string, workspaceKey?: string): string {
-  return workspaceKey ? `${REMOTE_ROOT}/w/${shQuote(assertWorkspaceKey(workspaceKey))}` : `${runDirectory(runId)}/work`
+/** `key` names the Douchat-managed folder and the conversation's run owner
+ * record. `path` is a folder the owner chose on this server; it was resolved
+ * with `pwd -P` when saved and is used in place, never created or removed. */
+export interface RemoteWorkspaceRef { key?: string; path?: string }
+
+const CONTROL = /[\0-\x1f\x7f]/
+/** Structural check of a canonical absolute server path; the server resolves it. */
+export function assertRemoteWorkspacePath(path: string): string {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.length > 1024 || CONTROL.test(path)) throw new Error('Invalid server folder')
+  if (path !== '/' && (path.endsWith('/') || path.includes('//') || path.split('/').some(part => part === '.' || part === '..'))) throw new Error('Invalid server folder')
+  return path
+}
+export function workspaceDirectory(runId: string, workspace: RemoteWorkspaceRef = {}): string {
+  if (workspace.path) return shQuote(assertRemoteWorkspacePath(workspace.path))
+  return workspace.key ? `${REMOTE_ROOT}/w/${shQuote(assertWorkspaceKey(workspace.key))}` : `${runDirectory(runId)}/work`
 }
 /** Absolute path of the same folder, for prompts and JSON-RPC only. */
-export function workspacePath(remoteHome: string, runId: string, workspaceKey?: string): string {
-  return workspaceKey ? `${remoteHome}/.douchat-remote/w/${assertWorkspaceKey(workspaceKey)}` : `${remoteHome}/.douchat-remote/t-${assertUuid(runId, 'run')}/work`
+export function workspacePath(remoteHome: string, runId: string, workspace: RemoteWorkspaceRef = {}): string {
+  if (workspace.path) return assertRemoteWorkspacePath(workspace.path)
+  return workspace.key ? `${remoteHome}/.douchat-remote/w/${assertWorkspaceKey(workspace.key)}` : `${remoteHome}/.douchat-remote/t-${assertUuid(runId, 'run')}/work`
 }
 const CHECK_WORKSPACE = '[ -d "$w" ] && [ ! -L "$w" ] && [ -O "$w" ] || { echo "Douchat remote workspace is invalid" >&2; exit 3; }'
+/** A chosen folder must still resolve to the saved path: a folder replaced by a
+ * symbolic link (or moved) since it was chosen is refused, not followed. */
+function checkChosenWorkspace(path: string): string {
+  // Enter the folder in this shell and compare where we actually are, so there
+  // is no window between the check and the agent starting in it.
+  return `{ cd -P -- "$w" 2>/dev/null && [ -w . ] && [ "$(pwd -P)" = ${shQuote(assertRemoteWorkspacePath(path))} ]; } || { echo "The chosen folder on the server is missing, was replaced or is not writable. Choose it again in chat details." >&2; exit 3; }`
+}
+function checkWorkspace(workspace: RemoteWorkspaceRef): string {
+  return workspace.path ? checkChosenWorkspace(workspace.path) : CHECK_WORKSPACE
+}
 
 export const SAFE_NAME = /^[A-Za-z0-9._-]{1,128}$/
 function safeName(name: string): string {
@@ -49,7 +73,7 @@ function preamble(remotePath?: string): string[] {
 const CHECK_RUN = '[ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] || { echo "Douchat remote run directory is invalid" >&2; exit 3; }'
 
 /** Create the private per-run directory and the conversation workspace. */
-export function prepareScript(runId: string, workspaceKey?: string): string {
+export function prepareScript(runId: string, workspace: RemoteWorkspaceRef = {}): string {
   return [
     ...preamble(),
     'case "$HOME" in /*) ;; *) echo "Remote HOME must be an absolute path" >&2; exit 3;; esac',
@@ -67,16 +91,19 @@ export function prepareScript(runId: string, workspaceKey?: string): string {
     'mkdir -m 700 -- "$d/out"',
     CHECK_RUN,
     '(set -C; : > "$d/.marker")',
-    ...(workspaceKey ? [
+    // The owner record lives in $r/w for chosen folders too: it tracks the conversation, not the folder.
+    ...(workspace.key ? [
       '[ -L "$r/w" ] && { echo "Douchat remote workspace root is a symbolic link" >&2; exit 3; }',
       '[ -d "$r/w" ] || mkdir -m 700 -- "$r/w"',
-      '[ -d "$r/w" ] && [ ! -L "$r/w" ] && [ -O "$r/w" ] || { echo "Douchat remote workspace root is invalid" >&2; exit 3; }',
-      `w=${workspaceDirectory(runId, workspaceKey)}`,
+      '[ -d "$r/w" ] && [ ! -L "$r/w" ] && [ -O "$r/w" ] || { echo "Douchat remote workspace root is invalid" >&2; exit 3; }'
+    ] : []),
+    `w=${workspaceDirectory(runId, workspace)}`,
+    ...(workspace.path ? [] : workspace.key ? [
       '[ -L "$w" ] && { echo "Douchat remote workspace is a symbolic link" >&2; exit 3; }',
-      '[ -d "$w" ] || mkdir -m 700 -- "$w"',
-      ...takeoverLines(runId, workspaceKey)
-    ] : [`w=${workspaceDirectory(runId)}`, 'mkdir -m 700 -- "$w"']),
-    CHECK_WORKSPACE
+      '[ -d "$w" ] || mkdir -m 700 -- "$w"'
+    ] : ['mkdir -m 700 -- "$w"']),
+    ...(workspace.key ? takeoverLines(runId, workspace.key) : []),
+    checkWorkspace(workspace)
   ].join('\n') + '\n'
 }
 
@@ -219,8 +246,8 @@ export type PromptChannel = 'stdin' | 'argv' | 'none'
 
 export interface LaunchScriptOptions {
   runId: string
-  /** Conversation workspace key; the folder is derived by Douchat, never typed by the user. */
-  workspaceKey?: string
+  /** Conversation folder: Douchat's managed folder, or one the owner chose and Douchat verified. */
+  workspace?: RemoteWorkspaceRef
   executable: string
   args: RemoteArg[]
   /** stdin: the agent inherits ssh stdin. argv: the prompt is read into "$p". */
@@ -239,8 +266,9 @@ export function launchScript(options: LaunchScriptOptions): string {
   return [
     ...preamble(options.remotePath),
     `d=${runDirectory(options.runId)}`, CHECK_RUN,
-    `w=${workspaceDirectory(options.runId, options.workspaceKey)}`, CHECK_WORKSPACE,
-    'cd -- "$w"',
+    `w=${workspaceDirectory(options.runId, options.workspace)}`, checkWorkspace(options.workspace ?? {}),
+    // A chosen folder was entered by its check; a managed one is entered here.
+    ...(options.workspace?.path ? [] : ['cd -- "$w"']),
     ...(options.environment === 'gemini' ? ['GEMINI_CLI_TRUST_WORKSPACE=true; export GEMINI_CLI_TRUST_WORKSPACE'] : []),
     ...(options.environment === 'claude-account' ? ['unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_BASE_URL'] : []),
     `exe=${shQuote(exe)}`,
@@ -309,7 +337,7 @@ export function framesScript(options: FramesScriptOptions): string {
  * variables such as CODEX_HOME are only expanded on the server. */
 export const remoteImageDirectories = {
   codex: (threadId: string) => ({ directory: `"\${CODEX_HOME:-$HOME/.codex}/generated_images"/${shQuote(assertUuid(threadId, 'thread'))}`, parentChecks: 1 }),
-  gemini: (runId: string, workspaceKey?: string) => ({ directory: `${workspaceDirectory(runId, workspaceKey)}/nanobanana-output`, parentChecks: 1 }),
+  gemini: (runId: string, workspace?: RemoteWorkspaceRef) => ({ directory: `${workspaceDirectory(runId, workspace)}/nanobanana-output`, parentChecks: 1 }),
   grok: (sessionId: string) => ({ directory: `"\${GROK_HOME:-$HOME/.grok}/sessions"/*/${shQuote(assertUuid(sessionId, 'session'))}/images`, parentChecks: 2 }),
   outbox: (runId: string) => ({ directory: `${runDirectory(runId)}/out`, parentChecks: 1 })
 }
@@ -389,4 +417,38 @@ export function bridgeCheckScript(bridgeId: string): string {
 }
 export function bridgeCleanupScript(bridgeId: string): string {
   return [`s=${REMOTE_ROOT}/${shQuote(bridgeSocketName(bridgeId))}`, '[ -S "$s" ] && [ ! -L "$s" ] && rm -f -- "$s"', 'exit 0'].join('\n') + '\n'
+}
+
+/** One level of sub-folders, for choosing a folder on the server. The first
+ * line is the listed folder's canonical path; hidden folders, symbolic links
+ * and names with line breaks are skipped, and at most 500 names are returned. */
+export function listDirectoriesScript(path: string): string {
+  return [
+    'set -u', 'LC_ALL=C; export LC_ALL',
+    `cd -P -- ${shQuote(assertRemoteWorkspacePath(path))} 2>/dev/null || { echo "Folder not found on the server" >&2; exit 3; }`,
+    'pwd -P',
+    "nl=$(printf '\\nx'); nl=${nl%x}",
+    'n=0',
+    'for d in *; do',
+    '  [ -d "$d" ] && [ ! -L "$d" ] || continue',
+    '  case "$d" in .*|*"$nl"*) continue;; esac',
+    "  printf '%s\\n' \"$d\"",
+    '  n=$((n + 1)); [ "$n" -lt 500 ] || break',
+    'done', 'exit 0'
+  ].join('\n') + '\n'
+}
+
+/** Print the server's system name, its canonical home folder and the
+ * canonical path of a folder the agent can write to. The policy compares real
+ * paths only: a symlinked home (/home -> /var/home) or a case-insensitive
+ * file system cannot hide ~/.ssh behind another spelling. */
+export function resolveDirectoryScript(path: string): string {
+  return [
+    'set -u',
+    'uname -s',
+    '(cd -P -- "$HOME" 2>/dev/null && pwd -P) || { echo "Remote HOME is not accessible" >&2; exit 3; }',
+    `cd -P -- ${shQuote(assertRemoteWorkspacePath(path))} 2>/dev/null || { echo "Folder not found on the server" >&2; exit 3; }`,
+    '[ -w . ] || { echo "This folder on the server is not writable" >&2; exit 3; }',
+    'pwd -P'
+  ].join('\n') + '\n'
 }

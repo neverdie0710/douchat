@@ -4839,6 +4839,18 @@ html[data-platform='win32'] .messenger .app-rail {
 .conversation-workspace-actions button { padding: 5px 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--canvas); color: var(--ink); font: inherit; cursor: pointer; }
 .conversation-workspace-actions button:hover:not(:disabled) { border-color: var(--accent-500); color: var(--accent-600); }
 .conversation-workspace-actions button:disabled { opacity: .55; cursor: default; }
+.conversation-workspace-member { display: grid; gap: 6px; }
+.conversation-workspace-member + .conversation-workspace-member { padding-top: 9px; border-top: 1px dashed var(--line); }
+.conversation-workspace-member-name { margin: 0; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.conversation-workspace-legacy { display: grid; gap: 6px; }
+.remote-directory-picker { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); }
+.remote-directory-host { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); }
+.remote-directory-current { margin: 0; overflow: hidden; direction: rtl; text-align: left; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: plaintext; font-family: var(--mono, ui-monospace, monospace); }
+.remote-directory-list { display: grid; max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 5px; }
+.remote-directory-list button { display: flex; align-items: center; gap: 6px; padding: 6px 9px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.remote-directory-list button:last-child { border-bottom: 0; }
+.remote-directory-list button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-500) 8%, transparent); }
+.remote-directory-list .conversation-workspace-note { padding: 8px 9px; }
 @media (prefers-reduced-motion: reduce) {
   .chat-details-layer, .messenger .chat-details-layer .inspector-rail { transition: none; }
 }

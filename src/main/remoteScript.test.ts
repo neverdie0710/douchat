@@ -7,8 +7,9 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   PROMPT_ARG, REMOTE_BOOTSTRAP, cleanupScript, customRemoteArguments, encodePayload, framesScript, killScript, launchScript,
-  markPromptArguments, prepareScript, probeScript, runDirectory, uploadScript
+  listDirectoriesScript, markPromptArguments, prepareScript, probeScript, resolveDirectoryScript, runDirectory, uploadScript
 } from './remoteScript'
+import { realpath, rename } from 'node:fs/promises'
 import { parseFrames, OUTBOX_LIMITS } from './remoteFileChannel'
 import { parseRemoteProbe } from './remoteValidate'
 
@@ -109,7 +110,7 @@ describe('run directory lifecycle', () => {
     expect(markPromptArguments(['-p', 'secret'], 'secret')).toEqual(['-p', PROMPT_ARG])
     expect(() => launchScript({ runId, executable: 'printf', args: [PROMPT_ARG], channel: 'stdin' })).toThrow()
     expect(() => launchScript({ runId, executable: 'a;b', args: [], channel: 'stdin' })).toThrow()
-    expect(() => launchScript({ runId, workspaceKey: '../x', executable: 'printf', args: [], channel: 'stdin' })).toThrow()
+    expect(() => launchScript({ runId, workspace: { key: '../x' }, executable: 'printf', args: [], channel: 'stdin' })).toThrow()
   })
 })
 
@@ -198,8 +199,8 @@ describe('conversation workspace', () => {
   const key = 'a'.repeat(64)
   it('stops the previous run of the same conversation, including a launcher child, before a new run starts', async () => {
     const first = randomUUID()
-    expect(remote(prepareScript(first, key)).status).toBe(0)
-    const old = spawn('/bin/sh', ['-c', `${REMOTE_BOOTSTRAP} ${encodePayload(launchScript({ runId: first, workspaceKey: key, executable: 'sh', args: ['-c', 'sleep 300 & wait'], channel: 'none' }))}`], {
+    expect(remote(prepareScript(first, { key })).status).toBe(0)
+    const old = spawn('/bin/sh', ['-c', `${REMOTE_BOOTSTRAP} ${encodePayload(launchScript({ runId: first, workspace: { key }, executable: 'sh', args: ['-c', 'sleep 300 & wait'], channel: 'none' }))}`], {
       cwd: home, env: { PATH: '/usr/bin:/bin', HOME: home }, detached: true, stdio: 'ignore'
     })
     old.unref()
@@ -216,7 +217,7 @@ describe('conversation workspace', () => {
     const second = randomUUID()
     const started = Date.now()
     const takeover = new Promise<number | null>(resolve => {
-      const next = spawn('/bin/sh', ['-c', `${REMOTE_BOOTSTRAP} ${encodePayload(prepareScript(second, key))}`], { cwd: home, env: { PATH: '/usr/bin:/bin', HOME: home } })
+      const next = spawn('/bin/sh', ['-c', `${REMOTE_BOOTSTRAP} ${encodePayload(prepareScript(second, { key }))}`], { cwd: home, env: { PATH: '/usr/bin:/bin', HOME: home } })
       next.once('exit', resolve)
     })
     await exited
@@ -233,44 +234,127 @@ describe('conversation workspace', () => {
   it('ignores a forged owner record instead of deleting or signalling outside the run folders', async () => {
     const victim = await mkdtemp(join(home, 'victim-'))
     const first = randomUUID()
-    expect(remote(prepareScript(first, key)).status).toBe(0)
+    expect(remote(prepareScript(first, { key })).status).toBe(0)
     for (const forged of ['../victim', `t-${first}/../../${victim.split('/').pop()}`, '$(touch pwned)', 't-zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz']) {
       await writeFile(join(home, '.douchat-remote', 'w', `${key}.run`), forged)
-      expect(remote(prepareScript(randomUUID(), key)).status).toBe(0)
+      expect(remote(prepareScript(randomUUID(), { key })).status).toBe(0)
     }
     expect(existsSync(victim)).toBe(true)
     expect(existsSync(join(home, 'pwned'))).toBe(false)
     await writeFile(join(home, '.douchat-remote', `t-${first}`, 'pid'), '1')
     await writeFile(join(home, '.douchat-remote', 'w', `${key}.run`), `t-${first}`)
-    expect(remote(prepareScript(randomUUID(), key)).status).toBe(0)
+    expect(remote(prepareScript(randomUUID(), { key })).status).toBe(0)
   })
   it('creates a private folder named by Douchat and reuses it across runs', async () => {
     const first = randomUUID()
-    expect(remote(prepareScript(first, key)).status).toBe(0)
+    expect(remote(prepareScript(first, { key })).status).toBe(0)
     const folder = join(home, '.douchat-remote', 'w', key)
     expect((await stat(folder)).mode & 0o777).toBe(0o700)
-    const pwd = remote(launchScript({ runId: first, workspaceKey: key, executable: 'pwd', args: [], channel: 'none' }))
+    const pwd = remote(launchScript({ runId: first, workspace: { key }, executable: 'pwd', args: [], channel: 'none' }))
     expect(pwd.stdout.toString().trim()).toMatch(new RegExp(`/\\.douchat-remote/w/${key}$`))
     await writeFile(join(folder, 'keep.txt'), 'x')
     const second = randomUUID()
-    expect(remote(prepareScript(second, key)).status).toBe(0)
+    expect(remote(prepareScript(second, { key })).status).toBe(0)
     expect(existsSync(join(folder, 'keep.txt'))).toBe(true)
   })
 
   it('rejects invalid keys and symlinked workspace folders', async () => {
     for (const bad of ['../../etc', 'A'.repeat(64), 'a'.repeat(63), `${'a'.repeat(63)}/`, "a'$(id)"]) {
-      expect(() => prepareScript(randomUUID(), bad), bad).toThrow()
-      expect(() => launchScript({ runId: randomUUID(), workspaceKey: bad, executable: 'pwd', args: [], channel: 'none' }), bad).toThrow()
+      expect(() => prepareScript(randomUUID(), { key: bad }), bad).toThrow()
+      expect(() => launchScript({ runId: randomUUID(), workspace: { key: bad }, executable: 'pwd', args: [], channel: 'none' }), bad).toThrow()
     }
     const target = await mkdtemp(join(tmpdir(), 'douchat-target-'))
     try {
       await mkdir(join(home, '.douchat-remote', 'w'), { recursive: true })
       await symlink(target, join(home, '.douchat-remote', 'w', key))
-      expect(remote(prepareScript(randomUUID(), key)).status).not.toBe(0)
+      expect(remote(prepareScript(randomUUID(), { key })).status).not.toBe(0)
       await rm(join(home, '.douchat-remote', 'w'), { recursive: true })
       await symlink(target, join(home, '.douchat-remote', 'w'))
-      expect(remote(prepareScript(randomUUID(), key)).status).not.toBe(0)
+      expect(remote(prepareScript(randomUUID(), { key })).status).not.toBe(0)
       expect(existsSync(join(target, key))).toBe(false)
     } finally { await rm(target, { recursive: true, force: true }) }
+  })
+})
+
+describe('chosen server folder', () => {
+  const key = 'b'.repeat(64)
+  it('runs in the chosen folder in place, keeps the run owner record, and leaves the folder alone on cleanup', async () => {
+    const project = await realpath(await mkdtemp(join(home, 'project-')))
+    await writeFile(join(project, 'keep.txt'), 'x')
+    const runId = randomUUID()
+    expect(remote(prepareScript(runId, { key, path: project })).status).toBe(0)
+    // No managed folder is created for a chosen one; the owner record still is.
+    expect(existsSync(join(home, '.douchat-remote', 'w', key))).toBe(false)
+    expect(await readFile(join(home, '.douchat-remote', 'w', `${key}.run`), 'utf8')).toBe(`t-${runId}`)
+    const pwd = remote(launchScript({ runId, workspace: { key, path: project }, executable: 'pwd', args: [], channel: 'none' }))
+    expect(pwd.status).toBe(0)
+    expect(pwd.stdout.toString().trim()).toBe(project)
+    expect(remote(cleanupScript(runId)).status).toBe(0)
+    expect(await readFile(join(project, 'keep.txt'), 'utf8')).toBe('x')
+    expect((await stat(project)).mode & 0o777).not.toBe(0)
+  })
+
+  it('refuses to launch when the saved folder was replaced by a symbolic link or removed', async () => {
+    const project = await realpath(await mkdtemp(join(home, 'project-')))
+    const elsewhere = await realpath(await mkdtemp(join(home, 'elsewhere-')))
+    const runId = randomUUID()
+    expect(remote(prepareScript(runId, { key, path: project })).status).toBe(0)
+    await rename(project, `${project}.moved`)
+    await symlink(elsewhere, project)
+    const swapped = remote(launchScript({ runId, workspace: { key, path: project }, executable: 'pwd', args: [], channel: 'none' }))
+    expect(swapped.status).not.toBe(0)
+    expect(swapped.stderr.toString()).toContain('was replaced')
+    expect(swapped.stdout.toString()).toBe('')
+    await rm(project)
+    expect(remote(prepareScript(randomUUID(), { key, path: project })).status).not.toBe(0)
+  })
+
+  it('rejects malformed folder paths before anything runs', () => {
+    for (const bad of ['relative', '/a/../b', '/a/./b', '/a//b', '/a/', `/a\nb`, '/a\u0000b', '/' + 'x'.repeat(1100)]) {
+      expect(() => launchScript({ runId: randomUUID(), workspace: { path: bad }, executable: 'pwd', args: [], channel: 'none' }), bad).toThrow()
+      expect(() => listDirectoriesScript(bad), bad).toThrow()
+      expect(() => resolveDirectoryScript(bad), bad).toThrow()
+    }
+  })
+
+  it('treats hostile folder names as data in every shell', async () => {
+    const project = await realpath(await mkdtemp(join(home, 'project-')))
+    const hostile = join(project, "it's $(touch pwned) `id` ; ok")
+    await mkdir(hostile)
+    for (const shell of SHELLS) {
+      const result = remote(resolveDirectoryScript(hostile), { shell })
+      expect(result.status, shell).toBe(0)
+      expect(result.stdout.toString().trim().split('\n').at(-1), shell).toBe(hostile)
+    }
+    expect(existsSync(join(home, 'pwned'))).toBe(false)
+    expect(existsSync(join(project, 'pwned'))).toBe(false)
+  })
+
+  it('lists one level of visible, real folders and returns the canonical path first', async () => {
+    const project = await realpath(await mkdtemp(join(home, 'project-')))
+    for (const name of ['api', 'web', '.git', 'with space']) await mkdir(join(project, name))
+    await writeFile(join(project, 'file.txt'), 'x')
+    await symlink(home, join(project, 'link-to-home'))
+    await mkdir(join(project, 'api', 'nested'))
+    const result = remote(listDirectoriesScript(project))
+    expect(result.status).toBe(0)
+    const [path, ...names] = result.stdout.toString().trim().split('\n')
+    expect(path).toBe(project)
+    expect(names.sort()).toEqual(['api', 'web', 'with space'])
+    const unreadable = remote(listDirectoriesScript(join(project, 'missing')))
+    expect(unreadable.status).not.toBe(0)
+  })
+
+  it('only resolves folders the agent can write to, following links to their real path', async () => {
+    const project = await realpath(await mkdtemp(join(home, 'project-')))
+    await symlink(project, join(home, 'shortcut'))
+    const followed = remote(resolveDirectoryScript(join(home, 'shortcut')))
+    // System name, canonical home, canonical folder.
+    expect(followed.stdout.toString().trim().split('\n')).toEqual([process.platform === 'darwin' ? 'Darwin' : 'Linux', await realpath(home), project])
+    if (process.getuid?.() !== 0) {
+      const locked = join(project, 'locked')
+      await mkdir(locked, { mode: 0o500 })
+      expect(remote(resolveDirectoryScript(locked)).status).not.toBe(0)
+    }
   })
 })

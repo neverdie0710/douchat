@@ -28,6 +28,7 @@ import type {
   BuiltInAgentManifest,
   BuiltInAgentUserOverrides,
   ChatMessage,
+  AgentWorkspaceBinding,
   Conversation,
   CreateGroupInput,
   CreateRoutineInput,
@@ -1801,7 +1802,12 @@ export class DouchatStore {
           this.write('DELETE FROM conversations WHERE id = ?', conversation.id)
           continue
         }
-        if (!conversation.agentIds.includes(agentId)) continue
+        const hadWorkspace = Boolean(conversation.agentWorkspaces?.[agentId])
+        if (hadWorkspace) {
+          delete conversation.agentWorkspaces![agentId]
+          if (!Object.keys(conversation.agentWorkspaces!).length) delete conversation.agentWorkspaces
+        }
+        if (!conversation.agentIds.includes(agentId)) { if (hadWorkspace) this.putConversation(conversation); continue }
         conversation.agentIds = conversation.agentIds.filter((id) => id !== agentId)
         if (conversation.leadAgentId === agentId) conversation.leadAgentId = conversation.agentIds[0]
         conversation.name = this.groupName(conversation)
@@ -1950,6 +1956,19 @@ export class DouchatStore {
     this.putConversation(conversation)
   }
 
+  /** Callers must validate the folder on its target and check the agent's owner first. */
+  setAgentWorkspace(conversationId: string, agentId: string, binding: AgentWorkspaceBinding | undefined): Conversation | undefined {
+    const conversation = this.conversation(conversationId)
+    if (!conversation) return undefined
+    const workspaces = { ...conversation.agentWorkspaces }
+    if (binding) workspaces[agentId] = { path: binding.path, executionTargetId: binding.executionTargetId, targetRevision: binding.targetRevision }
+    else delete workspaces[agentId]
+    if (Object.keys(workspaces).length) conversation.agentWorkspaces = workspaces
+    else delete conversation.agentWorkspaces
+    this.putConversation(conversation)
+    return conversation
+  }
+
   setConversationWorkspace(conversationId: string, workspacePath: string | undefined): Conversation | undefined {
     const conversation = this.conversation(conversationId)
     if (!conversation) return undefined
@@ -1991,6 +2010,10 @@ export class DouchatStore {
     if (input.agentIds && conversation.type === 'group') {
       const known = new Set(this.accountAgents.map((agent) => agent.id))
       conversation.agentIds = [...new Set(input.agentIds)].filter((agentId) => known.has(agentId))
+      if (conversation.agentWorkspaces) {
+        for (const agentId of Object.keys(conversation.agentWorkspaces)) if (!conversation.agentIds.includes(agentId)) delete conversation.agentWorkspaces[agentId]
+        if (!Object.keys(conversation.agentWorkspaces).length) delete conversation.agentWorkspaces
+      }
       if (!conversation.agentIds.includes(conversation.leadAgentId ?? '')) {
         conversation.leadAgentId = conversation.agentIds[0]
       }

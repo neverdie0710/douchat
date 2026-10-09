@@ -2,11 +2,30 @@ import { createHash, randomUUID } from 'node:crypto'
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, parse, relative, sep } from 'node:path'
-import type { AgentConfig } from '../shared/types'
+import type { AgentConfig, AgentWorkspaceBinding, ExecutionTarget } from '../shared/types'
 
 let root: string | undefined
 let dataRoot: string | undefined
-export function configureLocalWorkspaces(userData?: string): void { dataRoot = userData; root = userData ? join(userData, 'local-workspaces') : undefined }
+let deviceTarget: ExecutionTarget | undefined
+export function configureLocalWorkspaces(userData?: string): void { dataRoot = userData; root = userData ? join(userData, 'local-workspaces') : undefined; deviceTarget = undefined }
+
+/** This computer as an execution target. The id is created once per user-data
+ * folder, so a copied or synced chat never treats another computer's folder as local. */
+export function localExecutionTarget(): ExecutionTarget {
+  if (deviceTarget) return deviceTarget
+  let id = 'unconfigured'
+  if (dataRoot) {
+    const file = join(dataRoot, 'device-id')
+    try { id = readFileSync(file, 'utf8').trim() } catch { /* Created below. */ }
+    if (!/^[a-f0-9-]{36}$/.test(id)) {
+      id = randomUUID()
+      mkdirSync(dataRoot, { recursive: true })
+      save(file, id)
+    }
+  }
+  deviceTarget = { executionTargetId: `local:${id}`, targetRevision: 0 }
+  return deviceTarget
+}
 
 const inside = (child: string, parent: string): boolean => {
   const path = relative(parent, child)
@@ -55,12 +74,15 @@ function read(file: string): RecordData | undefined {
     throw error
   }
 }
-function save(file: string, value: RecordData): void {
+function save(file: string, value: RecordData | string): void {
   const temporary = file + '.' + randomUUID() + '.tmp'
-  writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 })
+  writeFileSync(temporary, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 })
   renameSync(temporary, file)
 }
-export function localWorkspace(config: AgentConfig, sessionKey?: string, customDirectory?: string, placement: { remote?: boolean } = {}) {
+/** A remote agent's folder lives on its server. The fingerprint names the
+ * server and the chosen folder, so a thread never resumes on another target. */
+export type RemotePlacement = { target: ExecutionTarget; workspace?: AgentWorkspaceBinding }
+export function localWorkspace(config: AgentConfig, sessionKey?: string, customDirectory?: string, placement: { remote?: RemotePlacement } = {}) {
   if (!root) return undefined
   if (!config.ownerId) throw new Error('A local workspace requires an account.')
   const key = sessionKey || `agent:${config.id}`
@@ -69,17 +91,24 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
   mkdirSync(records, { recursive: true, mode: 0o700 })
   const file = join(records, id + '.json')
   // The folder is part of the binding: a native thread must not resume against other files.
-  const fingerprint = hash(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model, ...(config.thinkingLevel ? [config.thinkingLevel] : []), ...(customDirectory ? [{ folder: customDirectory }] : [])]))
+  // Agents on this computer keep the original formula so existing threads resume.
+  const remote = placement.remote
+  const fingerprint = hash(JSON.stringify([config.localAgentId, config.instructions, config.role, config.name, config.model, ...(config.thinkingLevel ? [config.thinkingLevel] : []),
+    ...(remote ? [{ target: remote.target.executionTargetId, revision: remote.target.targetRevision, folder: remote.workspace?.path ?? null }] : customDirectory ? [{ folder: customDirectory }] : [])]))
   const old = read(file)
   const record: RecordData = { owner: config.ownerId, agent: config.id, sessionKey: key,
     generation: old?.generation && /^[a-f0-9-]{36}$/.test(old.generation) ? old.generation : randomUUID(), fingerprint,
     ...(old?.fingerprint === fingerprint && old.thread ? { thread: old.thread } : {}),
     ...(config.localAgentId === 'claude' && old?.claudeAccountLogin === true ? { claudeAccountLogin: true } : {}) }
   save(file, record)
-  // Remote agents keep files on the server; the key names that folder there.
-  const remoteKey = hash(JSON.stringify([id, record.generation]))
+  // Remote agents keep files on the server; the key names that folder there and
+  // the conversation's run owner. Agents saved before targets existed keep their
+  // folder (each agent has one server until it is edited); an edited target
+  // never reuses the managed folder of the previous one.
+  const legacyTarget = !remote || (remote.target.executionTargetId.startsWith('ssh-legacy:') && remote.target.targetRevision === 0)
+  const remoteKey = hash(JSON.stringify(legacyTarget ? [id, record.generation] : [id, record.generation, remote!.target.executionTargetId, remote!.target.targetRevision]))
   let directory = customDirectory
-  if (placement.remote) directory = ''
+  if (remote) directory = ''
   else if (!directory) {
     const legacyDirectory = join(root, 'files', hash(config.ownerId), hash(config.id), id, record.generation)
     // Cursor flattens the entire workspace path into one directory name for its
@@ -93,7 +122,7 @@ export function localWorkspace(config: AgentConfig, sessionKey?: string, customD
     }
     mkdirSync(directory, { recursive: true, mode: 0o700 })
   }
-  return { directory, remoteKey, custom: Boolean(customDirectory), thread: record.thread, claudeAccountLogin: record.claudeAccountLogin, rememberAccountLogin() {
+  return { directory, remoteKey, custom: Boolean(remote ? remote.workspace : customDirectory), thread: record.thread, claudeAccountLogin: record.claudeAccountLogin, rememberAccountLogin() {
     const current = read(file)
     if (current?.generation !== record.generation || current.fingerprint !== fingerprint) return
     save(file, { ...current, claudeAccountLogin: true })

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, remoteTargetId, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { resolveExecutable } from './shellPath'
 vi.mock('./shellPath', () => ({ resolveExecutable: vi.fn() }))
 let registryDirectory = ''
@@ -115,4 +115,32 @@ it('bounds an entire scan when executable discovery never settles', async () => 
     await vi.advanceTimersByTimeAsync(15001)
     await assertion
   } finally { vi.useRealTimers() }
+})
+
+describe('remote execution target', () => {
+  const server = { transport: 'ssh' as const, host: 'box', user: 'me', adapter: 'codex' as const, executable: 'codex', args: [], allowSharing: false }
+  it('normalizes the default port and changes identity for any server edit', () => {
+    expect(remoteTargetId({ host: 'Box' })).toBe(remoteTargetId({ host: 'box', port: 22 }))
+    const base = remoteTargetId(server)
+    expect(remoteTargetId({ ...server, port: 2222 })).not.toBe(base)
+    expect(remoteTargetId({ ...server, user: 'root' })).not.toBe(base)
+    expect(remoteTargetId({ ...server, host: 'other' })).not.toBe(base)
+    expect(remoteTargetId({ ...server, identityFile: '/k' })).not.toBe(base)
+    expect(base).toMatch(/^ssh-legacy:[a-f0-9]{32}$/)
+  })
+  it('increases the persisted revision when the server changes, even back to the original', async () => {
+    await addCustomLocalAgent({ name: 'Remote', command: 'codex', remote: server })
+    const [entry] = (await detectLocalAgents({ desktopApp: async () => undefined })).filter(agent => agent.remote)
+    expect(entry.remoteTarget).toEqual({ executionTargetId: remoteTargetId(server), targetRevision: 0 })
+    const placement = await remoteAgentPlacement(entry.id)
+    expect(placement?.target).toEqual(entry.remoteTarget)
+    // A name or argument change keeps the target; the server changing does not.
+    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: { ...server, args: ['--model', 'x'] } })
+    expect((await remoteAgentPlacement(entry.id))?.target.targetRevision).toBe(0)
+    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: { ...server, host: 'other' } })
+    expect((await remoteAgentPlacement(entry.id))?.target).toEqual({ executionTargetId: remoteTargetId({ ...server, host: 'other' }), targetRevision: 1 })
+    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: server })
+    expect((await remoteAgentPlacement(entry.id))?.target).toEqual({ executionTargetId: remoteTargetId(server), targetRevision: 2 })
+    expect(await remoteAgentPlacement('codex')).toBeUndefined()
+  })
 })

@@ -3,7 +3,7 @@ import type { LocalAgentImage } from '../shared/agentExecutor'
 import type { MessageAttachment, RemoteAgentSpec } from '../shared/types'
 import {
   cleanupScript, clearOutboxScript, framesScript, killScript, markerScript, prepareScript, remoteImageDirectories, runDirectory, runFileScript, uploadScript, SAFE_NAME,
-  assertWorkspaceKey, workspacePath
+  assertWorkspaceKey, assertRemoteWorkspacePath, workspacePath, type RemoteWorkspaceRef
 } from './remoteScript'
 import { remoteCheck, remoteExec } from './remoteTransport'
 import { assertUuid } from './remoteValidate'
@@ -60,20 +60,21 @@ export class RemoteRun {
   readonly id = randomUUID()
   private prepared = false
   private closed = false
-  constructor(readonly spec: RemoteAgentSpec & { remoteHome: string }, readonly workspaceKey?: string) {
-    if (workspaceKey) assertWorkspaceKey(workspaceKey)
+  constructor(readonly spec: RemoteAgentSpec & { remoteHome: string }, readonly workspaceRef: RemoteWorkspaceRef = {}) {
+    if (workspaceRef.key) assertWorkspaceKey(workspaceRef.key)
+    if (workspaceRef.path) assertRemoteWorkspacePath(workspaceRef.path)
   }
 
   /** Absolute paths (for prompts only; never used as a shell operand). */
   get directory(): string { return `${this.spec.remoteHome}/.douchat-remote/t-${this.id}` }
   get outbox(): string { return `${this.directory}/out` }
   /** Working directory of the agent on the server, assigned by Douchat. */
-  get workspace(): string { return workspacePath(this.spec.remoteHome, this.id, this.workspaceKey) }
+  get workspace(): string { return workspacePath(this.spec.remoteHome, this.id, this.workspaceRef) }
   /** Shell fragment for templates. */
   get shellDirectory(): string { return runDirectory(this.id) }
 
   async prepare(signal?: AbortSignal): Promise<void> {
-    await remoteCheck(this.spec, prepareScript(this.id, this.workspaceKey), { signal, timeoutMs: 30_000 })
+    await remoteCheck(this.spec, prepareScript(this.id, this.workspaceRef), { signal, timeoutMs: 30_000 })
     this.prepared = true
   }
 
@@ -126,9 +127,9 @@ export class RemoteRun {
     return this.images(remoteImageDirectories.codex(assertUuid(threadId, 'thread')), { newerThanRun: this.id }, signal)
   }
 
-  geminiSnapshot(signal?: AbortSignal): Promise<Set<string>> { return this.names(remoteImageDirectories.gemini(this.id, this.workspaceKey), signal) }
+  geminiSnapshot(signal?: AbortSignal): Promise<Set<string>> { return this.names(remoteImageDirectories.gemini(this.id, this.workspaceRef), signal) }
   async geminiImages(before: Set<string>, signal?: AbortSignal): Promise<LocalAgentImage[]> {
-    const images = await this.images(remoteImageDirectories.gemini(this.id, this.workspaceKey), { exclude: [...before] }, signal)
+    const images = await this.images(remoteImageDirectories.gemini(this.id, this.workspaceRef), { exclude: [...before] }, signal)
     if (!images.length) throw new Error('Gemini: Image generation failed. The tool did not produce a new image file.')
     return images
   }

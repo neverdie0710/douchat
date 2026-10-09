@@ -33,6 +33,52 @@ export interface LocalAgent {
   args?: string[]
   /** Present only for user-registered agents that run on a remote server over SSH. */
   remote?: RemoteAgentSpec
+  /** Identity of the server a remote agent runs on; set by main, never by the renderer. */
+  remoteTarget?: ExecutionTarget
+}
+
+/** Where an agent's commands run. A saved workspace path is only meaningful on
+ * the target it was chosen on, at the revision it was chosen at. */
+export interface ExecutionTarget {
+  /** local:<deviceId> | ssh-legacy:<hash of host, port, user and key> */
+  executionTargetId: string
+  /** Increased whenever the target's identity is edited. */
+  targetRevision: number
+}
+
+/** A folder chosen for one agent in one chat, bound to the target it belongs to. */
+export interface AgentWorkspaceBinding extends ExecutionTarget {
+  /** Canonical absolute path on the execution target. */
+  path: string
+}
+
+/** One row of a chat's workspace settings, resolved in main. */
+export interface MemberWorkspaceView {
+  agentId: string
+  location: 'local' | 'remote'
+  /** Remote host label, for remote members. */
+  host?: string
+  /** The folder in effect; absent when the agent uses its default folder. */
+  path?: string
+  /** custom: chosen for this agent; legacy: the chat's earlier local folder. */
+  source: 'custom' | 'legacy' | 'default'
+  /** A saved folder belongs to another server or an earlier version of this one. */
+  stale?: boolean
+}
+
+export interface ConversationWorkspaceView {
+  eligible: boolean
+  members: MemberWorkspaceView[]
+  /** The chat's earlier single local folder, kept for local members only. */
+  legacyPath?: string
+  /** The earlier local folder exists but no member can use it. */
+  legacyUnused?: boolean
+}
+
+export interface RemoteDirectoryListing {
+  /** Canonical path of the listed folder on the server. */
+  path: string
+  directories: string[]
 }
 
 export const REMOTE_AGENT_ADAPTERS = ['codex', 'claude', 'gemini', 'grok', 'cursor', 'opencode', 'kimi', 'openclaw', 'fastclaw', 'hermes', 'omp', 'custom'] as const
@@ -182,8 +228,10 @@ export interface Conversation {
   leadAgentId?: string
   topics: Topic[]
   activeTopicId: string
-  /** User-selected folder for local CLI agents. Used only while every member is the owner's local agent. */
+  /** Earlier single folder for the whole chat. Only a fallback for members running on this computer. */
   workspacePath?: string
+  /** Folder per member, each bound to the computer or server it was chosen on. */
+  agentWorkspaces?: Record<string, AgentWorkspaceBinding>
   allowedFolders?: string[]
   savedToContacts?: boolean
   muted?: boolean
@@ -699,10 +747,19 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
-  /** Opens a folder picker; resolves unchanged if cancelled. */
-  openConversationWorkspace: (conversationId: string) => Promise<void>
-  chooseConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
-  clearConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
+  conversationWorkspaces: (conversationId: string) => Promise<ConversationWorkspaceView>
+  /** Opens a folder picker for a member on this computer; resolves unchanged if cancelled. */
+  chooseAgentWorkspace: (conversationId: string, agentId: string) => Promise<ConversationWorkspaceView>
+  /** Lists one level of folders on a remote member's server; `name` descends into a child of `parent`. */
+  listRemoteAgentDirectories: (conversationId: string, agentId: string, parent?: string, name?: string) => Promise<RemoteDirectoryListing>
+  /** `parent` is a folder the server listed; `name`, when given, is one of its children. */
+  chooseRemoteAgentWorkspace: (conversationId: string, agentId: string, parent: string, name?: string) => Promise<ConversationWorkspaceView>
+  clearAgentWorkspace: (conversationId: string, agentId: string) => Promise<ConversationWorkspaceView>
+  openAgentWorkspace: (conversationId: string, agentId: string) => Promise<void>
+  /** Opens an SSH session in a terminal, inside the remote member's folder. */
+  openRemoteAgentWorkspaceTerminal: (conversationId: string, agentId: string) => Promise<void>
+  /** Removes the chat's earlier single local folder. */
+  clearConversationWorkspace: (conversationId: string) => Promise<ConversationWorkspaceView>
   openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
   getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
   connanyCommand: (command: import('./connany').ConnectorCommand) => Promise<unknown>
