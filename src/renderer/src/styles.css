@@ -4856,7 +4856,7 @@ html[data-platform='win32'] .messenger .app-rail {
 .remote-directory-list button { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .remote-directory-list button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .remote-directory-list button svg { flex: 0 0 auto; color: var(--muted); }
-.remote-directory-list button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-500) 9%, transparent); }
+.remote-directory-list button:hover:not(:disabled), .remote-directory-list button.active { background: color-mix(in srgb, var(--accent-500) 9%, transparent); }
 .remote-directory-empty { margin: 0; padding: 12px; color: var(--muted); }
 .remote-directory-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
 .remote-directory-dialog .secondary-button { padding: 9px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }

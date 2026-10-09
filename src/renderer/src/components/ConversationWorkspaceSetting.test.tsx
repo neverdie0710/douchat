@@ -64,10 +64,9 @@ it('never offers the local folder picker for a remote member and browses the ser
     // The renderer sends the parent from the server and a child name, never a joined path.
     await act(async () => [...host.querySelectorAll('.remote-directory-list button')].find(item => item.textContent?.includes('web'))!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(api.listRemoteAgentDirectories).toHaveBeenLastCalledWith('g', 'srv', '/home/me/proj', 'web')
-    expect(host.querySelector<HTMLInputElement>('.remote-directory-address input')!.value).toBe('/home/me/proj/web')
+    expect(host.querySelector<HTMLInputElement>('.remote-directory-address input')!.value).toBe('/home/me/proj/web/')
     await act(async () => button('Use this folder')!.click())
-    expect(api.chooseRemoteAgentWorkspace).toHaveBeenCalledWith('g', 'srv', '/home/me/proj/web')
-    expect(api.chooseRemoteAgentWorkspace.mock.calls[0]).toHaveLength(3)
+    expect(api.chooseRemoteAgentWorkspace).toHaveBeenCalledWith('g', 'srv', '/home/me/proj/web', undefined)
   } finally { await act(async () => root.unmount()) }
 })
 
@@ -127,17 +126,54 @@ it('keeps the folder browser open and the section on screen while snapshots arri
   } finally { await act(async () => root.unmount()) }
 })
 
-it('opens a typed server path from the address field', async () => {
+const type = async (input: HTMLInputElement, value: string) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+}
+const names = (host: HTMLElement) => [...host.querySelectorAll('.remote-directory-list [role=option]')].map(item => item.textContent)
+
+it('filters the folders as you type, and Enter opens the highlighted one', async () => {
   const view: ConversationWorkspaceView = { eligible: true, members: [{ agentId: 'srv', location: 'remote', host: 'box', source: 'default' }] }
-  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), listRemoteAgentDirectories: vi.fn()
-    .mockResolvedValueOnce({ path: '/home/me', directories: [] }).mockResolvedValueOnce({ path: '/srv/app', directories: ['src'] }) }
+  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), chooseRemoteAgentWorkspace: vi.fn().mockResolvedValue(view),
+    listRemoteAgentDirectories: vi.fn().mockResolvedValueOnce({ path: '/home/me', directories: ['api', 'app', 'docs', 'my-app'] }).mockResolvedValueOnce({ path: '/home/me/app', directories: ['src'] }) }
   const { host, root, button } = await render({ ...group, agentIds: ['srv'] }, api)
   try {
     await act(async () => button('Choose server folder')!.click())
     const input = host.querySelector<HTMLInputElement>('.remote-directory-address input')!
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '/srv/app'); input.dispatchEvent(new Event('input', { bubbles: true })) })
-    await act(async () => input.form!.requestSubmit())
-    expect(api.listRemoteAgentDirectories).toHaveBeenLastCalledWith('g', 'srv', '/srv/app', undefined)
-    expect(host.textContent).toContain('src')
+    expect(input.value).toBe('/home/me/')
+    await act(async () => type(input, '/home/me/ap'))
+    // Starts-with first, then contains; nothing is fetched while filtering one folder.
+    expect(names(host)).toEqual(['api', 'app', 'my-app'])
+    expect(api.listRemoteAgentDirectories).toHaveBeenCalledTimes(1)
+    await act(async () => type(input, '/home/me/xyz'))
+    expect(host.textContent).toContain('No matching folders')
+    await act(async () => type(input, '/home/me/ap'))
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+    expect(host.querySelector('[role=option][aria-selected=true]')!.textContent).toBe('app')
+    // "Use this folder" picks the highlighted match, sent as listed folder + name.
+    await act(async () => button('Use this folder')!.click())
+    expect(api.chooseRemoteAgentWorkspace).toHaveBeenCalledWith('g', 'srv', '/home/me', 'app')
   } finally { await act(async () => root.unmount()) }
+})
+
+it('follows a typed path to another folder after a pause', async () => {
+  vi.useFakeTimers()
+  const view: ConversationWorkspaceView = { eligible: true, members: [{ agentId: 'srv', location: 'remote', host: 'box', source: 'default' }] }
+  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), listRemoteAgentDirectories: vi.fn()
+    .mockResolvedValueOnce({ path: '/home/me', directories: [] }).mockResolvedValueOnce({ path: '/srv/app', directories: ['src', 'scripts', 'tests'] }) }
+  const { host, root, button } = await render({ ...group, agentIds: ['srv'] }, api)
+  try {
+    await act(async () => button('Choose server folder')!.click())
+    const input = host.querySelector<HTMLInputElement>('.remote-directory-address input')!
+    await act(async () => type(input, '/srv/app/s'))
+    expect(api.listRemoteAgentDirectories).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(api.listRemoteAgentDirectories).toHaveBeenLastCalledWith('g', 'srv', '/srv/app', undefined)
+    // The text the user typed is kept, and filters the new folder.
+    expect(input.value).toBe('/srv/app/s')
+    // Starts with "s" first, then "tests", which contains it.
+    expect(names(host)).toEqual(['src', 'scripts', 'tests'])
+    await act(async () => type(input, '/srv/app/sc'))
+    expect(names(host)).toEqual(['scripts'])
+  } finally { vi.useRealTimers(); await act(async () => root.unmount()) }
 })

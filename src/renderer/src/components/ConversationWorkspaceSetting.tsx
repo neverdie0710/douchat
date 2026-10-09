@@ -1,5 +1,5 @@
 import { ArrowUp, Copy, ExternalLink, Folder, FolderOpen, Server, Terminal, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { AgentConfig, Conversation, ConversationWorkspaceView, MemberWorkspaceView, RemoteDirectoryListing } from '../../../shared/types'
 import { t } from '../preferences'
 import { agentDisplayName } from './common'
@@ -56,7 +56,7 @@ export function ConversationWorkspaceSetting({ conversation, agents }: {
     {browsing && <RemoteDirectoryPicker conversationId={conversation.id} agentId={browsing} host={view.members.find(item => item.agentId === browsing)?.host}
       initial={view.members.find(item => item.agentId === browsing)?.path}
       onCancel={() => setBrowsing(undefined)}
-      onChoose={parent => { const agentId = browsing; setBrowsing(undefined); void run(() => window.douchat.chooseRemoteAgentWorkspace(conversation.id, agentId, parent)) }} />}
+      onChoose={(parent, name) => { const agentId = browsing; setBrowsing(undefined); void run(() => window.douchat.chooseRemoteAgentWorkspace(conversation.id, agentId, parent, name)) }} />}
   </section>
 }
 
@@ -93,62 +93,101 @@ function MemberRow({ member, name, busy, onChoose, onClear, onOpen, onCopy, onTe
   </div>
 }
 
-/** Browses one level at a time, in its own dialog. A path can be typed, but
- * main resolves it on the server; only a parent from the server and a child
- * name are sent while browsing. */
+/** Split a typed path into the folder to list and the name being typed:
+ * "/srv/ap" lists /srv and filters by "ap"; "/srv/app/" lists /srv/app. */
+export function splitTypedPath(typed: string): { folder: string; filter: string } | undefined {
+  if (!typed.startsWith('/')) return undefined
+  const slash = typed.lastIndexOf('/')
+  return { folder: typed.slice(0, slash) || '/', filter: typed.slice(slash + 1) }
+}
+const withSlash = (path: string): string => path.endsWith('/') ? path : `${path}/`
+
+/** Browses one level at a time, in its own dialog. Typing filters the folder
+ * list by name and follows the typed path; main resolves every path on the
+ * server, and only a listed folder plus one child name is ever chosen. */
 export function RemoteDirectoryPicker({ conversationId, agentId, host, initial, onChoose, onCancel }: {
   conversationId: string
   agentId: string
   host?: string
   initial?: string
-  onChoose: (path: string) => void
+  onChoose: (parent: string, name?: string) => void
   onCancel: () => void
 }): ReactElement {
   const [listing, setListing] = useState<RemoteDirectoryListing>()
-  const [typed, setTyped] = useState(initial ?? '')
+  const [typed, setTyped] = useState(initial ? withSlash(initial) : '')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [active, setActive] = useState(0)
   const request = useRef(0)
-  const open = useCallback(async (parent?: string, name?: string, fallback = false): Promise<void> => {
+  const input = useRef<HTMLInputElement>(null)
+  const open = useCallback(async (parent?: string, name?: string, options: { fallback?: boolean; keepText?: boolean } = {}): Promise<void> => {
     const id = ++request.current
     setLoading(true); setError('')
     try {
       const next = await window.douchat.listRemoteAgentDirectories(conversationId, agentId, parent, name)
       if (id !== request.current) return
-      setListing(next); setTyped(next.path)
+      setListing(next); setActive(0)
+      if (!options.keepText) setTyped(withSlash(next.path))
     } catch (cause) {
       if (id !== request.current) return
-      setError(errorText(cause))
-      // A saved folder may be gone; show the server's home folder instead.
-      if (fallback) {
+      // While typing, a folder that doesn't exist yet is not an error worth showing.
+      if (!options.keepText) setError(errorText(cause))
+      if (options.fallback) {
         const home = await window.douchat.listRemoteAgentDirectories(conversationId, agentId).catch(() => undefined)
-        if (home && id === request.current) { setListing(home); setTyped(home.path) }
+        if (home && id === request.current) { setListing(home); setTyped(withSlash(home.path)) }
       }
     } finally { if (id === request.current) setLoading(false) }
   }, [conversationId, agentId])
-  useEffect(() => { void open(initial, undefined, initial !== undefined) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void open(initial, undefined, { fallback: initial !== undefined }) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Follow the typed path: list its folder once the user pauses typing.
+  const parts = splitTypedPath(typed)
+  useEffect(() => {
+    if (!parts || !listing || parts.folder === listing.path) return
+    const timer = setTimeout(() => void open(parts.folder, undefined, { keepText: true }), 250)
+    return () => clearTimeout(timer)
+  }, [parts?.folder]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filter = parts && listing && parts.folder === listing.path ? parts.filter.toLowerCase() : ''
+  const matches = useMemo(() => {
+    const names = listing?.directories ?? []
+    if (!filter) return names
+    // Names that start with the text first, then names that contain it.
+    return [...names.filter(name => name.toLowerCase().startsWith(filter)), ...names.filter(name => !name.toLowerCase().startsWith(filter) && name.toLowerCase().includes(filter))]
+  }, [listing, filter])
+  const enter = (name: string): void => { void open(listing!.path, name); input.current?.focus() }
   const up = listing && listing.path !== '/' ? listing.path.slice(0, listing.path.lastIndexOf('/')) || '/' : undefined
-  const go = (): void => { const path = typed.trim(); if (path && path !== listing?.path) void open(path) }
+  // The folder that "Use this folder" picks: the highlighted match while filtering, else the listed folder.
+  const choice = filter && matches[active] ? { parent: listing!.path, name: matches[active] } : listing ? { parent: listing.path } : undefined
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(index + 1, Math.max(matches.length - 1, 0))) }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(index - 1, 0)) }
+    else if ((event.key === 'Enter' || event.key === 'Tab') && filter && matches[active]) { event.preventDefault(); enter(matches[active]) }
+    else if (event.key === 'Enter' && parts && listing && parts.folder !== listing.path) { event.preventDefault(); void open(parts.folder) }
+    else if (event.key === 'Enter') event.preventDefault()
+  }
   return <NativeDialog className="modal-backdrop" onClose={onCancel} width={560} height={560}>
-    <form className="remote-directory-dialog" role="dialog" aria-modal="true" aria-labelledby="remote-directory-title" onSubmit={event => { event.preventDefault(); go() }}>
+    <div className="remote-directory-dialog" role="dialog" aria-modal="true" aria-labelledby="remote-directory-title">
       <header>
         <div><h2 id="remote-directory-title">{t('Choose server folder')}</h2>{host && <p><Server size={13} /> {host}</p>}</div>
         <button type="button" className="icon-button" aria-label={t('Close')} onClick={onCancel}><X size={18} /></button>
       </header>
       <div className="remote-directory-address">
-        <button type="button" className="icon-button" aria-label={t('Parent folder')} title={t('Parent folder')} disabled={loading || up === undefined} onClick={() => up !== undefined && void open(up)}><ArrowUp size={16} /></button>
-        <input aria-label={t('Folder path')} value={typed} spellCheck={false} autoFocus placeholder="/home/user/project" onChange={event => setTyped(event.target.value)} onBlur={go} />
+        <button type="button" className="icon-button" aria-label={t('Parent folder')} title={t('Parent folder')} disabled={loading || up === undefined} onClick={() => { if (up !== undefined) void open(up); input.current?.focus() }}><ArrowUp size={16} /></button>
+        <input ref={input} aria-label={t('Folder path')} role="combobox" aria-expanded="true" aria-controls="remote-directory-options" aria-autocomplete="list"
+          value={typed} spellCheck={false} autoFocus placeholder="/home/user/project" onChange={event => { setTyped(event.target.value); setActive(0); setError('') }} onKeyDown={onKeyDown} />
       </div>
-      <div className="remote-directory-list" aria-busy={loading}>
-        {listing?.directories.map(name => <button type="button" key={name} disabled={loading} onClick={() => void open(listing.path, name)}><Folder size={16} /><span>{name}</span></button>)}
-        {listing && !listing.directories.length && !loading && <p className="remote-directory-empty">{t('No folders here')}</p>}
+      <div id="remote-directory-options" className="remote-directory-list" role="listbox" aria-busy={loading}>
+        {matches.map((name, index) => <button type="button" role="option" aria-selected={Boolean(filter) && index === active} key={name} disabled={loading}
+          className={filter && index === active ? 'active' : ''} onMouseEnter={() => filter && setActive(index)} onClick={() => enter(name)}><Folder size={16} /><span>{name}</span></button>)}
+        {listing && !matches.length && !loading && <p className="remote-directory-empty">{t(filter ? 'No matching folders' : 'No folders here')}</p>}
         {!listing && loading && <p className="remote-directory-empty">{t('Loading…')}</p>}
       </div>
       {error && <p className="conversation-workspace-error" role="alert">{t(error)}</p>}
       <footer>
         <button type="button" className="secondary-button" onClick={onCancel}>{t('Cancel')}</button>
-        <button type="button" className="primary-button" disabled={loading || !listing} onClick={() => listing && onChoose(listing.path)}>{t('Use this folder')}</button>
+        <button type="button" className="primary-button" disabled={loading || !choice} onClick={() => choice && onChoose(choice.parent, choice.name)}>{t('Use this folder')}</button>
       </footer>
-    </form>
+    </div>
   </NativeDialog>
 }
