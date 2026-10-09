@@ -109,6 +109,8 @@ const translations: Record<string, string> = {
   'Open folder': '打开文件夹',
   'Default (managed by Douchat)': '默认（由 Douchat 管理）',
   'Choose folder': '选择文件夹',
+  "Folder path": "文件夹路径",
+  "Parent folder": "上一级",
   "This server does not allow UNIX-socket forwarding over SSH (AllowStreamLocalForwarding). Agents still run, but Douchat skill tools are unavailable.": "这台服务器不允许通过 SSH 转发 UNIX 套接字（AllowStreamLocalForwarding），智能体仍可运行，但无法使用 Douchat 技能工具。",
   "Connections": "连接",
   "Servers your agents run on. Host, user and key are set once here and shared by every agent on that server.": "智能体运行所在的服务器。主机、用户和密钥只需在这里设置一次，同一服务器上的智能体共用。",

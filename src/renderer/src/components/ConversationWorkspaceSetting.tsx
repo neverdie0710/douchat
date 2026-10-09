@@ -1,8 +1,9 @@
-import { ChevronLeft, Copy, ExternalLink, Folder, FolderOpen, Server, Terminal } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactElement } from 'react'
+import { ArrowUp, Copy, ExternalLink, Folder, FolderOpen, Server, Terminal, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import type { AgentConfig, Conversation, ConversationWorkspaceView, MemberWorkspaceView, RemoteDirectoryListing } from '../../../shared/types'
 import { t } from '../preferences'
 import { agentDisplayName } from './common'
+import { NativeDialog } from './NativeDialog'
 
 const errorText = (cause: unknown): string => cause instanceof Error ? cause.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : 'Could not save changes'
 const folderName = (path: string): string => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
@@ -18,8 +19,13 @@ export function ConversationWorkspaceSetting({ conversation, agents }: {
   const [error, setError] = useState('')
   const [browsing, setBrowsing] = useState<string>()
   const load = useCallback(() => window.douchat.conversationWorkspaces(conversation.id).then(setView, cause => setError(errorText(cause))), [conversation.id])
-  // Reload when the chat or its members change; agents may be edited elsewhere too.
-  useEffect(() => { setView(undefined); setBrowsing(undefined); void load() }, [load, conversation.revision, agents])
+  // Snapshots arrive every few seconds with new arrays; only real changes reload.
+  // The last result stays on screen while reloading, so nothing flickers.
+  const membersKey = useMemo(() => JSON.stringify([conversation.agentIds, conversation.workspacePath ?? null, conversation.agentWorkspaces ?? null,
+    agents.filter(agent => conversation.agentIds.includes(agent.id) || conversation.socialRoom?.agents.some(item => item.localId === agent.id)).map(agent => [agent.id, agent.localAgentId, agent.revision ?? 0])]), [conversation, agents])
+  useEffect(() => { void load() }, [load, membersKey])
+  // A different chat starts over.
+  useEffect(() => { setView(undefined); setBrowsing(undefined) }, [conversation.id])
   if (!view || (!view.eligible && !view.legacyPath)) return null
   const run = async (action: () => Promise<ConversationWorkspaceView | void>): Promise<void> => {
     setBusy(true); setError('')
@@ -87,8 +93,9 @@ function MemberRow({ member, name, busy, onChoose, onClear, onOpen, onCopy, onTe
   </div>
 }
 
-/** Browses one level at a time. Only a parent path from the server and a child
- * name are sent back; main joins and validates them on the server. */
+/** Browses one level at a time, in its own dialog. A path can be typed, but
+ * main resolves it on the server; only a parent from the server and a child
+ * name are sent while browsing. */
 export function RemoteDirectoryPicker({ conversationId, agentId, host, initial, onChoose, onCancel }: {
   conversationId: string
   agentId: string
@@ -98,31 +105,50 @@ export function RemoteDirectoryPicker({ conversationId, agentId, host, initial, 
   onCancel: () => void
 }): ReactElement {
   const [listing, setListing] = useState<RemoteDirectoryListing>()
+  const [typed, setTyped] = useState(initial ?? '')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const open = useCallback(async (parent?: string, name?: string): Promise<void> => {
+  const request = useRef(0)
+  const open = useCallback(async (parent?: string, name?: string, fallback = false): Promise<void> => {
+    const id = ++request.current
     setLoading(true); setError('')
-    try { setListing(await window.douchat.listRemoteAgentDirectories(conversationId, agentId, parent, name)) }
-    catch (cause) {
+    try {
+      const next = await window.douchat.listRemoteAgentDirectories(conversationId, agentId, parent, name)
+      if (id !== request.current) return
+      setListing(next); setTyped(next.path)
+    } catch (cause) {
+      if (id !== request.current) return
       setError(errorText(cause))
-      // A saved folder may be gone; fall back to the server's home folder once.
-      if (parent !== undefined && name === undefined && !listing) await window.douchat.listRemoteAgentDirectories(conversationId, agentId).then(setListing, () => {})
-    } finally { setLoading(false) }
-  }, [conversationId, agentId, listing])
-  useEffect(() => { void open(initial) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+      // A saved folder may be gone; show the server's home folder instead.
+      if (fallback) {
+        const home = await window.douchat.listRemoteAgentDirectories(conversationId, agentId).catch(() => undefined)
+        if (home && id === request.current) { setListing(home); setTyped(home.path) }
+      }
+    } finally { if (id === request.current) setLoading(false) }
+  }, [conversationId, agentId])
+  useEffect(() => { void open(initial, undefined, initial !== undefined) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const up = listing && listing.path !== '/' ? listing.path.slice(0, listing.path.lastIndexOf('/')) || '/' : undefined
-  return <div className="remote-directory-picker" role="dialog" aria-label={t('Choose server folder')}>
-    <p className="remote-directory-host"><Server size={14} /> {host ?? t('Server')}</p>
-    <p className="remote-directory-current" title={listing?.path}>{listing?.path ?? '…'}</p>
-    <div className="remote-directory-list">
-      {up !== undefined && <button type="button" disabled={loading} onClick={() => void open(up)}><ChevronLeft size={14} /> ..</button>}
-      {listing?.directories.map(name => <button type="button" key={name} disabled={loading} onClick={() => void open(listing.path, name)}><Folder size={14} /> {name}</button>)}
-      {listing && !listing.directories.length && !loading && <p className="conversation-workspace-note">{t('No folders here')}</p>}
-    </div>
-    {error && <p className="conversation-workspace-error" role="alert">{t(error)}</p>}
-    <div className="conversation-workspace-actions">
-      <button type="button" disabled={loading || !listing} onClick={() => listing && onChoose(listing.path)}>{t('Use this folder')}</button>
-      <button type="button" onClick={onCancel}>{t('Cancel')}</button>
-    </div>
-  </div>
+  const go = (): void => { const path = typed.trim(); if (path && path !== listing?.path) void open(path) }
+  return <NativeDialog className="modal-backdrop" onClose={onCancel} width={560} height={560}>
+    <form className="remote-directory-dialog" role="dialog" aria-modal="true" aria-labelledby="remote-directory-title" onSubmit={event => { event.preventDefault(); go() }}>
+      <header>
+        <div><h2 id="remote-directory-title">{t('Choose server folder')}</h2>{host && <p><Server size={13} /> {host}</p>}</div>
+        <button type="button" className="icon-button" aria-label={t('Close')} onClick={onCancel}><X size={18} /></button>
+      </header>
+      <div className="remote-directory-address">
+        <button type="button" className="icon-button" aria-label={t('Parent folder')} title={t('Parent folder')} disabled={loading || up === undefined} onClick={() => up !== undefined && void open(up)}><ArrowUp size={16} /></button>
+        <input aria-label={t('Folder path')} value={typed} spellCheck={false} autoFocus placeholder="/home/user/project" onChange={event => setTyped(event.target.value)} onBlur={go} />
+      </div>
+      <div className="remote-directory-list" aria-busy={loading}>
+        {listing?.directories.map(name => <button type="button" key={name} disabled={loading} onClick={() => void open(listing.path, name)}><Folder size={16} /><span>{name}</span></button>)}
+        {listing && !listing.directories.length && !loading && <p className="remote-directory-empty">{t('No folders here')}</p>}
+        {!listing && loading && <p className="remote-directory-empty">{t('Loading…')}</p>}
+      </div>
+      {error && <p className="conversation-workspace-error" role="alert">{t(error)}</p>}
+      <footer>
+        <button type="button" className="secondary-button" onClick={onCancel}>{t('Cancel')}</button>
+        <button type="button" className="primary-button" disabled={loading || !listing} onClick={() => listing && onChoose(listing.path)}>{t('Use this folder')}</button>
+      </footer>
+    </form>
+  </NativeDialog>
 }

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import type { AgentConfig, Conversation, ConversationWorkspaceView } from '../../../shared/types'
 vi.mock('../preferences', () => ({ t: (s: string) => s }))
+vi.mock('./NativeDialog', () => ({ NativeDialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
 import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -63,6 +64,7 @@ it('never offers the local folder picker for a remote member and browses the ser
     // The renderer sends the parent from the server and a child name, never a joined path.
     await act(async () => [...host.querySelectorAll('.remote-directory-list button')].find(item => item.textContent?.includes('web'))!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(api.listRemoteAgentDirectories).toHaveBeenLastCalledWith('g', 'srv', '/home/me/proj', 'web')
+    expect(host.querySelector<HTMLInputElement>('.remote-directory-address input')!.value).toBe('/home/me/proj/web')
     await act(async () => button('Use this folder')!.click())
     expect(api.chooseRemoteAgentWorkspace).toHaveBeenCalledWith('g', 'srv', '/home/me/proj/web')
     expect(api.chooseRemoteAgentWorkspace.mock.calls[0]).toHaveLength(3)
@@ -99,5 +101,43 @@ it('lets a chat with only local members go back to the default folder', async ()
     expect(api.clearConversationWorkspace).toHaveBeenCalledWith('direct-codex')
     expect(api.clearAgentWorkspace).not.toHaveBeenCalled()
     expect(host.querySelector('.conversation-workspace-path span')!.textContent).toBe('Default')
+  } finally { await act(async () => root.unmount()) }
+})
+
+it('keeps the folder browser open and the section on screen while snapshots arrive', async () => {
+  const view: ConversationWorkspaceView = { eligible: true, members: [{ agentId: 'srv', location: 'remote', host: 'box', source: 'default' }] }
+  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), listRemoteAgentDirectories: vi.fn().mockResolvedValue({ path: '/home/me', directories: ['proj'] }) }
+  const conversation = { ...group, agentIds: ['srv'] }
+  const { host, root, button } = await render(conversation, api)
+  try {
+    await act(async () => button('Choose server folder')!.click())
+    expect(host.querySelector('.remote-directory-dialog')).not.toBeNull()
+    // A background snapshot: same data, new objects.
+    for (let i = 0; i < 3; i++) await act(async () => root.render(<ConversationWorkspaceSetting conversation={{ ...conversation }} agents={agents.map(agent => ({ ...agent }))} />))
+    expect(host.querySelector('.remote-directory-dialog')).not.toBeNull()
+    expect(api.conversationWorkspaces).toHaveBeenCalledTimes(1)
+    expect(api.listRemoteAgentDirectories).toHaveBeenCalledTimes(1)
+    // A real change reloads, without blanking the section first.
+    let resolve!: (value: ConversationWorkspaceView) => void
+    api.conversationWorkspaces.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    await act(async () => root.render(<ConversationWorkspaceSetting conversation={{ ...conversation, agentWorkspaces: { srv: { path: '/home/me/proj', executionTargetId: 'ssh:x', targetRevision: 0 } } }} agents={agents} />))
+    expect(api.conversationWorkspaces).toHaveBeenCalledTimes(2)
+    expect(host.querySelector('.conversation-workspace-setting')).not.toBeNull()
+    await act(async () => resolve(view))
+  } finally { await act(async () => root.unmount()) }
+})
+
+it('opens a typed server path from the address field', async () => {
+  const view: ConversationWorkspaceView = { eligible: true, members: [{ agentId: 'srv', location: 'remote', host: 'box', source: 'default' }] }
+  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), listRemoteAgentDirectories: vi.fn()
+    .mockResolvedValueOnce({ path: '/home/me', directories: [] }).mockResolvedValueOnce({ path: '/srv/app', directories: ['src'] }) }
+  const { host, root, button } = await render({ ...group, agentIds: ['srv'] }, api)
+  try {
+    await act(async () => button('Choose server folder')!.click())
+    const input = host.querySelector<HTMLInputElement>('.remote-directory-address input')!
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '/srv/app'); input.dispatchEvent(new Event('input', { bubbles: true })) })
+    await act(async () => input.form!.requestSubmit())
+    expect(api.listRemoteAgentDirectories).toHaveBeenLastCalledWith('g', 'srv', '/srv/app', undefined)
+    expect(host.textContent).toContain('src')
   } finally { await act(async () => root.unmount()) }
 })
