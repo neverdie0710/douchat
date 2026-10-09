@@ -11,8 +11,7 @@ import { LocalAgentConnection, killLocalProcess, spawnOwnedProcess } from './loc
 import { acquireLocalProcessSlot, localAgentExecutable } from './localAgentRuntime'
 import type { LocalAgent, RemoteAgentSpec } from '../shared/types'
 import { RemoteRun } from './remoteFileChannel'
-import { launchScript } from './remoteScript'
-import { probeRemoteAgent, remoteLaunch, spawnLaunch } from './remoteTransport'
+import { openSshTransport } from './remote/sshTransport'
 
 export function parseLocalModels(id: string, output: string): LocalModel[] {
   const clean = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
@@ -116,23 +115,24 @@ async function discoverRemoteModels(agent: LocalAgent, input: RemoteAgentSpec, s
   const adapter = input.adapter
   if (!configurableLocalAgents.includes(adapter)) return { models: [], source: 'manual', configurable: false }
   if (!['codex', 'claude', 'opencode', 'cursor', 'grok', 'openclaw', 'omp'].includes(adapter)) return { models: [], source: 'manual', configurable: true }
-  const spec = await probeRemoteAgent(input, signal)
-  const run = new RemoteRun(spec)
+  const transport = await openSshTransport(input, signal)
+  const spec = transport.spec
+  const run = new RemoteRun(transport)
   try {
     await run.prepare(signal)
-    const launch = (args: string[]) => remoteLaunch(spec, launchScript({ runId: run.id, executable: spec.executable, args, channel: 'stdin', remotePath: spec.remotePath }))
+    const launch = (args: string[]) => transport.spawn({ runId: run.id, executable: spec.executable, args, channel: 'stdin' })
     if (adapter === 'codex' || adapter === 'claude') {
       const connection = new LocalAgentConnection(adapter)
       const cancel = () => connection.close(new Error('Model discovery stopped'))
       signal.addEventListener('abort', cancel, { once: true })
       const timer = setTimeout(() => connection.close(new Error('Model discovery timed out')), 15000)
       try {
-        await connection.connect(spec.executable, run.workspace, {}, undefined, true, undefined, false, spec.args, undefined, { cwd: run.workspace, launch })
+        await connection.connect(spec.executable, run.workspace, {}, undefined, true, undefined, false, spec.args, undefined, { cwd: run.workspace, spawn: launch })
         return { models: await connection.models(), source: 'agent', configurable: true }
       } finally { signal.removeEventListener('abort', cancel); clearTimeout(timer); connection.close(); await connection.disposed() }
     }
     const args = adapter === 'openclaw' ? ['models', 'list', '--json'] : adapter === 'omp' ? ['models', '--json'] : ['models']
-    const child = spawnLaunch(await launch(appendLocalAgentArguments(args, spec.args)))
+    const child = await launch(appendLocalAgentArguments(args, spec.args))
     const output = await new Promise<string>((resolve, reject) => {
       let stdout = ''
       let failure: Error | undefined

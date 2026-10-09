@@ -3,6 +3,7 @@ import { ConnanyPanel } from './ConnanyPanel'
 import { CONNECTORS_ENABLED } from '../../../shared/connany'
 import { UserMemoryPanel } from './UserMemoryPanel'
 import { LocalAgentEditor } from './LocalAgentEditor'
+import { ConnectionsPanel } from './ConnectionsPanel'
 import { CustomModelSettings } from './CustomModelSettings'
 import { SchedulingSettings } from './SchedulingSettings'
 import { RemoteMark } from './RemoteMark'
@@ -12,14 +13,14 @@ import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { setPreferences, usePreferences, resolveInterfaceLanguage, t, tr, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, Server, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Network, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, Server, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
 import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
 import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
 
-export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'models' | 'scheduling' | 'about' | 'connectors'
+export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'connections' | 'models' | 'scheduling' | 'about' | 'connectors'
 
 export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
   user: DesktopAuthUser
@@ -77,7 +78,9 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   const [editingLocalAgent, setEditingLocalAgent] = useState<LocalAgent | 'new'>()
   const installed = agents.filter((agent) => agent.installed)
   const desktopOnly = agents.filter((agent) => agent.status === 'desktop-only')
-  const missing = agents.filter((agent) => agent.status === 'not-found')
+  // Remote agents whose connection is off or removed are listed with the reason, not as "not detected".
+  const unavailable = agents.filter((agent) => agent.unavailable)
+  const missing = agents.filter((agent) => agent.status === 'not-found' && !agent.unavailable)
 
 
   const signOut = async (): Promise<void> => {
@@ -111,16 +114,17 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   const row = (agent: LocalAgent): ReactElement => {
     const version = agent.version?.match(/v?\d+(?:\.\d+)+(?:[-+][0-9A-Za-z.-]+)?/)?.[0] ?? agent.version ?? ''
     return <article className="local-agent-row" key={agent.id}>
-        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{(agent.avatar || agentIcons[agent.remote?.adapter ?? agent.id]) ? <img src={agent.avatar || agentIcons[agent.remote?.adapter ?? agent.id]} alt="" /> : <Bot size={22} />}{agent.remote && <RemoteMark />}</span>
+        <span data-agent={agent.id} className={`local-agent-icon ${agent.installed ? 'installed' : ''}`}>{(agent.avatar || agentIcons[agent.remote?.adapter ?? agent.remoteAgent?.adapter ?? agent.id]) ? <img src={agent.avatar || agentIcons[agent.remote?.adapter ?? agent.remoteAgent?.adapter ?? agent.id]} alt="" /> : <Bot size={22} />}{agent.remoteAgent && <RemoteMark />}</span>
         <div className="local-agent-copy">
           <strong>{agent.name}</strong>
           <code title={agent.remote ? agent.version : agent.path || agent.desktopPath}>{agent.remote ? agent.remote.executable : agent.path || agent.desktopPath || agent.command}</code>
         </div>
         <div className="local-agent-row-aside">
           {agent.remote && <span className="local-agent-remote-badge" title={agent.version}><Server size={12} />{t('Remote')} · {agent.remote.host}</span>}
+          {agent.unavailable && <span className="local-agent-remote-badge"><Server size={12} />{t(agent.unavailable === 'disabled' ? 'Connection turned off' : 'Connection removed')}</span>}
           {version && !agent.remote && <span className="local-agent-version" title={agent.version}>{version}</span>}
           {agent.installed && !agent.custom && (!agent.updateStatus || agent.updateStatus === 'unknown') && <span className="local-agent-version" title={t('Could not confirm the latest version. Detect again later.')}>{t('Version unconfirmed')}</span>}
-          {(!agent.custom && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
+          {(!agent.custom && !agent.unavailable && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
           <button type="button" className="secondary-button" aria-label={`${t('Edit')} ${agent.name}`} onClick={() => setEditingLocalAgent(agent)}>{t('Edit')}</button>
           {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
         </div>
@@ -138,6 +142,7 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
         <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
         {CONNECTORS_ENABLED && <button id="connectors-tab" role="tab" aria-selected={tab === 'connectors'} aria-controls="settings-content" className={tab === 'connectors' ? 'active' : ''} onClick={() => onTab('connectors')}><Plug size={18} /><span>{t('Connectors')}</span></button>}
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Agents')}</span></button>
+        <button id="connections-tab" role="tab" aria-selected={tab === 'connections'} aria-controls="settings-content" className={tab === 'connections' ? 'active' : ''} onClick={() => onTab('connections')}><Network size={18} /><span>{t('Connections')}</span></button>
         <button id="scheduling-tab" role="tab" aria-selected={tab === 'scheduling'} aria-controls="settings-content" className={tab === 'scheduling' ? 'active' : ''} onClick={() => onTab('scheduling')}><Workflow size={18} /><span>{t('Scheduling')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
       </div>
@@ -179,9 +184,11 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           {installed.map(row)}
           {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local agents found. Install one in your terminal, then detect again.')}</p>}
         </section>
+        {unavailable.length > 0 && <section aria-label={t('Unavailable server agents')}><h2>{t('Server unavailable')} <span>{unavailable.length}</span></h2>{unavailable.map(row)}</section>}
         {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
         {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : CONNECTORS_ENABLED && tab === 'connectors' ? <ConnanyPanel key={user.id} /> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
+      </> : tab === 'connections' ? <ConnectionsPanel key={user.id} onAgentsChange={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} />
+      : CONNECTORS_ENABLED && tab === 'connectors' ? <ConnanyPanel key={user.id} /> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
     </main>
     </section>
   </NativeDialog>

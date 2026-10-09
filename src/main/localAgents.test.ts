@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, remoteTargetId, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { resolveExecutable } from './shellPath'
 vi.mock('./shellPath', () => ({ resolveExecutable: vi.fn() }))
 let registryDirectory = ''
@@ -117,30 +117,53 @@ it('bounds an entire scan when executable discovery never settles', async () => 
   } finally { vi.useRealTimers() }
 })
 
-describe('remote execution target', () => {
-  const server = { transport: 'ssh' as const, host: 'box', user: 'me', adapter: 'codex' as const, executable: 'codex', args: [], allowSharing: false }
-  it('normalizes the default port and changes identity for any server edit', () => {
-    expect(remoteTargetId({ host: 'Box' })).toBe(remoteTargetId({ host: 'box', port: 22 }))
-    const base = remoteTargetId(server)
-    expect(remoteTargetId({ ...server, port: 2222 })).not.toBe(base)
-    expect(remoteTargetId({ ...server, user: 'root' })).not.toBe(base)
-    expect(remoteTargetId({ ...server, host: 'other' })).not.toBe(base)
-    expect(remoteTargetId({ ...server, identityFile: '/k' })).not.toBe(base)
-    expect(base).toMatch(/^ssh-legacy:[a-f0-9]{32}$/)
+describe('agents on connections', () => {
+  const connections = () => connectionRegistry()
+  const binding = (connectionId: string) => ({ connectionId, adapter: 'codex' as const, executable: 'codex', args: [] as string[] })
+  it('refuses inline SSH settings and unknown connections', async () => {
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remote: { transport: 'ssh', host: 'box', adapter: 'codex', executable: 'codex', args: [], allowSharing: false } })).rejects.toThrow(/connection first/)
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(`conn_${'0'.repeat(32)}`) })).rejects.toThrow(/connection/)
   })
-  it('increases the persisted revision when the server changes, even back to the original', async () => {
-    await addCustomLocalAgent({ name: 'Remote', command: 'codex', remote: server })
-    const [entry] = (await detectLocalAgents({ desktopApp: async () => undefined })).filter(agent => agent.remote)
-    expect(entry.remoteTarget).toEqual({ executionTargetId: remoteTargetId(server), targetRevision: 0 })
-    const placement = await remoteAgentPlacement(entry.id)
-    expect(placement?.target).toEqual(entry.remoteTarget)
-    // A name or argument change keeps the target; the server changing does not.
-    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: { ...server, args: ['--model', 'x'] } })
-    expect((await remoteAgentPlacement(entry.id))?.target.targetRevision).toBe(0)
-    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: { ...server, host: 'other' } })
-    expect((await remoteAgentPlacement(entry.id))?.target).toEqual({ executionTargetId: remoteTargetId({ ...server, host: 'other' }), targetRevision: 1 })
-    await updateLocalAgent(entry.id, { name: 'Renamed', command: 'codex', remote: server })
-    expect((await remoteAgentPlacement(entry.id))?.target).toEqual({ executionTargetId: remoteTargetId(server), targetRevision: 2 })
+  it('runs on the connection and is identified by it, changing identity only when the server changes', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box', user: 'me' }, allowSharing: false })
+    const id = await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
+    const placement = await remoteAgentPlacement(id)
+    expect(placement?.spec).toMatchObject({ host: 'box', user: 'me', adapter: 'codex', executable: 'codex', allowSharing: false })
+    expect(placement?.target).toEqual({ executionTargetId: `ssh:${connection.id}`, targetRevision: 0 })
+    // Renaming the connection is not a new target; editing the user is.
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'me' }, allowSharing: false })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(0)
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'root' }, allowSharing: false })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(1)
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'me' }, allowSharing: false })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(2)
     expect(await remoteAgentPlacement('codex')).toBeUndefined()
+  })
+  it('never runs while its connection is off or removed, and shows why', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box' }, allowSharing: true })
+    const id = await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
+    await connections().setEnabled(connection.id, false)
+    await expect(remoteAgentPlacement(id)).rejects.toThrow(/turned off/)
+    await expect(validateLocalAgent(id)).rejects.toThrow()
+    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)).toMatchObject({ unavailable: 'disabled', installed: false, remoteAgent: binding(connection.id) })
+    await connections().remove(connection.id)
+    await expect(remoteAgentPlacement(id)).rejects.toThrow(/removed/)
+    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)?.unavailable).toBe('missing')
+  })
+  it('only narrows sharing: the connection and the agent must both allow it', async () => {
+    const shared = await connections().save({ name: 'Shared', ssh: { host: 'shared' }, allowSharing: true })
+    const closed = await connections().save({ name: 'Closed', ssh: { host: 'closed' }, allowSharing: false })
+    const open = await addCustomLocalAgent({ name: 'A', command: 'codex', remoteAgent: { ...binding(shared.id), allowSharing: true } })
+    const silent = await addCustomLocalAgent({ name: 'D', command: 'codex', remoteAgent: binding(shared.id) })
+    expect((await remoteAgentPlacement(silent))?.spec.allowSharing).toBe(false)
+    const narrowed = await addCustomLocalAgent({ name: 'B', command: 'codex', remoteAgent: { ...binding(shared.id), allowSharing: false } })
+    const cannotWiden = await addCustomLocalAgent({ name: 'C', command: 'codex', remoteAgent: { ...binding(closed.id), allowSharing: true } })
+    expect((await remoteAgentPlacement(open))?.spec.allowSharing).toBe(true)
+    expect((await remoteAgentPlacement(narrowed))?.spec.allowSharing).toBe(false)
+    expect((await remoteAgentPlacement(cannotWiden))?.spec.allowSharing).toBe(false)
+  })
+  it('still rejects arguments that disable the sandbox', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box' }, allowSharing: false })
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: { ...binding(connection.id), args: ['--yolo'] } })).rejects.toThrow(/safety boundary/)
   })
 })

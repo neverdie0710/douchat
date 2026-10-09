@@ -14,15 +14,16 @@ import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFil
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import type { AgentConfig, LocalAgent, MessageAttachment } from '../shared/types'
-import { remoteTargetId, validateLocalAgent } from './localAgents'
+import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 import { GrokStream } from './grokStream'
 import { GeminiStream, geminiImagePolicy } from './geminiStream'
 import { localWorkspace, resetLocalWorkspaces, type RemotePlacement } from './localWorkspaces'
 import type { RemoteAgentSpec } from '../shared/types'
 import { RemoteRun, outboxPrompt } from './remoteFileChannel'
-import { assertArgvPrompt, probeRemoteAgent, remoteLaunch, remotePrompt, spawnLaunch } from './remoteTransport'
-import { PROMPT_ARG, customRemoteArguments, launchScript, markPromptArguments, type PromptChannel, type RemoteArg, type RemoteWorkspaceRef } from './remoteScript'
+import { assertArgvPrompt, remotePrompt } from './remoteTransport'
+import { openSshTransport } from './remote/sshTransport'
+import { PROMPT_ARG, customRemoteArguments, markPromptArguments, type PromptChannel, type RemoteArg, type RemoteWorkspaceRef } from './remoteScript'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
  * Keep the official CLI untouched and retain strict sandbox arguments below. */
@@ -498,14 +499,15 @@ async function executeRemoteAgent(
   config: AgentConfig, agent: LocalAgent, input: RemoteAgentSpec, prompt: string,
   signal: AbortSignal | undefined, inputImages: LocalAgentImage[], options: LocalRunOptions
 ): Promise<LocalAgentReply> {
-  const spec = await probeRemoteAgent(input, signal)
+  const transport = await openSshTransport(input, signal)
+  const spec = transport.spec
   signal?.throwIfAborted()
   const adapter = spec.adapter
   const custom = adapter === 'custom'
   // Same session rule as local agents; the folder lives on the server.
   const placement = remotePlacement(agent, options)
   const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, undefined, { remote: placement }) : undefined
-  const run = new RemoteRun(spec, remoteWorkspaceRef(workspace, placement))
+  const run = new RemoteRun(transport, remoteWorkspaceRef(workspace, placement))
   try {
     await run.prepare(signal)
     const imagePaths = await run.uploadImages(inputImages, signal)
@@ -529,13 +531,13 @@ async function executeRemoteAgent(
     let grokStream: GrokStream | undefined
     let geminiStream: GeminiStream | undefined
     const execute = async (accountLogin: boolean): Promise<string> => {
-      const launch = await remoteLaunch(spec, launchScript({
-        runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args, channel, remotePath: spec.remotePath,
-        environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
-      }))
       signal?.throwIfAborted()
+      const child = await transport.spawn({
+        runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args, channel,
+        environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
+      })
+      if (signal?.aborted) { killLocalProcess(child); signal.throwIfAborted() }
       return new Promise<string>((resolve, reject) => {
-        const child = spawnLaunch(launch)
         let stdout = ''
         let stderr = ''
         let bytes = 0
@@ -695,7 +697,9 @@ interface ConnectionPlan {
  * that server at its current revision. A folder from any other target is dropped. */
 function remotePlacement(agent: LocalAgent | undefined, options: LocalRunOptions): RemotePlacement | undefined {
   if (!agent?.remote) return undefined
-  const target = agent.remoteTarget ?? { executionTargetId: remoteTargetId(agent.remote), targetRevision: 0 }
+  // Main always resolves the target with the connection; never guess one.
+  if (!agent.remoteTarget) throw new Error('This remote agent has no server connection.')
+  const target = agent.remoteTarget
   const chosen = options.remoteWorkspace
   return { target, ...(chosen && chosen.executionTargetId === target.executionTargetId && chosen.targetRevision === target.targetRevision ? { workspace: chosen } : {}) }
 }
@@ -745,17 +749,18 @@ function createConnection(config: AgentConfig, plan: ConnectionPlan, signal: Abo
       const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
       signal?.throwIfAborted()
       if (remoteSpec) {
-        const spec = await probeRemoteAgent(remoteSpec, signal)
-        const run = new RemoteRun(spec, remoteWorkspaceRef(workspace, plan.placement))
+        const transport = await openSshTransport(remoteSpec, signal)
+        const spec = transport.spec
+        const run = new RemoteRun(transport, remoteWorkspaceRef(workspace, plan.placement))
         resolveRun(run)
         await run.prepare(signal)
         signal?.throwIfAborted()
         await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
           cwd: run.workspace,
-          launch: async (agentArgs) => remoteLaunch(spec, launchScript({
-            runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args: agentArgs, channel: 'stdin', remotePath: spec.remotePath,
+          spawn: agentArgs => transport.spawn({
+            runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args: agentArgs, channel: 'stdin',
             environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
-          }))
+          })
         })
         return { agent, env, directory: cwd, run }
       }

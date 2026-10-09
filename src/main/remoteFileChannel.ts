@@ -1,11 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { LocalAgentImage } from '../shared/agentExecutor'
-import type { MessageAttachment, RemoteAgentSpec } from '../shared/types'
-import {
-  cleanupScript, clearOutboxScript, framesScript, killScript, markerScript, prepareScript, remoteImageDirectories, runDirectory, runFileScript, uploadScript, SAFE_NAME,
-  assertWorkspaceKey, assertRemoteWorkspacePath, workspacePath, type RemoteWorkspaceRef
-} from './remoteScript'
-import { remoteCheck, remoteExec } from './remoteTransport'
+import type { MessageAttachment } from '../shared/types'
+import { remoteImageDirectories, runDirectory, SAFE_NAME, assertWorkspaceKey, assertRemoteWorkspacePath, workspacePath, type RemoteWorkspaceRef } from './remoteScript'
+import type { RemoteTransport } from './remote/sshTransport'
 import { assertUuid } from './remoteValidate'
 
 export interface Frame { name: string; data: Buffer }
@@ -60,29 +57,29 @@ export class RemoteRun {
   readonly id = randomUUID()
   private prepared = false
   private closed = false
-  constructor(readonly spec: RemoteAgentSpec & { remoteHome: string }, readonly workspaceRef: RemoteWorkspaceRef = {}) {
+  constructor(readonly transport: RemoteTransport, readonly workspaceRef: RemoteWorkspaceRef = {}) {
     if (workspaceRef.key) assertWorkspaceKey(workspaceRef.key)
     if (workspaceRef.path) assertRemoteWorkspacePath(workspaceRef.path)
   }
+  get spec(): RemoteTransport['spec'] { return this.transport.spec }
 
   /** Absolute paths (for prompts only; never used as a shell operand). */
-  get directory(): string { return `${this.spec.remoteHome}/.douchat-remote/t-${this.id}` }
+  get directory(): string { return `${this.transport.home}/.douchat-remote/t-${this.id}` }
   get outbox(): string { return `${this.directory}/out` }
   /** Working directory of the agent on the server, assigned by Douchat. */
-  get workspace(): string { return workspacePath(this.spec.remoteHome, this.id, this.workspaceRef) }
+  get workspace(): string { return workspacePath(this.transport.home, this.id, this.workspaceRef) }
   /** Shell fragment for templates. */
   get shellDirectory(): string { return runDirectory(this.id) }
 
   async prepare(signal?: AbortSignal): Promise<void> {
-    await remoteCheck(this.spec, prepareScript(this.id, this.workspaceRef), { signal, timeoutMs: 30_000 })
+    await this.transport.prepareRun(this.id, this.workspaceRef, signal)
     this.prepared = true
   }
 
   /** Upload bytes into a Douchat-named file and return its remote path. */
   async upload(name: string, data: Uint8Array, signal?: AbortSignal): Promise<string> {
     if (!SAFE_NAME.test(name) || name.startsWith('.')) throw new Error('Invalid remote file name')
-    const output = await remoteCheck(this.spec, uploadScript(this.id, name, data.byteLength), { input: data, signal, timeoutMs: 120_000, maxStdout: 64 })
-    if (output.toString('utf8').trim() !== String(data.byteLength)) throw new Error('Remote upload was incomplete')
+    await this.transport.upload(this.id, name, data, signal)
     return `${this.directory}/${name}`
   }
 
@@ -98,18 +95,17 @@ export class RemoteRun {
 
   /** Start of a turn on a long-lived connection: new marker, empty outbox. */
   async beginTurn(signal?: AbortSignal): Promise<void> {
-    await remoteCheck(this.spec, markerScript(this.id), { signal, timeoutMs: 15_000 })
-    await remoteCheck(this.spec, clearOutboxScript(this.id), { signal, timeoutMs: 15_000 })
+    await this.transport.beginTurn(this.id, signal)
   }
 
   private async frames(directory: { directory: string; parentChecks: number }, limits: FrameLimits, extra: { exclude?: string[]; only?: string[]; newerThanRun?: string } = {}, signal?: AbortSignal): Promise<Frame[]> {
-    const result = await remoteExec(this.spec, framesScript({ ...directory, ...extra, ...limits }), { signal, timeoutMs: 120_000, maxStdout: frameStdoutLimit(limits) })
+    const result = await this.transport.frames({ ...directory, ...extra, ...limits }, signal, frameStdoutLimit(limits))
     if (result.code !== 0) throw new Error('Could not fetch files from the server')
     return parseFrames(result.stdout, limits)
   }
 
   async names(directory: { directory: string; parentChecks: number }, signal?: AbortSignal): Promise<Set<string>> {
-    const result = await remoteExec(this.spec, framesScript({ ...directory, listOnly: true, ...IMAGE_LIMITS }), { signal, timeoutMs: 30_000, maxStdout: 1024 * 1024 })
+    const result = await this.transport.frames({ ...directory, listOnly: true, ...IMAGE_LIMITS }, signal, 1024 * 1024)
     if (result.code !== 0) throw new Error('Could not list files on the server')
     return new Set(result.stdout.toString('utf8').split('\n').filter(name => SAFE_NAME.test(name)))
   }
@@ -150,7 +146,7 @@ export class RemoteRun {
   }
 
   async replyText(signal?: AbortSignal): Promise<string> {
-    const result = await remoteExec(this.spec, runFileScript(this.id, 'reply.txt', REPLY_LIMITS.maxFileBytes), { signal, timeoutMs: 60_000, maxStdout: frameStdoutLimit(REPLY_LIMITS) })
+    const result = await this.transport.runFile(this.id, 'reply.txt', REPLY_LIMITS.maxFileBytes, frameStdoutLimit(REPLY_LIMITS), signal)
     if (result.code !== 0) throw new Error('Could not fetch the reply from the server')
     const frame = parseFrames(result.stdout, REPLY_LIMITS)[0]
     return frame ? new TextDecoder('utf-8').decode(frame.data) : ''
@@ -159,13 +155,13 @@ export class RemoteRun {
   /** Signal the remote process group; the pid must be numeric on the server. */
   async kill(): Promise<void> {
     if (!this.prepared) return
-    await remoteExec(this.spec, killScript(this.id), { timeoutMs: 10_000 }).catch(() => undefined)
+    await this.transport.interrupt(this.id)
   }
 
   async dispose(kill = true): Promise<void> {
     if (!this.prepared || this.closed) return
     this.closed = true
-    await remoteExec(this.spec, cleanupScript(this.id, kill), { timeoutMs: 15_000 }).catch(() => undefined)
+    await this.transport.cleanupRun(this.id, kill)
   }
 }
 

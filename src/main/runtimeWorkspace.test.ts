@@ -22,7 +22,10 @@ vi.mock('./localAgents', async (original) => {
     cachedRemoteAgentSpec: (id?: string) => id && servers.has(id) ? spec(id.slice(7)) : undefined
   }
 })
-vi.mock('./remoteSkillBridge', async (original) => ({ ...await original<object>(), openRemoteSkillBridge: async () => undefined }))
+vi.mock('./remote/sshTransport', async (original) => {
+  const actual = await original<typeof import('./remote/sshTransport')>()
+  return { ...actual, openSshTransport: async (spec: never) => ({ ...actual.sshTransport({ ...(spec as object), remotePath: '/usr/bin', remoteHome: '/home/me' } as never), openBridge: async () => undefined }) }
+})
 vi.mock('./remoteTransport', async (original) => ({ ...await original<object>(), probeRemoteAgent: async (input: object) => ({ ...input, remotePath: '/usr/bin', remoteHome: '/home/me' }) }))
 vi.mock('./localWorkspaces', async (original) => {
   const actual = await original<typeof import('./localWorkspaces')>()

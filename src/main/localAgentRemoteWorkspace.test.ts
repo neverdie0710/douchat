@@ -27,7 +27,8 @@ beforeEach(() => { scripts.length = 0; directory = mkdtempSync(join(tmpdir(), 'd
 afterEach(() => { disposeAllLocalAgentSessions(); configureLocalWorkspaces(); rmSync(directory, { recursive: true, force: true }) })
 const decoded = () => scripts.join('\n')
 
-it.each(['gemini', 'codex'] as const)('%s launches in the chosen server folder only when it belongs to the current target', async adapter => {
+// Codex keeps a connection; replacing it waits for the old process's shutdown grace period.
+it.each(['gemini', 'codex'] as const)('%s launches in the chosen server folder only when it belongs to the current target', { timeout: 20_000 }, async adapter => {
   const run = (remoteWorkspace?: object) => runLocalAgent(config, 'hi', undefined, [], { sessionKey: `direct:c:${adapter}`, agentOverride: agent(adapter), remoteWorkspace: remoteWorkspace as never }).catch(error => error)
   expect(String(await run({ path: '/home/me/proj', ...target }))).toContain('launch captured')
   expect(decoded()).toContain("w='/home/me/proj'")

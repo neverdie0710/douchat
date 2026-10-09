@@ -452,3 +452,30 @@ export function resolveDirectoryScript(path: string): string {
     'pwd -P'
   ].join('\n') + '\n'
 }
+
+/** Fixed CLI names Douchat knows how to talk to, in discovery order. */
+export const DISCOVERABLE_CLIS = [
+  ['codex', 'codex'], ['claude', 'claude'], ['gemini', 'gemini'], ['grok', 'grok'], ['cursor', 'cursor-agent'], ['opencode', 'opencode'],
+  ['kimi', 'kimi'], ['openclaw', 'openclaw'], ['fastclaw', 'fastclaw'], ['hermes', 'hermes'], ['omp', 'omp']
+] as const
+
+/**
+ * Find every known CLI with the same PATH rules as the agent probe. Each hit is
+ * printed as "<name>\t<path>"; command names are constants, never user text.
+ * `--version` runs with a 5 second limit where `timeout` exists.
+ */
+export function discoverScript(nonce = randomBytes(8).toString('hex')): string {
+  // The probe's PATH resolution, up to and including `export PATH`.
+  const probe = probeScript('true', nonce).replace(/\ne=\$\(command -v [\s\S]*$/, '')
+  return [
+    probe,
+    'vt=; command -v timeout >/dev/null 2>&1 && vt="timeout 5"',
+    `for c in ${DISCOVERABLE_CLIS.map(([, command]) => shQuote(command)).join(' ')}; do`,
+    '  e=$(command -v "$c" 2>/dev/null || :)',
+    '  case "$e" in /*) ;; *) continue;; esac',
+    '  case "$e" in *"$(printf \'\\t\')"*) continue;; esac',
+    '  v=$($vt "$e" --version < /dev/null 2>/dev/null | head -n 1 | tr -d \'\\t\\r\' | cut -c 1-120 || :)',
+    "  printf '%s\\t%s\\t%s\\n' \"$c\" \"$e\" \"$v\"",
+    'done', 'exit 0'
+  ].join('\n') + '\n'
+}

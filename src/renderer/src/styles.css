@@ -4851,6 +4851,27 @@ html[data-platform='win32'] .messenger .app-rail {
 .remote-directory-list button:last-child { border-bottom: 0; }
 .remote-directory-list button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-500) 8%, transparent); }
 .remote-directory-list .conversation-workspace-note { padding: 8px 9px; }
+.connections-tabs { display: flex; gap: 6px; margin: 0 0 12px; }
+.connections-tabs button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font: inherit; }
+.connections-tabs button.active { border-color: var(--accent-500); color: var(--accent-600); }
+.connection-row { align-items: flex-start; }
+.connection-row > .detail-switch { flex: 0 0 auto; margin-top: 10px; }
+.connection-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: calc(12px * var(--font-scale, .92)); }
+.connection-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.connection-status-connected i { background: #22a06b; }
+.connection-status-connecting i { background: #d4a72c; }
+.connection-status-error { color: #d4380d; }
+.connection-status-error i { background: #d4380d; }
+.connection-report { display: grid; gap: 2px; margin-top: 6px; font-size: calc(12px * var(--font-scale, .92)); }
+.connection-report p { margin: 0; }
+.connection-step-ok { color: #22a06b; }
+.connection-step-failed { color: #d4380d; }
+.connection-menu { position: relative; }
+.connection-menu-items { position: absolute; z-index: 5; right: 0; top: calc(100% + 4px); display: grid; min-width: 160px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--canvas); box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+.connection-menu-items button { padding: 6px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.connection-menu-items button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-500) 8%, transparent); }
+.connection-menu-items button:disabled { opacity: .5; cursor: default; }
+.connection-menu-items .danger { color: #d4380d; }
 @media (prefers-reduced-motion: reduce) {
   .chat-details-layer, .messenger .chat-details-layer .inspector-rail { transition: none; }
 }

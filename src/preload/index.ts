@@ -70,6 +70,14 @@ const api: DouchatApi = {
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:test-local-agent', id, input),
   cancelLocalAgentTest: () => ipcRenderer.invoke('douchat:cancel-local-agent-test'),
   listSshHosts: () => ipcRenderer.invoke('douchat:list-ssh-hosts'),
+  listConnections: () => ipcRenderer.invoke('douchat:list-connections'),
+  saveConnection: (input) => ipcRenderer.invoke('douchat:save-connection', input),
+  removeConnection: (id, mode) => ipcRenderer.invoke('douchat:remove-connection', id, mode),
+  setConnectionEnabled: (id, enabled) => ipcRenderer.invoke('douchat:set-connection-enabled', id, enabled),
+  testConnection: (id) => ipcRenderer.invoke('douchat:test-connection', id),
+  discoverRemoteAgents: (id) => ipcRenderer.invoke('douchat:discover-remote-agents', id),
+  addDiscoveredAgents: (id, agents) => ipcRenderer.invoke('douchat:add-discovered-agents', id, agents),
+  openConnectionTerminal: (id) => ipcRenderer.invoke('douchat:open-connection-terminal', id),
   removeCustomLocalAgent: (id: string) => ipcRenderer.invoke('douchat:remove-custom-local-agent', id),
   searchMessages: (conversationId, query) => ipcRenderer.invoke('douchat:search-messages', conversationId, query),
   getMessagePage: (conversationId, topicId, before) => ipcRenderer.invoke('douchat:message-page', conversationId, topicId, before),
@@ -156,6 +164,11 @@ const api: DouchatApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: UpdateState): void => listener(state)
     ipcRenderer.on('douchat:update-state', handler)
     return () => ipcRenderer.removeListener('douchat:update-state', handler)
+  },
+  onConnectionsChanged: (listener: () => void) => {
+    const handler = (): void => listener()
+    ipcRenderer.on('douchat:connections-changed', handler)
+    return () => ipcRenderer.removeListener('douchat:connections-changed', handler)
   },
   onConnanyChanged: (listener: () => void) => {
     const handler = (): void => listener()

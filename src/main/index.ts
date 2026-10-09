@@ -56,7 +56,10 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, remoteAgentPlacement, remoteAgentSpec, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, agentsOnConnection, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { ConnectionManager } from './connectionManager'
+import { migrateConnections, skippedMigrationAgents } from './connectionStore'
+import { migrateWorkspaceTargets } from './workspaceMigration'
 import { closeRemoteConnections, configureRemoteTransport } from './remoteTransport'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
@@ -98,6 +101,7 @@ const webAppUrl = normalizeWebAppUrl(
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
+const connections = new ConnectionManager(connectionRegistry(), agentsOnConnection)
 configureRemoteTransport(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
 configureLocalWorkspaces(app.getPath('userData'))
@@ -231,10 +235,12 @@ let cloudSessionActive = false
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
+/** No window, and so no turn or agent edit, before connections are migrated. */
+let startupReady = false
 function focusMainWindow(): void {
   if (quitting) return
   if (!mainWindow || mainWindow.isDestroyed()) {
-    if (app.isReady() && runtime) createWindow()
+    if (app.isReady() && runtime && startupReady) createWindow()
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -287,7 +293,8 @@ function receiveAppUrl(url: string): void {
   }
   if (!isDesktopAuthUrl(url, authScheme)) return
   focusMainWindow()
-  if (!auth) {
+  // Signing in starts account sync and shared tasks; wait until startup (and migration) is done.
+  if (!auth || !startupReady) {
     pendingAuthUrl = url
     return
   }
@@ -581,7 +588,7 @@ function configureMediaPermissions(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   // Electron creates a default File/Edit/View/Window menu on Windows when no
   // application menu is provided. Douchat exposes its actions in the app UI,
@@ -795,12 +802,10 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:update-local-agent', async (event, id: string, input: CustomLocalAgentInput) => {
     if (!isDouchatRenderer(event.sender) || typeof id !== 'string') throw new Error('Invalid local agent request')
-    const previous = await remoteAgentSpec(id)
+    const previous = await remoteAgentPlacement(id).catch(() => undefined)
     await updateLocalAgent(id, input)
-    if (previous) {
-      for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
-      void closeRemoteConnections(previous)
-    }
+    // Its running sessions belong to the old settings; the connection itself stays open for other agents.
+    if (previous || input.remoteAgent) for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
     cancelLocalModelQueries()
     resetShellPath()
     return checkLocalAgentUpdates(await detectLocalAgents())
@@ -830,10 +835,88 @@ app.whenReady().then(() => {
     if (store.agents.some((agent) => agent.localAgentId === id)) {
       throw new Error('Remove contacts using this local agent before deleting it.')
     }
-    const previous = await remoteAgentSpec(id)
     await removeCustomLocalAgent(id)
-    if (previous) void closeRemoteConnections(previous)
     return checkLocalAgentUpdates(await detectLocalAgents())
+  })
+  // ─── Server connections ────────────────────────────────────────────────────
+  // Every handler validates in main; renderer checks are only hints.
+  const connectionChanged = (): void => notifyWindows(BrowserWindow.getAllWindows(), 'douchat:connections-changed')
+  connections.onStatus(connectionChanged)
+  const connectionRequest = (event: Electron.IpcMainInvokeEvent, id?: unknown): string => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connection request')
+    if (id !== undefined && (typeof id !== 'string' || !/^conn_[0-9a-f]{32}$/.test(id))) throw new Error('Invalid connection')
+    return id as string
+  }
+  /** Stop every turn and process of agents on a connection; they must not continue elsewhere. */
+  const stopAgentsOn = async (connectionId: string): Promise<void> => {
+    const ids = new Set(await agentsOnConnection(connectionId))
+    for (const agent of store.agents) if (agent.localAgentId && ids.has(agent.localAgentId)) runtime?.disposeAgent(agent.id)
+  }
+  ipcMain.handle('douchat:list-connections', (event) => { connectionRequest(event); return connections.list() })
+  ipcMain.handle('douchat:save-connection', async (event, input: unknown) => {
+    connectionRequest(event)
+    const id = input && typeof input === 'object' ? (input as { id?: unknown }).id : undefined
+    const previous = typeof id === 'string' ? await connectionRegistry().get(id) : undefined
+    const saved = await connections.save(input)
+    // A new target, or sharing withdrawn: work started under the old settings must not continue.
+    if (previous && (previous.targetRevision !== saved.targetRevision || (previous.allowSharing && !saved.allowSharing))) await stopAgentsOn(saved.id)
+    cancelLocalModelQueries()
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  ipcMain.handle('douchat:set-connection-enabled', async (event, id: unknown, enabled: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (typeof enabled !== 'boolean') throw new Error('Invalid connection request')
+    // Saved first so no new turn can start on it, then running turns stop.
+    // Nothing falls back to this computer.
+    await connections.setEnabled(connectionId, enabled)
+    if (!enabled) { await stopAgentsOn(connectionId); cancelLocalModelQueries() }
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  ipcMain.handle('douchat:remove-connection', async (event, id: unknown, mode: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (mode !== 'disable-agents' && mode !== 'delete-agents') throw new Error('Invalid connection request')
+    // Turned off first so no new turn starts, then running turns stop.
+    await connections.setEnabled(connectionId, false)
+    await stopAgentsOn(connectionId)
+    cancelLocalModelQueries()
+    // Agents still used by contacts are kept (and cannot run) even with delete-agents.
+    const inUse = (localId: string) => store.agents.some(agent => agent.localAgentId === localId)
+    await removeAgentsOnConnection(connectionId, mode, inUse)
+    await connections.remove(connectionId)
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  const connectionTests = new Map<number, AbortController>()
+  ipcMain.handle('douchat:test-connection', async (event, id: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    connectionTests.get(event.sender.id)?.abort()
+    const abort = new AbortController()
+    connectionTests.set(event.sender.id, abort)
+    try { return await connections.test(connectionId, AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)])) }
+    finally { if (connectionTests.get(event.sender.id) === abort) connectionTests.delete(event.sender.id); connectionChanged() }
+  })
+  ipcMain.handle('douchat:discover-remote-agents', (event, id: unknown) => connections.discover(connectionRequest(event, id), AbortSignal.timeout(120_000)))
+  ipcMain.handle('douchat:add-discovered-agents', async (event, id: unknown, chosen: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (!Array.isArray(chosen) || !chosen.length || chosen.length > 11) throw new Error('Choose agents to add.')
+    // Only what discovery found on this server can be added this way.
+    const found = await connections.discover(connectionId, AbortSignal.timeout(120_000))
+    for (const item of chosen as Array<{ adapter?: unknown; executable?: unknown; name?: unknown }>) {
+      const match = found.find(agent => agent.adapter === item?.adapter && agent.executable === item?.executable)
+      if (!match) throw new Error('This agent was not found on the server. Scan again.')
+      await addCustomLocalAgent({ name: typeof item.name === 'string' && item.name.trim() ? item.name : match.adapter, command: match.executable,
+        remoteAgent: { connectionId, adapter: match.adapter, executable: match.executable, args: [] } })
+    }
+    connectionChanged()
+    return checkLocalAgentUpdates(await detectLocalAgents())
+  })
+  ipcMain.handle('douchat:open-connection-terminal', async (event, id: unknown) => {
+    const connection = await connectionRegistry().get(connectionRequest(event, id))
+    if (!connection) throw new Error('Connection not found')
+    if (!connection.enabled) throw new Error('This connection is turned off.')
+    await openSshTerminal(remoteTerminalArgs({ transport: 'ssh', ...connection.ssh, adapter: 'custom', executable: 'true', args: [], allowSharing: false }))
   })
   ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
@@ -1106,7 +1189,9 @@ app.whenReady().then(() => {
     const members = await Promise.all(ownMemberAgentIds(conversation, store.currentAccountId).map(async (agentId): Promise<MemberWorkspaceView | undefined> => {
       const agent = store.accountAgents.find(item => item.id === agentId)
       if (!agent) return undefined
-      const placement = await remoteAgentPlacement(agent.localAgentId)
+      // A member whose connection is off or removed has no folder to set right now.
+      const placement = await remoteAgentPlacement(agent.localAgentId).catch(() => null)
+      if (placement === null) return undefined
       const target = placement ? { ...placement.target, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
       const resolved = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
       return {
@@ -1398,6 +1483,23 @@ app.whenReady().then(() => {
     await computer.show(agentId)
   })
 
+  // Agents are not started until connections are migrated (docs/remote-connections.md §3).
+  try {
+    const migrated = await migrateConnections(app.getPath('userData'), connectionRegistry())
+    migrateWorkspaceTargets(store, migrated)
+  } catch (error) {
+    diagnostics.write('connections.migration-failed', String(error))
+    void dialog.showMessageBox({ type: 'warning', message: ui('Server agents could not be set up', '无法完成服务器智能体的迁移'), detail: `${error instanceof Error ? error.message : String(error)}\n\n${ui('Agents on servers are unavailable until this is fixed. Agents on this computer work normally.', '修复前服务器上的智能体不可用，本机智能体不受影响。')}` })
+  }
+  const skipped = await skippedMigrationAgents(app.getPath('userData'))
+  if (skipped.length) {
+    diagnostics.write('connections.migration-skipped', JSON.stringify(skipped))
+    void dialog.showMessageBox({ type: 'warning', message: ui('Some server agents were not moved to connections', '部分服务器智能体未能迁移到连接'),
+      detail: `${skipped.join(', ')}\n\n${ui('Their saved SSH settings are invalid. They are kept unchanged in local-agents.json; add them again in Settings → Connections.', '它们保存的 SSH 设置无效，已原样保留在 local-agents.json 中。请在「设置 → 连接」中重新添加。')}` })
+  }
+  void connections.start()
+  app.on('browser-window-focus', () => connections.retryFailed())
+  startupReady = true
   createWindow()
   void auth.initialize().then(() => {
     if (!pendingAuthUrl) return
@@ -1430,6 +1532,7 @@ app.on('before-quit', () => {
   disposeAllLocalAgentSessions()
   scheduler?.dispose()
   computer?.dispose()
+  connections.stop()
   void closeRemoteConnections()
 })
 

@@ -10,8 +10,8 @@ import { COMPUTER_USE_SERVERS, codexComputerUseInstructions, codexComputerUseInv
 
 /** Process launch description (local executable or the system ssh client). */
 export interface LaunchSpec { file: string; args: string[]; env: NodeJS.ProcessEnv; cwd?: string }
-/** Build the ssh launch for the agent's protocol arguments; `cwd` is remote. */
-export interface RemoteConnectionLaunch { cwd: string; launch: (agentArgs: string[]) => Promise<LaunchSpec> }
+/** Starts the agent for its protocol arguments on another host; `cwd` is on that host. */
+export interface RemoteConnectionLaunch { cwd: string; spawn: (agentArgs: string[]) => Promise<ChildProcessWithoutNullStreams> }
 
 const ownedProcesses = new Set<ChildProcessWithoutNullStreams>()
 
@@ -105,10 +105,12 @@ export class LocalAgentConnection {
     if (this.kind === 'claude' && resume?.thread) { this.threadId = resume.thread; this.turnCount = 1 }
     const agentArgs = appendLocalAgentArguments(this.kind === 'claude' ? withLocalModel('claude', withLocalThinking('claude', args, thinking), model) : args, extraArgs)
     this.remote = Boolean(remote)
-    const launch: LaunchSpec = remote ? await remote.launch(agentArgs) : { file: command!.file, args: [...command!.prefix, ...agentArgs], env, cwd }
+    // Local: this process spawns the CLI. Remote: the transport's factory does, and owns its ssh process.
     if (this.failure) throw this.failure
+    const child = remote ? await remote.spawn(agentArgs) : spawnOwnedProcess(command!.file, [...command!.prefix, ...agentArgs], { cwd, env, windowsHide: true, shell: false })
+    if (this.failure) { killLocalProcess(child); throw this.failure }
     if (remote) cwd = remote.cwd
-    this.child = spawnOwnedProcess(launch.file, launch.args, { cwd: launch.cwd, env: launch.env, windowsHide: true, shell: false })
+    this.child = child
     this.child.stdout.setEncoding('utf8')
     this.child.stderr.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => this.read(chunk))

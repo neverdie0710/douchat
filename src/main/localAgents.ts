@@ -1,15 +1,16 @@
 import { executableCommand } from './windowsCommand'
 import { changedLocalAgentSettings } from './localAgentSettingsVersion'
-import type { CustomLocalAgentInput, ExecutionTarget, LocalAgent, RemoteAgentSpec } from '../shared/types'
+import type { CustomLocalAgentInput, ExecutionTarget, LocalAgent, RemoteAgentBinding, RemoteAgentSpec, RemoteConnection } from '../shared/types'
 import { execFile } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { resolveExecutable, executableEnvironment } from './shellPath'
-import { normalizeRemoteSpec, remoteHostLabel, validateRemoteSpec } from './remoteValidate'
+import { normalizeRemoteSpec, remoteHostLabel } from './remoteValidate'
+import { ConnectionStore, connectionSpec, connectionTargetId, legacyTargetId } from './connectionStore'
 import { forgetRemoteProbes, probeRemoteAgent } from './remoteTransport'
 
 const execFileAsync = promisify(execFile)
@@ -17,23 +18,20 @@ let customRegistryPath: string | undefined
 
 interface CustomLocalAgentDefinition extends CustomLocalAgentInput {
   id: string
-  /** Main-only: increased whenever the server identity of a remote agent changes. */
-  remoteTargetRevision?: number
-}
-
-/** Stable identity of an SSH target. Defaults are normalized, so `host` and
- * `host:22` are the same server; any change of host, port, user or key is a new target. */
-export function remoteTargetId(spec: Pick<RemoteAgentSpec, 'host' | 'port' | 'user' | 'identityFile'>): string {
-  return `ssh-legacy:${createHash('sha256').update(JSON.stringify([spec.host.toLowerCase(), spec.port ?? 22, spec.user ?? '', spec.identityFile ?? ''])).digest('hex').slice(0, 32)}`
-}
-function remoteTarget(definition: Pick<CustomLocalAgentDefinition, 'remote' | 'remoteTargetRevision'>): ExecutionTarget | undefined {
-  return definition.remote ? { executionTargetId: remoteTargetId(definition.remote), targetRevision: definition.remoteTargetRevision ?? 0 } : undefined
+  /** Main-only: the P0 target this migrated agent's folders and threads were saved with. */
+  legacyTarget?: { connectionId: string; revision: number }
 }
 
 const CUSTOM_ID = /^custom:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-export function configureLocalAgentRegistry(userDataPath?: string): void {
+let connectionStore: ConnectionStore | undefined
+export function configureLocalAgentRegistry(userDataPath?: string, connections?: ConnectionStore): void {
   customRegistryPath = userDataPath ? join(userDataPath, 'local-agents.json') : undefined
+  connectionStore = userDataPath ? connections ?? new ConnectionStore(join(userDataPath, 'connections.json')) : undefined
+}
+export function connectionRegistry(): ConnectionStore {
+  if (!connectionStore) throw new Error('Connections are unavailable')
+  return connectionStore
 }
 
 function customDefinition(value: unknown): CustomLocalAgentDefinition | undefined {
@@ -41,50 +39,96 @@ function customDefinition(value: unknown): CustomLocalAgentDefinition | undefine
   const input = value as Record<string, unknown>
   const id = String(input.id ?? '').trim()
   if (!CUSTOM_ID.test(id) && !localAgentCatalog.some(item => item[0] === id)) return undefined
-  const revision = input.remoteTargetRevision
+  const legacy = input.legacyTarget as CustomLocalAgentDefinition['legacyTarget']
   try {
+    // A not-yet-migrated SSH agent is never run directly: it waits for its connection.
+    if (input.remote && !input.remoteAgent) return undefined
     return { id, ...validateLocalAgentInput(input as unknown as CustomLocalAgentInput),
-      ...(Number.isSafeInteger(revision) && (revision as number) > 0 ? { remoteTargetRevision: revision as number } : {}) }
+      ...(legacy && typeof legacy.connectionId === 'string' && Number.isSafeInteger(legacy.revision) && legacy.revision >= 0 ? { legacyTarget: { connectionId: legacy.connectionId, revision: legacy.revision } } : {}) }
   } catch { return undefined }
+}
+
+/** A remote agent on its connection: the SSH spec it runs with and the target its folders belong to. */
+export interface RemotePlacementInfo { spec: RemoteAgentSpec; target: ExecutionTarget; connection: RemoteConnection }
+
+/** The server identity of an agent on a connection. A migrated agent keeps the
+ * P0 identity its folders were saved with until the connection is edited. */
+function placementTarget(definition: CustomLocalAgentDefinition, connection: RemoteConnection): ExecutionTarget {
+  const legacy = definition.legacyTarget
+  // A migrated agent keeps its P0 identity while it stays on this, unedited,
+  // connection: its saved folders and native threads stay valid. Saved folders
+  // are also re-bound to the connection at startup (workspaceMigration).
+  if (legacy && legacy.connectionId === connection.id && connection.targetRevision === 0) {
+    return { executionTargetId: legacyTargetId(connection.ssh), targetRevision: legacy.revision }
+  }
+  return { executionTargetId: connectionTargetId(connection), targetRevision: connection.targetRevision }
+}
+
+async function placementOf(definition: CustomLocalAgentDefinition, connections: RemoteConnection[]): Promise<RemotePlacementInfo | { unavailable: 'disabled' | 'missing'; connectionId: string } | undefined> {
+  const binding = definition.remoteAgent
+  if (!binding) return undefined
+  const connection = connections.find(item => item.id === binding.connectionId)
+  if (!connection) return { unavailable: 'missing', connectionId: binding.connectionId }
+  if (!connection.enabled) return { unavailable: 'disabled', connectionId: connection.id }
+  return { spec: connectionSpec(connection, binding), target: placementTarget(definition, connection), connection }
 }
 
 async function customDefinitions(): Promise<CustomLocalAgentDefinition[]> {
   if (!customRegistryPath) return []
+  let definitions: CustomLocalAgentDefinition[]
   try {
     const parsed = JSON.parse(await readFile(customRegistryPath, 'utf8')) as unknown
-    if (!Array.isArray(parsed)) { remoteSpecs.clear(); remoteTargets.clear(); return [] }
-    const definitions = parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75)
-    remoteSpecs.clear(); remoteTargets.clear()
-    for (const item of definitions) if (item.remote) { remoteSpecs.set(item.id, item.remote); remoteTargets.set(item.id, remoteTarget(item)!) }
-    return definitions
-  } catch {
-    remoteSpecs.clear(); remoteTargets.clear()
-    return []
+    definitions = Array.isArray(parsed) ? parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75) : []
+  } catch { definitions = [] }
+  const connections = connectionStore ? await connectionStore.list().catch(() => []) : []
+  remoteSpecs.clear(); remoteTargets.clear(); remoteLabels.clear()
+  for (const item of definitions) {
+    const placement = await placementOf(item, connections)
+    if (placement && 'spec' in placement) { remoteSpecs.set(item.id, placement.spec); remoteTargets.set(item.id, placement.target) }
+    // Remote even while unavailable: earlier replies stay marked as coming from a server.
+    if (item.remoteAgent) {
+      const connection = connections.find(entry => entry.id === item.remoteAgent!.connectionId)
+      remoteLabels.set(item.id, connection ? remoteHostLabel(connection.ssh) : 'a removed server')
+    }
   }
+  return definitions
 }
 
 /** Last validated remote settings, for synchronous labelling (group context, UI). */
 const remoteSpecs = new Map<string, RemoteAgentSpec>()
 const remoteTargets = new Map<string, ExecutionTarget>()
+const remoteLabels = new Map<string, string>()
+/** Host label of any agent configured to run on a server, available or not. */
+export function cachedRemoteAgentLabel(id: string | undefined): string | undefined {
+  return id ? remoteLabels.get(id) : undefined
+}
 export function cachedRemoteAgentTarget(id: string | undefined): ExecutionTarget | undefined {
   return id ? remoteTargets.get(id) : undefined
 }
-/** Fresh lookup of a remote agent's settings together with its server identity. */
-export async function remoteAgentPlacement(id: string | undefined): Promise<{ spec: RemoteAgentSpec; target: ExecutionTarget } | undefined> {
+/** Fresh lookup of a remote agent's settings together with its server identity.
+ * Throws for an agent whose connection is disabled or removed: it must not run
+ * anywhere else, least of all on this computer. */
+export async function remoteAgentPlacement(id: string | undefined): Promise<RemotePlacementInfo | undefined> {
   if (!id || !CUSTOM_ID.test(id)) return undefined
   const definition = (await customDefinitions()).find(item => item.id === id)
-  return definition?.remote ? { spec: definition.remote, target: remoteTarget(definition)! } : undefined
+  if (!definition) return undefined
+  const placement = await placementOf(definition, connectionStore ? await connectionStore.list() : [])
+  if (placement && 'unavailable' in placement) throw new Error(placement.unavailable === 'disabled' ? 'This agent\'s server connection is turned off. Turn it on in Settings → Connections.' : 'This agent\'s server connection was removed. Choose another connection for it in Settings → Agents.')
+  return placement
 }
 export function cachedRemoteAgentSpec(id: string | undefined): RemoteAgentSpec | undefined {
   return id ? remoteSpecs.get(id) : undefined
 }
 /** Fresh lookup from the registry; undefined for agents running on this computer. */
 export async function remoteAgentSpec(id: string | undefined): Promise<RemoteAgentSpec | undefined> {
-  if (!id || !CUSTOM_ID.test(id)) return undefined
-  return (await customDefinitions()).find(item => item.id === id)?.remote
+  return (await remoteAgentPlacement(id))?.spec
+}
+/** Agent ids on a connection, whatever the connection's state. */
+export async function agentsOnConnection(connectionId: string): Promise<string[]> {
+  return (await customDefinitions()).filter(item => item.remoteAgent?.connectionId === connectionId).map(item => item.id)
 }
 
-async function writeCustomDefinitions(definitions: CustomLocalAgentDefinition[]): Promise<void> {
+async function writeCustomDefinitions(definitions: unknown[]): Promise<void> {
   if (!customRegistryPath) throw new Error('Local agent registry is unavailable')
   await mkdir(dirname(customRegistryPath), { recursive: true })
   const temporary = `${customRegistryPath}.${randomUUID()}.tmp`
@@ -92,25 +136,34 @@ async function writeCustomDefinitions(definitions: CustomLocalAgentDefinition[])
   await rename(temporary, customRegistryPath)
 }
 
+/** Structural check of a remote agent's settings on a connection. */
+export function validateRemoteAgentBinding(input: unknown): RemoteAgentBinding {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid remote agent settings.')
+  const value = input as Record<string, unknown>
+  const connectionId = String(value.connectionId ?? '')
+  if (!/^conn_[0-9a-f]{32}$/.test(connectionId)) throw new Error('Choose a server connection.')
+  // Adapter, executable, arguments and the dangerous-argument table are the same rules as before.
+  const spec = normalizeRemoteSpec({ transport: 'ssh', host: 'placeholder', adapter: value.adapter, executable: value.executable, args: value.args ?? [] })
+  if (value.allowSharing !== undefined && typeof value.allowSharing !== 'boolean') throw new Error('Invalid sharing setting.')
+  return { connectionId, adapter: spec.adapter, executable: spec.executable, args: spec.args, allowSharing: value.allowSharing === true }
+}
+
 export function validateLocalAgentInput(input: CustomLocalAgentInput): CustomLocalAgentInput {
-  if (input?.remote !== undefined && input.remote !== null) {
-    // Remote agents use structured fields only; `command` mirrors the remote executable.
-    const remote = normalizeRemoteSpec(input.remote)
-    const name = String(input?.name ?? '').trim()
-    if (!name || name.length > 80) throw new Error('Enter a local agent name of 80 characters or fewer.')
-    const avatar = input.avatar || undefined
-    if (avatar && (typeof avatar !== 'string' || avatar.length > 512_000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar))) throw new Error('Choose a PNG, JPEG or WebP avatar.')
-    return { name, command: remote.executable, args: [], avatar, remote }
-  }
   const name = String(input?.name ?? '').trim()
-  const command = String(input?.command ?? '').trim()
   if (!name || name.length > 80) throw new Error('Enter a local agent name of 80 characters or fewer.')
+  const avatar = input?.avatar || undefined
+  if (avatar && (typeof avatar !== 'string' || avatar.length > 512_000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar))) throw new Error('Choose a PNG, JPEG or WebP avatar.')
+  if (input?.remote !== undefined && input.remote !== null) throw new Error('Add the server as a connection first, then choose it for this agent.')
+  if (input?.remoteAgent !== undefined && input.remoteAgent !== null) {
+    // Remote agents use structured fields only; `command` mirrors the remote executable.
+    const remoteAgent = validateRemoteAgentBinding(input.remoteAgent)
+    return { name, command: remoteAgent.executable, args: [], avatar, remoteAgent }
+  }
+  const command = String(input?.command ?? '').trim()
   if (!command || command.length > 2_048 || /[\0\r\n]/.test(command)) throw new Error('Enter a valid executable command or absolute path.')
   if (!/[\\/]/.test(command) && /\s/.test(command)) throw new Error('A command name cannot contain spaces. Use an absolute path instead.')
   const args = input.args ?? []
   if (!Array.isArray(args) || args.length > 128 || args.some(arg => typeof arg !== 'string' || arg.includes('\0')) || JSON.stringify(args).length > 16384) throw new Error('Enter valid startup arguments.')
-  const avatar = input.avatar || undefined
-  if (avatar && (typeof avatar !== 'string' || avatar.length > 512_000 || !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(avatar))) throw new Error('Choose a PNG, JPEG or WebP avatar.')
   return { name, command, args, avatar }
 }
 
@@ -120,27 +173,34 @@ function mutateRegistry(action: (definitions: CustomLocalAgentDefinition[]) => v
   const work = registryWrite.catch(() => {}).then(async () => {
     const definitions = await customDefinitions()
     action(definitions)
-    await writeCustomDefinitions(definitions)
+    // Entries this build cannot use (an SSH agent awaiting migration, or one
+    // that no longer validates) are written back untouched, never dropped.
+    await writeCustomDefinitions([...definitions, ...await unusableEntries(new Set(definitions.map(item => item.id)))])
   })
   registryWrite = work
   return work
 }
+async function unusableEntries(kept: Set<string>): Promise<unknown[]> {
+  if (!customRegistryPath) return []
+  try {
+    const parsed = JSON.parse(await readFile(customRegistryPath, 'utf8')) as unknown
+    return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === 'object' && !kept.has(String((item as { id?: unknown }).id ?? '')) && (item as { id?: unknown }).id !== undefined && !customDefinition(item)) : []
+  } catch { return [] }
+}
 async function validatedInput(input: CustomLocalAgentInput): Promise<CustomLocalAgentInput> {
   const value = validateLocalAgentInput(input)
-  if (value.remote) {
-    // Resolve the identity file in main; renderer checks are only hints. Probe
-    // results are never accepted from the renderer: they are re-discovered.
-    const { remotePath: _path, remoteHome: _home, ...remote } = await validateRemoteSpec(value.remote)
-    value.remote = remote
-  }
+  // The connection must exist; host, port, user and key live there, never on the agent.
+  if (value.remoteAgent && !(await connectionStore?.get(value.remoteAgent.connectionId))) throw new Error('Choose a server connection.')
   return value
 }
-export async function addCustomLocalAgent(input: CustomLocalAgentInput): Promise<void> {
+export async function addCustomLocalAgent(input: CustomLocalAgentInput): Promise<string> {
   const value = await validatedInput(input)
+  const id = `custom:${randomUUID()}`
   await mutateRegistry(definitions => {
     if (definitions.filter(item => CUSTOM_ID.test(item.id)).length >= 64) throw new Error('Up to 64 custom local agents can be registered.')
-    definitions.push({ id: `custom:${randomUUID()}`, ...value })
+    definitions.push({ id, ...value })
   })
+  return id
 }
 export async function updateLocalAgent(id: string, input: CustomLocalAgentInput): Promise<void> {
   const value = await validatedInput(input)
@@ -148,19 +208,31 @@ export async function updateLocalAgent(id: string, input: CustomLocalAgentInput)
     const index = definitions.findIndex(item => item.id === id)
     if (index < 0 && !localAgentCatalog.some(item => item[0] === id)) throw new Error('Unknown local agent')
     // Built-in entries describe CLIs on this computer; a remote agent is always a custom entry.
-    if (value.remote && !CUSTOM_ID.test(id)) throw new Error('Add a remote agent as a new custom agent.')
-    if (index >= 0 && Boolean(definitions[index].remote) !== Boolean(value.remote)) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
+    if (value.remoteAgent && !CUSTOM_ID.test(id)) throw new Error('Add a remote agent as a new custom agent.')
+    if (index >= 0 && Boolean(definitions[index].remoteAgent) !== Boolean(value.remoteAgent)) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
     if (index < 0) definitions.push({ id, ...value })
     else {
-      // Editing the server makes every folder chosen on the old one stale, even
-      // if the old values come back later.
+      // Moving to another connection drops the earlier identity: its folders become stale.
       const previous = definitions[index]
-      const revision = (previous.remoteTargetRevision ?? 0) + (previous.remote && value.remote && remoteTargetId(previous.remote) !== remoteTargetId(value.remote) ? 1 : 0)
-      definitions[index] = { id, ...value, ...(revision ? { remoteTargetRevision: revision } : {}) }
+      const keep = previous.legacyTarget && previous.legacyTarget.connectionId === value.remoteAgent?.connectionId
+      definitions[index] = { id, ...value, ...(keep ? { legacyTarget: previous.legacyTarget } : {}) }
     }
   })
   forgetRemoteProbes()
   changedLocalAgentSettings(id)
+}
+/** Detach agents from a removed connection: they stay listed but cannot run. */
+export async function removeAgentsOnConnection(connectionId: string, mode: 'disable-agents' | 'delete-agents', inUse: (id: string) => boolean): Promise<string[]> {
+  const affected: string[] = []
+  await mutateRegistry(definitions => {
+    for (let index = definitions.length - 1; index >= 0; index--) {
+      const item = definitions[index]
+      if (item.remoteAgent?.connectionId !== connectionId) continue
+      affected.push(item.id)
+      if (mode === 'delete-agents' && !inUse(item.id)) definitions.splice(index, 1)
+    }
+  })
+  return affected
 }
 export async function removeCustomLocalAgent(id: string): Promise<void> {
   if (!CUSTOM_ID.test(id)) throw new Error('Invalid custom local agent')
@@ -176,10 +248,14 @@ export async function resolveLocalAgentDraft(id: string | undefined, input: Cust
   const value = await validatedInput(input)
   const existing = id ? (await detectLocalAgents({ version: async () => undefined }, id))[0] : undefined
   if (id && !existing) throw new Error('Unknown local agent')
-  if (value.remote) {
-    if (id && !existing?.remote) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
-    const remote = await probeRemoteAgent(value.remote, signal, true)
-    return remoteLocalAgent(id ?? `custom:${randomUUID()}`, value.name, value.avatar, remote)
+  if (value.remoteAgent) {
+    if (id && !existing?.remote && !existing?.connectionId) throw new Error('The run location of an existing agent cannot be changed. Add a new agent instead.')
+    const connection = await connectionRegistry().get(value.remoteAgent.connectionId)
+    if (!connection) throw new Error('Choose a server connection.')
+    if (!connection.enabled) throw new Error('This server connection is turned off. Turn it on in Settings → Connections.')
+    const remote = await probeRemoteAgent(connectionSpec(connection, value.remoteAgent), signal, true)
+    // A draft is tested on the connection as it is now; it has no folders yet.
+    return remoteLocalAgent(id ?? `custom:${randomUUID()}`, value.name, value.avatar, remote, { executionTargetId: connectionTargetId(connection), targetRevision: connection.targetRevision }, connection.id)
   }
   const path = await resolveExecutable(value.command)
   if (!path) throw new Error('Executable not found. Check the path and executable permissions.')
@@ -266,6 +342,7 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   const resolveApp = dependencies.desktopApp ?? findDesktopApp
   const readVersion = dependencies.version ?? executableVersion
   const custom = await customDefinitions()
+  const connections = connectionStore ? await connectionStore.list().catch(() => []) : []
   const definitions: ReadonlyArray<readonly [string, string, string, readonly string[], boolean]> = [
     ...localAgentCatalog.map(([id, name, command, appNames]) => [id, name, command, appNames, false] as const),
     ...custom.filter(item => CUSTOM_ID.test(item.id)).map(({ id, name, command }) => [id, name, command, [], true] as const)
@@ -273,7 +350,14 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
     const override = custom.find(item => item.id === id)
     // Remote agents are not resolved through this computer's PATH; the server is probed at launch.
-    if (override?.remote && isCustom) return remoteLocalAgent(id, override.name, override.avatar, override.remote, remoteTarget(override))
+    if (override?.remoteAgent && isCustom) {
+      const placement = await placementOf(override, connections)
+      if (placement && 'spec' in placement) return { ...remoteLocalAgent(id, override.name, override.avatar, placement.spec, placement.target, placement.connection.id), remoteAgent: override.remoteAgent }
+      // Kept in the list so the owner can see and fix it; never launched.
+      return { id, name: override.name, command: override.remoteAgent.executable, args: override.remoteAgent.args, avatar: override.avatar, installed: false, discovered: true,
+        chatSupported: true, status: 'not-found', authentication: 'unchecked', custom: true, connectionId: override.remoteAgent.connectionId,
+        remoteAgent: override.remoteAgent, unavailable: placement?.unavailable ?? 'missing' }
+    }
     name = override?.name ?? name
     command = override?.command ?? command
     const [path, desktopPath] = await Promise.all([resolveCommand(command), resolveApp(appNames)])
@@ -298,11 +382,11 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
   }))
 }
 
-function remoteLocalAgent(id: string, name: string, avatar: string | undefined, remote: RemoteAgentSpec, target?: ExecutionTarget): LocalAgent {
+function remoteLocalAgent(id: string, name: string, avatar: string | undefined, remote: RemoteAgentSpec, target: ExecutionTarget, connectionId: string): LocalAgent {
   return {
     id, name, command: remote.executable, args: remote.args, avatar, installed: true, discovered: true,
     version: remoteHostLabel(remote), chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, remote,
-    ...(target ? { remoteTarget: target } : {})
+    remoteTarget: target, connectionId
   }
 }
 

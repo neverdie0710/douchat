@@ -1,8 +1,7 @@
 import { Bot, Camera, RefreshCw, X } from 'lucide-react'
 
-const MANUAL_HOST = '\u0000manual'
 import { useEffect, useRef, useState } from 'react'
-import { REMOTE_AGENT_ADAPTERS, type CustomLocalAgentInput, type LocalAgent, type RemoteAgentAdapter, type RemoteAgentSpec } from '../../../shared/types'
+import { REMOTE_AGENT_ADAPTERS, type ConnectionView, type CustomLocalAgentInput, type LocalAgent, type RemoteAgentAdapter, type RemoteAgentBinding } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
 import { readAvatarFile } from '../avatarFile'
 import { messageSendError } from '../messageQueue'
@@ -25,17 +24,16 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
 }) {
   const [name, setName] = useState(agent?.name ?? '')
   const [command, setCommand] = useState(agent?.path || agent?.command || '')
-  const [args, setArgs] = useState((agent?.remote?.args ?? agent?.args ?? []).join('\n'))
+  const [args, setArgs] = useState((agent?.remoteAgent?.args ?? agent?.args ?? []).join('\n'))
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
   // The run location is fixed once saved; only new custom agents can choose it.
-  const [location, setLocation] = useState<'local' | 'remote'>(agent?.remote ? 'remote' : 'local')
-  const [adapter, setAdapter] = useState<RemoteAgentAdapter>(agent?.remote?.adapter ?? 'codex')
-  const [host, setHost] = useState(agent?.remote?.host ?? '')
-  const [hosts, setHosts] = useState<string[]>([])
-  const [manualHost, setManualHost] = useState(false)
-  const [advanced, setAdvanced] = useState(Boolean(agent?.remote && (agent.remote.args.length || agent.remote.executable !== DEFAULT_COMMANDS[agent.remote.adapter])))
-  const [executable, setExecutable] = useState(agent?.remote?.executable ?? 'codex')
-  const [allowSharing, setAllowSharing] = useState(agent?.remote?.allowSharing ?? false)
+  const [location, setLocation] = useState<'local' | 'remote'>(agent?.remoteAgent ? 'remote' : 'local')
+  const [adapter, setAdapter] = useState<RemoteAgentAdapter>(agent?.remoteAgent?.adapter ?? 'codex')
+  const [connectionId, setConnectionId] = useState(agent?.connectionId ?? '')
+  const [connections, setConnections] = useState<ConnectionView[]>()
+  const [advanced, setAdvanced] = useState(Boolean(agent?.remoteAgent && (agent.remoteAgent.args.length || agent.remoteAgent.executable !== DEFAULT_COMMANDS[agent.remoteAgent.adapter])))
+  const [executable, setExecutable] = useState(agent?.remoteAgent?.executable ?? 'codex')
+  const [allowSharing, setAllowSharing] = useState(agent?.remoteAgent?.allowSharing === true)
   const [busy, setBusy] = useState<'test' | 'save' | 'avatar' | ''>('')
   const [error, setError] = useState('')
   const [result, setResult] = useState('')
@@ -50,28 +48,28 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
     }
   }, [])
   useEffect(() => {
-    if (typeof window.douchat.listSshHosts !== 'function') return
-    void window.douchat.listSshHosts().then(list => {
+    if (typeof window.douchat.listConnections !== 'function') return
+    void window.douchat.listConnections().then(list => {
       if (!mounted.current) return
-      setHosts(list)
-      const saved = agent?.remote?.host
-      if (saved) { if (!list.includes(saved)) setManualHost(true) }
-      else if (list.length) setHost(current => current || list[0])
-      else setManualHost(true)
-    }).catch(() => { if (mounted.current) setManualHost(true) })
+      setConnections(list)
+      if (!agent) setConnectionId(current => current || list.find(item => item.enabled)?.id || '')
+    }).catch(() => { if (mounted.current) setConnections([]) })
   }, [])
   const remote = location === 'remote'
   const canChooseLocation = !agent
   const argumentList = () => args.split(/\r?\n/).filter(arg => arg.length > 0)
-  // Port, user and key come from ~/.ssh/config, exactly like `ssh <host>` in Terminal.
-  const remoteSpec = (): RemoteAgentSpec => ({
-    transport: 'ssh', host: host.trim(), adapter, executable: executable.trim() || DEFAULT_COMMANDS[adapter], args: argumentList(), allowSharing
+  // Host, port, user and key belong to the connection; the agent only names it.
+  const connection = connections?.find(item => item.id === connectionId)
+  const remoteAgent = (): RemoteAgentBinding => ({
+    connectionId, adapter, executable: executable.trim() || DEFAULT_COMMANDS[adapter], args: argumentList(),
+    // Saved as chosen; it only takes effect while the connection also allows sharing.
+    allowSharing
   })
   const draft = (): CustomLocalAgentInput => remote
-    ? { name, command: remoteSpec().executable, avatar, args: [], remote: remoteSpec() }
+    ? { name, command: remoteAgent().executable, avatar, args: [], remoteAgent: remoteAgent() }
     : { name, command, avatar, args: argumentList() }
   const changed = () => { setResult(''); setError('') }
-  const ready = Boolean(name.trim()) && (remote ? Boolean(host.trim() && (executable.trim() || DEFAULT_COMMANDS[adapter])) : Boolean(command.trim()))
+  const ready = Boolean(name.trim()) && (remote ? Boolean(connection?.enabled && (executable.trim() || DEFAULT_COMMANDS[adapter])) : Boolean(command.trim()))
   const test = async () => {
     setBusy('test'); setError(''); setResult(''); testing.current = true
     try {
@@ -95,10 +93,10 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
     if (checked && !window.confirm(t('Friends and other agents will be able to run commands on your server through this agent. Allow sharing?'))) return
     setAllowSharing(checked); changed()
   }
-  const icon = avatar || (agent && agentIcons[agent.remote?.adapter ?? agent.id]) || (remote ? agentIcons[adapter] : undefined)
+  const icon = avatar || (agent && agentIcons[agent.remoteAgent?.adapter ?? agent.id]) || (remote ? agentIcons[adapter] : undefined)
   return <NativeDialog className="modal-backdrop" onClose={onClose} width={560}>
     <form className="local-agent-editor" role="dialog" aria-modal="true" aria-labelledby="local-agent-editor-title" onSubmit={event => { event.preventDefault(); if (!busy && ready) void save() }}>
-      <header><h2 id="local-agent-editor-title">{t(agent ? (agent.remote ? 'Edit remote agent' : 'Edit agent') : 'Add agent')}</h2><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={18} /></button></header>
+      <header><h2 id="local-agent-editor-title">{t(agent ? (agent.remoteAgent ? 'Edit remote agent' : 'Edit agent') : 'Add agent')}</h2><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={18} /></button></header>
       <fieldset disabled={Boolean(busy)}>
         <div className="local-agent-editor-avatar">
           <button type="button" className="local-agent-picture" aria-label={t('Choose picture')} onClick={() => file.current?.click()}>{icon ? <img src={icon} alt="" /> : <Bot size={30} />}<Camera size={14} /></button>
@@ -125,29 +123,26 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
           <p className="settings-note">{t(agent && !agent.custom ? 'One argument per line. Added to the built-in launch arguments.' : 'One argument per line. Use {prompt} for the message; otherwise it is appended as the last argument.')}</p>
         </>}
         {remote && <>
-          <label>{t('Server')}<select value={manualHost ? MANUAL_HOST : host} onChange={event => {
-            if (event.target.value === MANUAL_HOST) { setManualHost(true); setHost('') } else { setManualHost(false); setHost(event.target.value) }
-            changed()
-          }}>
-            {!hosts.length && !manualHost && <option value="">{t('No hosts in ~/.ssh/config')}</option>}
-            {hosts.map(item => <option key={item} value={item}>{item}</option>)}
-            <option value={MANUAL_HOST}>{t('Enter manually…')}</option>
+          <label>{t('Connection')}<select value={connectionId} onChange={event => { setConnectionId(event.target.value); changed() }}>
+            {!connection && <option value="">{t(connections && !connections.length ? 'No connections yet' : 'Choose a connection')}</option>}
+            {connections?.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name} · {item.label}{item.enabled ? '' : ` (${t('Turned off')})`}</option>)}
           </select></label>
-          {manualHost && <label>{t('Host alias or address')}<input required autoFocus maxLength={255} value={host} placeholder="dev-box" spellCheck={false} onChange={event => { setHost(event.target.value); changed() }} /></label>}
+          {connections && !connections.length && <p className="settings-note">{t('Add your server in Settings → Connections first.')}</p>}
+          {agent?.unavailable && <p className="settings-error" role="alert">{t(agent.unavailable === 'disabled' ? 'This agent\'s connection is turned off.' : 'This agent\'s connection was removed. Choose another one.')}</p>}
           <label>{t('Agent type')}<select value={adapter} onChange={event => {
             const next = event.target.value as RemoteAgentAdapter
             if (executable === DEFAULT_COMMANDS[adapter]) setExecutable(DEFAULT_COMMANDS[next])
             setAdapter(next); changed()
           }}>{REMOTE_AGENT_ADAPTERS.map(item => <option key={item} value={item}>{t(ADAPTER_LABELS[item])}</option>)}</select></label>
-          <p className="settings-note">{t('Port, user and key come from your SSH config (~/.ssh/config). Each chat gets its own private folder on the server.')}</p>
+          <p className="settings-note">{t('Each chat gets its own private folder on the server unless you choose one in chat details.')}</p>
           <button type="button" className="local-settings-link" aria-expanded={advanced} onClick={() => setAdvanced(value => !value)}>{t(advanced ? 'Hide advanced settings' : 'Advanced settings')}</button>
           {advanced && <>
             <label>{t('Executable on the server')}<input maxLength={1024} value={executable} placeholder={DEFAULT_COMMANDS[adapter] || '/path/to/agent'} spellCheck={false} onChange={event => { setExecutable(event.target.value); changed() }} /></label>
             <label>{t('Startup arguments')}<textarea value={args} rows={3} spellCheck={false} placeholder={adapter === 'custom' ? '--message\n{prompt}' : '--profile\nwork'} onChange={event => { setArgs(event.target.value); changed() }} /></label>
             <p className="settings-note">{t(adapter === 'custom' ? 'One argument per line. Use {prompt} for the message; otherwise it is appended as the last argument.' : 'One argument per line. Added to the built-in launch arguments. Options that disable the sandbox or approvals are rejected.')}</p>
-            <label className="local-agent-checkbox"><input type="checkbox" checked={allowSharing} onChange={event => toggleSharing(event.target.checked)} />{t('Allow friends and other agents to call this agent')}</label>
+            {connection?.allowSharing && <label className="local-agent-checkbox"><input type="checkbox" checked={allowSharing} onChange={event => toggleSharing(event.target.checked)} />{t('Allow friends and other agents to call this agent')}</label>}
           </>}
-          <p className="settings-note">{t('Uses the ssh client, keys and ssh-agent on this computer; passwords are not stored. Conversation context and attachments are sent to this server. Confirm the host key once in Terminal with ssh before testing.')}</p>
+          <p className="settings-note">{t('Conversation context and attachments are sent to this server.')}</p>
         </>}
       </fieldset>
       {error && <p className="settings-error" role="alert">{t(error)}</p>}

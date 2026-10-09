@@ -35,6 +35,12 @@ export interface LocalAgent {
   remote?: RemoteAgentSpec
   /** Identity of the server a remote agent runs on; set by main, never by the renderer. */
   remoteTarget?: ExecutionTarget
+  /** The connection a remote agent runs on. */
+  connectionId?: string
+  /** What is saved for a remote agent, even while its connection is unavailable. */
+  remoteAgent?: RemoteAgentBinding
+  /** The connection is turned off or missing: the agent cannot run. */
+  unavailable?: 'disabled' | 'missing'
 }
 
 /** Where an agent's commands run. A saved workspace path is only meaningful on
@@ -113,7 +119,73 @@ export interface CustomLocalAgentInput {
   avatar?: string
   /** One argument per entry; custom commands may use {prompt}. */
   args?: string[]
+  /** Earlier builds: SSH settings stored on the agent itself. Read-only; migrated to a connection. */
   remote?: RemoteAgentSpec
+  /** An agent on a server, referring to a saved connection. */
+  remoteAgent?: RemoteAgentBinding
+}
+
+/** A remote agent refers to its server by connection id; host, port, user and
+ * key are stored once, on the connection. */
+export interface RemoteAgentBinding {
+  connectionId: string
+  adapter: RemoteAgentAdapter
+  /** Remote command name or absolute POSIX path. */
+  executable: string
+  /** One argument per entry; only the custom adapter may use {prompt}. */
+  args: string[]
+  /** Can only narrow the connection's setting: false always wins. */
+  allowSharing?: boolean
+}
+
+export type RemoteConnectionKind = 'ssh'
+
+/** A server Douchat can run agents on. Stored in main only; no keys or passwords. */
+export interface RemoteConnection {
+  id: string
+  name: string
+  kind: RemoteConnectionKind
+  enabled: boolean
+  /** Increased whenever host, port, user or key change; name and probe results don't count. */
+  targetRevision: number
+  ssh: { host: string; port?: number; user?: string; identityFile?: string }
+  /** Friends and other owners may call agents on this server only when enabled. */
+  allowSharing: boolean
+  /** Last validated probe of the server. */
+  probe?: { home: string; path: string; checkedAt: number }
+  createdAt: number
+}
+
+export interface RemoteConnectionInput {
+  /** Absent for a new connection. */
+  id?: string
+  name: string
+  ssh: { host: string; port?: number; user?: string; identityFile?: string }
+  allowSharing: boolean
+}
+
+export type ConnectionStatus =
+  | { state: 'disabled' }
+  | { state: 'connecting' }
+  | { state: 'connected'; latencyMs?: number; agents: number }
+  | { state: 'error'; message: string; retryAt?: number }
+
+export interface ConnectionView extends RemoteConnection {
+  status: ConnectionStatus
+  /** Local agent ids that run on this connection. */
+  agentIds: string[]
+  /** Short label such as user@host:port. */
+  label: string
+}
+
+export interface ConnectionTestStep { name: 'ssh' | 'shell' | 'environment' | 'workspace' | 'forwarding'; passed: boolean; message?: string }
+export interface ConnectionTestReport { ok: boolean; steps: ConnectionTestStep[]; durationMs: number }
+
+export interface DiscoveredRemoteAgent {
+  adapter: RemoteAgentAdapter
+  /** Absolute path on the server. */
+  executable: string
+  version?: string
 }
 
 export interface AgentConfig {
@@ -723,6 +795,16 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => Promise<{ reply: string; durationMs: number; version?: string }>
   cancelLocalAgentTest: () => Promise<void>
   listSshHosts: () => Promise<string[]>
+  listConnections: () => Promise<ConnectionView[]>
+  saveConnection: (input: RemoteConnectionInput) => Promise<ConnectionView[]>
+  /** `mode` applies to agents still on this connection. */
+  removeConnection: (id: string, mode: 'disable-agents' | 'delete-agents') => Promise<ConnectionView[]>
+  setConnectionEnabled: (id: string, enabled: boolean) => Promise<ConnectionView[]>
+  testConnection: (id: string) => Promise<ConnectionTestReport>
+  discoverRemoteAgents: (id: string) => Promise<DiscoveredRemoteAgent[]>
+  /** Adds the chosen discovered agents as remote agents on this connection. */
+  addDiscoveredAgents: (id: string, agents: Array<{ adapter: RemoteAgentAdapter; executable: string; name: string }>) => Promise<LocalAgent[]>
+  openConnectionTerminal: (id: string) => Promise<void>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   getAttachmentData: (attachmentId: string) => Promise<string>
   getSnapshot: () => Promise<AppSnapshot>
@@ -794,6 +876,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   onAuthState: (listener: (state: DesktopAuthState) => void) => () => void
   onCreditsUpdated: (listener: () => void) => () => void
   onUpdateState: (listener: (state: UpdateState) => void) => () => void
+  onConnectionsChanged: (listener: () => void) => () => void
   onConnanyChanged: (listener: () => void) => () => void
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => () => void
 }

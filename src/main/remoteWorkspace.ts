@@ -81,7 +81,7 @@ export async function resolveRemoteWorkspace(spec: RemoteAgentSpec & { remoteHom
 /** ssh argv for an interactive shell in a folder on the server. Host, user,
  * port and key were validated when the agent was saved; the folder only
  * travels inside the base64 payload. */
-export function remoteTerminalArgs(spec: RemoteAgentSpec, path: string): string[] {
-  const script = `cd -- ${shQuote(checkRemoteFolderSyntax(path))} || exit 1\nexec "\${SHELL:-/bin/sh}" -l\n`
+export function remoteTerminalArgs(spec: RemoteAgentSpec, path?: string): string[] {
+  const script = `${path === undefined ? '' : `cd -- ${shQuote(checkRemoteFolderSyntax(path))} || exit 1\n`}exec "\${SHELL:-/bin/sh}" -l\n`
   return ['-t', ...sshIdentityArgs(spec), '--', spec.host, REMOTE_BOOTSTRAP, encodePayload(script)]
 }
