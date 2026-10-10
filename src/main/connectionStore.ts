@@ -8,14 +8,42 @@ import { normalizeRemoteSpec, remoteHostLabel } from './remoteValidate'
 const CONNECTION_ID = /^conn_[0-9a-f]{32}$/
 
 /** Stable identity of an SSH target, with defaults normalized so `host` and `host:22` match. */
-export function sshTargetKey(ssh: RemoteConnection['ssh']): string {
+type SshTarget = NonNullable<RemoteConnection['ssh']>
+const HOST_ID = /^hst_[0-9a-f-]{36}$/
+const OWNER_ID = /^[A-Za-z0-9_-]{1,100}$/
+
+export function sshTargetKey(ssh: SshTarget): string {
   return JSON.stringify([ssh.host.toLowerCase(), ssh.port ?? 22, ssh.user ?? '', ssh.identityFile ?? ''])
 }
 /** The id P0 used for an agent's SSH target. Kept, so folders chosen then still match. */
-export function legacyTargetId(ssh: RemoteConnection['ssh']): string {
+export function legacyTargetId(ssh: SshTarget): string {
   return `ssh-legacy:${createHash('sha256').update(sshTargetKey(ssh)).digest('hex').slice(0, 32)}`
 }
-export function connectionTargetId(connection: Pick<RemoteConnection, 'id'>): string { return `ssh:${connection.id}` }
+export function connectionTargetId(connection: Pick<RemoteConnection, 'id'> & { kind?: RemoteConnection['kind']; daemon?: RemoteConnection['daemon'] }): string {
+  // A daemon's folders live on the host and are versioned by its binding (6.5).
+  return connection.kind === 'daemon' && connection.daemon ? `daemon:${connection.daemon.hostId}` : `ssh:${connection.id}`
+}
+
+/** The SSH settings of an SSH connection; daemon connections have none. */
+export function sshOfConnection(connection: RemoteConnection): SshTarget {
+  if (connection.kind !== 'ssh' || !connection.ssh) throw new Error('This connection runs agents through a daemon, not SSH.')
+  return connection.ssh
+}
+
+function validDaemon(value: unknown): RemoteConnection['daemon'] | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const item = value as NonNullable<RemoteConnection['daemon']>
+  if (typeof item.hostId !== 'string' || !HOST_ID.test(item.hostId) || typeof item.ownerId !== 'string' || !OWNER_ID.test(item.ownerId)) return undefined
+  let serviceUrl: string
+  try {
+    const url = new URL(String(item.serviceUrl))
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return undefined
+    serviceUrl = url.origin
+  } catch { return undefined }
+  const text = (field: unknown) => typeof field === 'string' ? field.replace(/[\0-\x1f\x7f]/g, '').slice(0, 40) : undefined
+  const info = item.info && typeof item.info === 'object' ? { os: text(item.info.os), arch: text(item.info.arch), version: text(item.info.version) } : undefined
+  return { hostId: item.hostId, serviceUrl, ownerId: item.ownerId, ...(info ? { info } : {}) }
+}
 
 /** Structural validation; the identity file is resolved separately in main. */
 export function validateConnectionInput(input: unknown): RemoteConnectionInput {
@@ -36,6 +64,13 @@ export function validateConnectionInput(input: unknown): RemoteConnectionInput {
 function validConnection(value: unknown): RemoteConnection | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as RemoteConnection
+  if (item.kind === 'daemon') {
+    const daemon = validDaemon(item.daemon)
+    const name = typeof item.name === 'string' ? item.name.trim() : ''
+    if (!daemon || typeof item.id !== 'string' || !CONNECTION_ID.test(item.id) || !name || name.length > 80 || /[\0-\x1f\x7f]/.test(name)) return undefined
+    return { id: item.id, name, kind: 'daemon', enabled: item.enabled !== false, targetRevision: 0, daemon,
+      createdAt: Number.isFinite(item.createdAt) ? item.createdAt : 0 }
+  }
   try {
     const input = validateConnectionInput({ id: item.id, name: item.name, ssh: item.ssh })
     if (!input.id || !Number.isSafeInteger(item.targetRevision) || item.targetRevision < 0) return undefined
@@ -61,7 +96,7 @@ export class ConnectionStore {
   constructor(readonly path: string) {}
 
   async list(): Promise<RemoteConnection[]> {
-    if (this.cache) return this.cache.map(item => ({ ...item, ssh: { ...item.ssh } }))
+    if (this.cache) return this.cache.map(item => ({ ...item, ...(item.ssh ? { ssh: { ...item.ssh } } : {}), ...(item.daemon ? { daemon: { ...item.daemon, ...(item.daemon.info ? { info: { ...item.daemon.info } } : {}) } } : {}) }))
     let parsed: unknown
     try { parsed = JSON.parse(await readFile(this.path, 'utf8')) } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('connections.json could not be read. Restore it or remove it to start over.')
@@ -99,11 +134,32 @@ export class ConnectionStore {
       const index = connections.findIndex(item => item.id === input.id)
       if (index < 0) throw new Error('Connection not found')
       const previous = connections[index]
+      if (previous.kind !== 'ssh' || !previous.ssh) throw new Error('A daemon connection cannot be changed into an SSH connection.')
       const moved = sshTargetKey(previous.ssh) !== sshTargetKey(input.ssh)
       connections[index] = { ...previous, name: input.name, ssh: input.ssh,
         targetRevision: previous.targetRevision + (moved ? 1 : 0), ...(moved ? { probe: undefined } : {}) }
       if (moved) delete connections[index].probe
       return connections[index]
+    })
+  }
+
+  /** Saves an enrolled douchat-host, or renames it when the host is already saved. */
+  saveDaemon(input: { name: string; daemon: NonNullable<RemoteConnection['daemon']> }): Promise<RemoteConnection> {
+    const daemon = validDaemon(input.daemon)
+    const name = input.name.trim()
+    if (!daemon) throw new Error('Invalid daemon connection.')
+    if (!name || name.length > 80 || /[\0-\x1f\x7f]/.test(name)) throw new Error('Enter a connection name of 80 characters or fewer.')
+    return this.mutate(connections => {
+      const existing = connections.find(item => item.kind === 'daemon' && item.daemon?.hostId === daemon.hostId)
+      if (existing) {
+        existing.name = name
+        existing.daemon = daemon
+        return existing
+      }
+      if (connections.length >= 64) throw new Error('Up to 64 connections can be saved.')
+      const created: RemoteConnection = { id: `conn_${randomUUID().replaceAll('-', '')}`, name, kind: 'daemon', enabled: true, targetRevision: 0, daemon, createdAt: Date.now() }
+      connections.push(created)
+      return created
     })
   }
 
@@ -137,7 +193,13 @@ export class ConnectionStore {
  * results are not included: launches always re-validate them. */
 export function connectionSpec(connection: RemoteConnection, agent: { adapter: RemoteAgentSpec['adapter']; executable: string; args: string[] }): RemoteAgentSpec {
   // Who may call the agent is decided by its permissions, as for agents on this computer.
-  return { transport: 'ssh', ...connection.ssh, adapter: agent.adapter, executable: agent.executable, args: [...agent.args] }
+  const fields = { adapter: agent.adapter, executable: agent.executable, args: [...agent.args] }
+  if (connection.kind === 'daemon') {
+    if (!connection.daemon) throw new Error('This douchat-host connection is incomplete. Remove it and add the server again.')
+    const { hostId, serviceUrl, ownerId } = connection.daemon
+    return { transport: 'daemon', host: connection.name, daemon: { hostId, serviceUrl, ownerId }, ...fields }
+  }
+  return { transport: 'ssh', ...sshOfConnection(connection), ...fields }
 }
 
 // ─── Migration from per-agent SSH settings ───────────────────────────────────
@@ -157,7 +219,7 @@ interface MigrationPlan {
 }
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-const sshOf = (spec: RemoteAgentSpec): RemoteConnection['ssh'] =>
+const sshOf = (spec: RemoteAgentSpec): SshTarget =>
   ({ host: spec.host, ...(spec.port ? { port: spec.port } : {}), ...(spec.user ? { user: spec.user } : {}), ...(spec.identityFile ? { identityFile: spec.identityFile } : {}) })
 
 /**
@@ -209,7 +271,7 @@ export async function migrateConnections(userData: string, store: ConnectionStor
 
   if (plan.phase === 'planned') {
     await store.mutate(connections => {
-      for (const planned of plan!.connections) if (!connections.some(item => item.id === planned.id)) connections.push({ ...planned, ssh: { ...planned.ssh } })
+      for (const planned of plan!.connections) if (!connections.some(item => item.id === planned.id)) connections.push({ ...planned, ssh: { ...planned.ssh! } })
     }, write)
     plan.phase = 'connections-written'
     await write(planFile, JSON.stringify(plan, null, 2))

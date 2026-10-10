@@ -7,15 +7,18 @@ import {
   type FramesScriptOptions, type LaunchScriptOptions, type RemoteWorkspaceRef
 } from '../remoteScript'
 import { listRemoteDirectories, resolveRemoteWorkspace } from '../remoteWorkspace'
-import { openRemoteSkillBridge, type SkillBridge } from '../remoteSkillBridge'
+import { openDaemonSkillBridge, openRemoteSkillBridge, type SkillBridge } from '../remoteSkillBridge'
+import { relaySpawn } from './daemonRelay'
 
 export type ProbedSpec = RemoteAgentSpec & { remotePath: string; remoteHome: string }
 
-/** Everything Douchat does on a server over SSH, by meaning rather than by
- * script. The POSIX templates stay in remoteScript.ts; every dynamic value is
- * validated there and only travels in the base64 payload. */
+/** Everything Douchat does on a server, by meaning rather than by script.
+ * The POSIX templates stay in remoteScript.ts; every dynamic value is
+ * validated there and only travels in the base64 payload. The same scripts
+ * run over /usr/bin/ssh or, for a douchat-host connection, through the
+ * Douchat relay (remote/daemonRelay.ts); nothing else differs. */
 export interface RemoteTransport {
-  readonly kind: 'ssh'
+  readonly kind: 'ssh' | 'daemon'
   /** Validated settings plus the login PATH and HOME found on the server. */
   readonly spec: ProbedSpec
   readonly home: string
@@ -37,8 +40,8 @@ export interface RemoteTransport {
 }
 
 class SshTransport implements RemoteTransport {
-  readonly kind = 'ssh' as const
   constructor(readonly spec: ProbedSpec) {}
+  get kind(): 'ssh' | 'daemon' { return this.spec.transport }
   get home(): string { return this.spec.remoteHome }
   exec(script: string, options?: RemoteExecOptions): Promise<RemoteExecResult> { return remoteExec(this.spec, script, options) }
   check(script: string, options?: RemoteExecOptions): Promise<Buffer> { return remoteCheck(this.spec, script, options) }
@@ -60,17 +63,22 @@ class SshTransport implements RemoteTransport {
     return this.exec(runFileScript(runId, name, maxBytes), { signal, timeoutMs: 60_000, maxStdout })
   }
   async spawn(options: LaunchScriptOptions): Promise<ChildProcessWithoutNullStreams> {
-    return spawnLaunch(await remoteLaunch(this.spec, launchScript({ ...options, remotePath: this.spec.remotePath })))
+    const script = launchScript({ ...options, remotePath: this.spec.remotePath })
+    if (this.spec.transport === 'daemon') return relaySpawn(this.spec, script)
+    return spawnLaunch(await remoteLaunch(this.spec, script))
   }
   async interrupt(runId: string): Promise<void> { await this.exec(killScript(runId), { timeoutMs: 10_000 }).catch(() => undefined) }
   async cleanupRun(runId: string, kill: boolean): Promise<void> { await this.exec(cleanupScript(runId, kill), { timeoutMs: 15_000 }).catch(() => undefined) }
   listDirectories(parent?: string, name?: string, signal?: AbortSignal): Promise<RemoteDirectoryListing> { return listRemoteDirectories(this.spec, parent, name, signal) }
   resolveDirectory(parent: unknown, name?: unknown, signal?: AbortSignal): Promise<string> { return resolveRemoteWorkspace(this.spec, parent, name, signal) }
-  openBridge(tools: AgentTool[], signal: AbortSignal): Promise<SkillBridge | undefined> { return openRemoteSkillBridge(this.spec, tools, signal) }
-  close(): Promise<void> { return closeRemoteConnections(this.spec) }
+  openBridge(tools: AgentTool[], signal: AbortSignal): Promise<SkillBridge | undefined> {
+    return this.spec.transport === 'daemon' ? openDaemonSkillBridge(this.spec, tools, signal) : openRemoteSkillBridge(this.spec, tools, signal)
+  }
+  async close(): Promise<void> { if (this.spec.transport === 'ssh') await closeRemoteConnections(this.spec) }
 }
 
-/** Probe the server (cached for 10 minutes) and return a transport for it. */
+/** Probe the server (cached for 10 minutes) and return a transport for it,
+ * over ssh or douchat-host as the spec says. */
 export async function openSshTransport(spec: RemoteAgentSpec, signal?: AbortSignal, fresh = false): Promise<RemoteTransport> {
   return new SshTransport(await probeRemoteAgent(spec, signal, fresh))
 }

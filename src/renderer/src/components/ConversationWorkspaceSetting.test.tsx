@@ -70,6 +70,20 @@ it('never offers the local folder picker for a remote member and browses the ser
   } finally { await act(async () => root.unmount()) }
 })
 
+it('greys out the terminal for a douchat-host member', async () => {
+  const view: ConversationWorkspaceView = { eligible: true, members: [
+    { agentId: 'srv', location: 'remote', host: 'box', source: 'custom', path: '/home/me/proj', noTerminal: true }
+  ] }
+  const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), openRemoteAgentWorkspaceTerminal: vi.fn() }
+  const { host, root } = await render(group, api)
+  try {
+    const terminal = host.querySelector<HTMLButtonElement>('[aria-label="Open in terminal"]')!
+    expect(terminal.disabled).toBe(true)
+    await act(async () => terminal.click())
+    expect(api.openRemoteAgentWorkspaceTerminal).not.toHaveBeenCalled()
+  } finally { await act(async () => root.unmount()) }
+})
+
 it('flags folders from another target and an unused legacy folder', async () => {
   const view: ConversationWorkspaceView = { eligible: true, legacyPath: '/Users/me/old', legacyUnused: true, members: [{ agentId: 'srv', location: 'remote', host: 'box', source: 'default', stale: true }] }
   const api = { conversationWorkspaces: vi.fn().mockResolvedValue(view), clearConversationWorkspace: vi.fn().mockResolvedValue({ ...view, legacyPath: undefined, legacyUnused: undefined }), clearAgentWorkspace: vi.fn().mockResolvedValue(view) }

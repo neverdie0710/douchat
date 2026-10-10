@@ -76,3 +76,5 @@ temp/
 
 # Private backend hand-off patches (keep them in the backend repository)
 patches/connany-*/
+
+host/dist/

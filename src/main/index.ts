@@ -59,12 +59,15 @@ import { DouchatStore } from './store'
 import { addCustomLocalAgent, agentsOnConnection, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { ConnectionManager } from './connectionManager'
 import { migrateConnections, skippedMigrationAgents } from './connectionStore'
-import { migrateSharingToPermissions } from './sharingMigration'
 import { migrateWorkspaceTargets } from './workspaceMigration'
+import { migrateSharingToPermissions } from './sharingMigration'
 import { closeRemoteConnections, configureRemoteTransport } from './remoteTransport'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
+import { DeviceIdentity } from './deviceIdentity'
+import { DaemonClient } from './remote/daemonClient'
+import { rendererSocialSnapshot } from './social'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl, parseDesktopConnectorsUrl, DEVELOPMENT_APP_SCHEME } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
@@ -73,6 +76,7 @@ import { configureLocalWorkspaces, validateWorkspaceFolder, resolveSavedWorkspac
 import { listRemoteDirectories, remoteTerminalArgs, resolveRemoteWorkspace } from './remoteWorkspace'
 import { remoteHostLabel } from './remoteValidate'
 import { probeRemoteAgent } from './remoteTransport'
+import { configureDaemonRelay } from './remote/daemonRelay'
 import { canAssignAgentWorkspace, canAssignConversationWorkspace, memberWorkspace, ownMemberAgentIds } from '../shared/conversationWorkspace'
 import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
 import { openMaintenanceTerminal, openLocalAgentTerminal, openSshTerminal } from './terminalLauncher'
@@ -351,6 +355,7 @@ function scheduleBroadcast(): void {
 }
 
 let social: SocialClient | undefined
+let daemon: DaemonClient | undefined
 let socialAccountId = ''
 
 function broadcastAuth(state: DesktopAuthState): void {
@@ -376,8 +381,8 @@ function broadcastAuth(state: DesktopAuthState): void {
   }
   if (nextSocialAccount !== socialAccountId) {
     socialAccountId = nextSocialAccount
-    if (nextSocialAccount) social?.start()
-    else social?.stop()
+    if (nextSocialAccount) { social?.start(); daemon?.start() }
+    else { social?.stop(); daemon?.stop() }
   }
   let welcomeConversationId: string | undefined
   let builtInRefresh: Promise<string | undefined> = Promise.resolve(undefined)
@@ -699,10 +704,16 @@ app.whenReady().then(async () => {
     // Douchat forward only for an explicit login callback, never for session
     // restoration, profile refreshes or profile edits in the background.
     if (state.status === 'signed-in' && reason === 'login-completed') { focusMainWindow(); void openPendingGroup() }
-  })
+  }, new DeviceIdentity(join(app.getPath('userData'), 'device.json'), safeStorage))
 
   social = new SocialClient(webAppUrl, auth, store, runtime, scheduleBroadcast)
   runtime.setHumanSender((id, text, images, files, mentions) => social!.sendMessage(id, text, images, files, mentions))
+  // douchat-host connections: enrollment and status here; agents on them run from this
+  // computer like SSH agents, with the relay carrying their scripts (remote/daemonRelay.ts).
+  daemon = new DaemonClient(webAppUrl, auth, store, connections, () => runtime.remoteChanged())
+  connections.setDaemonBackend(daemon)
+  configureDaemonRelay(daemon.relayBackend())
+  if (socialAccountId) daemon.start()
   ipcMain.handle('douchat:social-snapshot', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return social!.snapshot()
@@ -710,7 +721,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('douchat:social-action', async (event, input: SocialAction) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     const result = await social!.action(input)
-    return result
+    return result.snapshot ? { ...result, snapshot: rendererSocialSnapshot(result.snapshot) } : result
   })
   ipcMain.handle('douchat:get-auth-state', () => auth.getState())
   ipcMain.handle('douchat:user-memory', (event, agentId?: string) => {
@@ -808,6 +819,7 @@ app.whenReady().then(async () => {
     // Its running sessions belong to the old settings; the connection itself stays open for other agents.
     if (previous || input.remoteAgent) for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
     cancelLocalModelQueries()
+    daemon?.scheduleSync()
     resetShellPath()
     return checkLocalAgentUpdates(await detectLocalAgents())
   })
@@ -872,6 +884,7 @@ app.whenReady().then(async () => {
     // Nothing falls back to this computer.
     await connections.setEnabled(connectionId, enabled)
     if (!enabled) { await stopAgentsOn(connectionId); cancelLocalModelQueries() }
+    daemon?.scheduleSync()
     connectionChanged(); scheduleBroadcast()
     return connections.list()
   })
@@ -886,6 +899,7 @@ app.whenReady().then(async () => {
     const inUse = (localId: string) => store.agents.some(agent => agent.localAgentId === localId)
     await removeAgentsOnConnection(connectionId, mode, inUse)
     await connections.remove(connectionId)
+    daemon?.scheduleSync()
     connectionChanged(); scheduleBroadcast()
     return connections.list()
   })
@@ -917,7 +931,23 @@ app.whenReady().then(async () => {
     const connection = await connectionRegistry().get(connectionRequest(event, id))
     if (!connection) throw new Error('Connection not found')
     if (!connection.enabled) throw new Error('This connection is turned off.')
+    if (connection.kind !== 'ssh' || !connection.ssh) throw new Error('douchat-host 连接不提供终端。请在服务器上直接操作。')
     await openSshTerminal(remoteTerminalArgs({ transport: 'ssh', ...connection.ssh, adapter: 'custom', executable: 'true', args: [] }))
+  })
+  // ─── douchat-host enrollment ───────────────────────────────────────────────
+  const enrollmentId = (id: unknown): string => {
+    if (typeof id !== 'string' || !/^hst_[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid install request')
+    return id
+  }
+  ipcMain.handle('douchat:create-daemon-enrollment', (event) => { connectionRequest(event); return daemon!.createEnrollment() })
+  ipcMain.handle('douchat:wait-daemon-enrollment', (event, id: unknown) => { connectionRequest(event); return daemon!.waitEnrollment(enrollmentId(id)) })
+  ipcMain.handle('douchat:cancel-daemon-enrollment', (event, id: unknown) => { connectionRequest(event); daemon!.cancelEnrollment(enrollmentId(id)) })
+  ipcMain.handle('douchat:complete-daemon-enrollment', async (event, id: unknown, input: unknown) => {
+    connectionRequest(event)
+    const value = input && typeof input === 'object' ? input as { name?: unknown } : {}
+    await daemon!.completeEnrollment(enrollmentId(id), { name: typeof value.name === 'string' ? value.name : '' })
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
   })
   ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
@@ -1050,7 +1080,7 @@ app.whenReady().then(async () => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     if ((input.customModel || input.cloudModel) && input.localAgentId) throw new Error("Select one execution mode.")
     if (input.customModel && input.cloudModel) throw new Error("Select one model source.")
-    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
     const binding = input.localAgentId
@@ -1071,10 +1101,12 @@ app.whenReady().then(async () => {
     )
     // A new bot opens with its own proactive greeting, like a new topic does.
     if (direct) void runtime.greet(direct.id)
+    if (localAgent?.daemon) daemon?.scheduleSync()
     return push()
   })
-  ipcMain.handle('douchat:resolve-agent-permission', (_event, id: string, allow: import('../shared/agentPermissions').PermissionApproval) => {
-    runtime.resolveAgentPermission(id, allow)
+  ipcMain.handle('douchat:resolve-agent-permission', async (_event, id: string, allow: import('../shared/agentPermissions').PermissionApproval) => {
+    if (typeof id !== 'string') throw new Error('Unknown approval')
+    await runtime.resolveAgentPermission(id, allow)
     return push()
   })
   ipcMain.handle('douchat:export-agent-archive', async (event, agentId: string) => {
@@ -1123,7 +1155,7 @@ app.whenReady().then(async () => {
       if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
       input = { ...input, model: model ?? 'default' }
     }
-    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined
     const { localAgentName: _ignoredLocalAgentName, ...safeInput } = input
     store.updateAgent(agentId, {
       ...safeInput,
@@ -1131,6 +1163,8 @@ app.whenReady().then(async () => {
     }, selectedBinding ? { binding: selectedBinding, followDefault: cloudModel?.model === 'douchat-default' } : undefined)
     // Identity and model edits take effect on the next turn, not mid-session.
     runtime.disposeAgent(agentId)
+    // Configuration and permissions reach a douchat-host only as a signed sync.
+    daemon?.scheduleSync()
     return push()
   })
   ipcMain.handle('douchat:delete-agent', (_event, agentId: string) => {
@@ -1142,6 +1176,7 @@ app.whenReady().then(async () => {
     runtime.disposeAgent(agentId)
     for (const provider of ['wechat', 'feishu', 'telegram'] as const) imChannels?.disconnect(agentId, provider)
     store.deleteAgent(agentId)
+    daemon?.scheduleSync()
     return push()
   })
   ipcMain.handle('douchat:start-direct-chat', (_event, agentId: string) => {
@@ -1196,7 +1231,7 @@ app.whenReady().then(async () => {
       const target = placement ? { ...placement.target, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
       const resolved = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
       return {
-        agentId, location: target.location, ...(placement ? { host: remoteHostLabel(placement.spec) } : {}),
+        agentId, location: target.location, ...(placement ? { host: remoteHostLabel(placement.spec) } : {}), ...(placement && placement.spec.transport !== 'ssh' ? { noTerminal: true } : {}),
         ...(resolved.binding ? { path: resolved.binding.path, source: 'custom' as const } : resolved.legacyPath ? { path: resolved.legacyPath, source: 'legacy' as const } : { source: 'default' as const }),
         ...(resolved.stale ? { stale: true } : {})
       }
@@ -1296,6 +1331,7 @@ app.whenReady().then(async () => {
     if (!placement) throw new Error('This agent runs on this computer.')
     const binding = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId).binding
     if (!binding) throw new Error('No folder has been chosen on the server for this agent.')
+    if (placement.spec.transport !== 'ssh') throw new Error('douchat-host 连接不提供终端。请在服务器上直接操作。')
     await openSshTerminal(remoteTerminalArgs(placement.spec, binding.path))
   })
   ipcMain.handle('douchat:open-conversation-window', (_event, conversationId: string) => {

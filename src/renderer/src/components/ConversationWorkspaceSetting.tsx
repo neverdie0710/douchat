@@ -80,7 +80,7 @@ function MemberRow({ member, name, busy, onChoose, onClear, onOpen, onCopy, onTe
       {!remote && <button className="conversation-workspace-open" type="button" title={t('Open folder')} aria-label={t('Open folder')} disabled={busy} onClick={onOpen}><ExternalLink size={14} /></button>}
       {remote && member.path && <>
         <button className="conversation-workspace-open" type="button" title={t('Copy path')} aria-label={t('Copy path')} disabled={busy} onClick={onCopy}><Copy size={14} /></button>
-        <button className="conversation-workspace-open" type="button" title={t('Open in terminal')} aria-label={t('Open in terminal')} disabled={busy} onClick={onTerminal}><Terminal size={14} /></button>
+        <button className="conversation-workspace-open" type="button" title={t(member.noTerminal ? 'douchat-host servers have no terminal here. Work on the server directly.' : 'Open in terminal')} aria-label={t('Open in terminal')} disabled={busy || member.noTerminal} onClick={onTerminal}><Terminal size={14} /></button>
       </>}
     </p>
     {!name && remote && <p className="conversation-workspace-note">{t('Runs on')} {location}</p>}

@@ -108,7 +108,7 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
         {canChooseLocation && <div className="local-agent-location" role="radiogroup" aria-label={t('Run location')}>
           <span>{t('Run location')}</span>
           <label><input type="radio" name="location" checked={!remote} onChange={() => { setLocation('local'); changed() }} />{t('This computer')}</label>
-          <label><input type="radio" name="location" checked={remote} onChange={() => { setLocation('remote'); changed() }} />{t('Remote server (SSH)')}</label>
+          <label><input type="radio" name="location" checked={remote} onChange={() => { setLocation('remote'); changed() }} />{t('Remote server')}</label>
         </div>}
         {!remote && <>
           <label>{t('Executable path')}<input required maxLength={2048} value={command} placeholder={agent?.path || '/path/to/agent'} spellCheck={false} onChange={event => { setCommand(event.target.value); changed() }} /></label>

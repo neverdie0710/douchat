@@ -30,8 +30,13 @@ export function killAllLocalProcesses(): void {
   for (const child of ownedProcesses) killLocalProcess(child)
 }
 
+/** Marks a stand-in for a process (a douchat-host relay stream): no pid, killed through kill(). */
+export const VIRTUAL_PROCESS = Symbol.for('douchat.virtualProcess')
+const isVirtual = (child: ChildProcessWithoutNullStreams): boolean => Boolean((child as unknown as Record<symbol, unknown>)[VIRTUAL_PROCESS])
+
 /** Kill the owned process group, including CLI tools and MCP children. */
 export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
+  if (isVirtual(child)) { child.kill('SIGKILL'); return }
   if (!child.pid) return
   try {
     if (process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
@@ -47,6 +52,13 @@ export function killLocalProcess(child: ChildProcessWithoutNullStreams): void {
  * closing stdin ends Codex and Claude cleanly. Escalate if it doesn't exit, and
  * sweep the group afterwards for children that outlived the CLI. */
 export function stopLocalProcess(child: ChildProcessWithoutNullStreams, graceMs = 2_000): void {
+  if (isVirtual(child)) {
+    if (child.exitCode !== null || child.signalCode !== null) return
+    const force = setTimeout(() => killLocalProcess(child), graceMs * 2)
+    child.once('exit', () => clearTimeout(force))
+    try { child.stdin.end() } catch { killLocalProcess(child) }
+    return
+  }
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) { killLocalProcess(child); return }
   const terminate = setTimeout(() => {
     try { if (process.platform !== 'win32') process.kill(-child.pid!, 'SIGTERM') } catch { /* Already exited. */ }
@@ -58,6 +70,19 @@ export function stopLocalProcess(child: ChildProcessWithoutNullStreams, graceMs 
 
 type Packet = Record<string, any>
 const UNVERIFIED_COMPUTER_USE = 'Douchat could not verify the native Computer Use inventory for this session. This does not prove the tools are absent. Inspect your exposed tools and report any actual tool failure precisely.'
+/** After the CLI reports it is retrying the model, this long without any new
+ * model output is treated as a dead model provider. Plain silence (no retry
+ * reported) stays alive: long tasks may legitimately say nothing for minutes. */
+export const MODEL_STALL_MS = 120_000
+export const MODEL_RETRY_DETAIL = 'Model service is not responding; retrying'
+export const MODEL_STALL_LOCAL = 'The model service did not respond. Check the CLI model provider and network on this computer, then try again.'
+export const MODEL_STALL_REMOTE = 'The model service did not respond. Check the CLI model provider and network on the remote server, then try again.'
+/** Codex notifications that mean the model itself produced output. */
+function codexModelOutput(packet: Packet): boolean {
+  const method = String(packet.method ?? '')
+  if (method === 'item/started' || method === 'item/completed') return packet.params?.item?.type !== 'userMessage'
+  return /delta$/i.test(method) || method === 'thread/tokenUsage/updated' || method === 'turn/plan/updated'
+}
 type Pending = { resolve: (value: any) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 
 /** One private stdio connection per Douchat conversation/topic/agent. No TCP listener. */
@@ -367,17 +392,34 @@ export class LocalAgentConnection {
     let detail: string | undefined
     let waitingApproval = false
     let lastReport = 0
+    let modelSeenAt = started
+    let retrying = false
     const report = (): void => {
       if (Date.now() - lastReport < 1_000) return
       lastReport = Date.now()
-      progress?.({ phase: waitingApproval ? 'approval' : detail ? 'working' : 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: Math.floor((Date.now() - this.lastEvent) / 1000), detail })
+      progress?.({ phase: waitingApproval ? 'approval' : retrying ? 'waiting' : detail ? 'working' : 'waiting', elapsedSeconds: Math.floor((Date.now() - started) / 1000), silentSeconds: Math.floor((Date.now() - (retrying ? modelSeenAt : this.lastEvent)) / 1000), detail: retrying ? MODEL_RETRY_DETAIL : detail })
+    }
+    const modelOutput = (): void => {
+      modelSeenAt = Date.now()
+      if (retrying) { retrying = false; lastReport = 0 }
+    }
+    const modelRetry = (): void => {
+      if (!retrying) { retrying = true; lastReport = 0 }
+      report()
     }
     this.approvalHandler = onApproval ? async (request, approvalSignal) => {
       waitingApproval = true; lastReport = 0; report()
       try { await onApproval(request, approvalSignal) }
-      finally { waitingApproval = false; lastReport = 0; report() }
+      finally { waitingApproval = false; modelSeenAt = Date.now(); lastReport = 0; report() }
     } : undefined
-    const heartbeat = setInterval(report, 15_000)
+    const watchdog = (): void => {
+      if (!waitingApproval && retrying && Date.now() - modelSeenAt >= MODEL_STALL_MS) {
+        this.close(new Error(this.remote ? MODEL_STALL_REMOTE : MODEL_STALL_LOCAL))
+        return
+      }
+      report()
+    }
+    const heartbeat = setInterval(watchdog, 15_000)
     const abort = (): void => this.close(new Error('Stopped'))
     signal?.addEventListener('abort', abort, { once: true })
     try {
@@ -392,6 +434,8 @@ export class LocalAgentConnection {
         this.failTurn = reject
         this.listener = (packet) => {
           if (this.kind === 'claude') {
+            if (packet.type === 'system' && packet.subtype === 'api_retry') modelRetry()
+            if (packet.type === 'stream_event' || packet.type === 'user' || (packet.type === 'assistant' && !packet.error && !packet.message?.error)) modelOutput()
             if (packet.type === 'system' && packet.subtype === 'init' && typeof packet.session_id === 'string') { this.threadId = packet.session_id; this.rememberThread?.(this.threadId) }
             if (packet.type === 'system' && packet.subtype === 'init') progress?.({ phase: 'ready', elapsedSeconds: 0, silentSeconds: 0 })
             if (packet.type === 'stream_event' && ['content_block_start', 'content_block_delta'].includes(packet.event?.type)) {
@@ -419,6 +463,8 @@ export class LocalAgentConnection {
           }
           const params = packet.params ?? {}
           if (params.threadId && params.threadId !== this.threadId) return
+          if (packet.method === 'error' && params.willRetry) modelRetry()
+          if (codexModelOutput(packet)) modelOutput()
           if (packet.method === 'item/completed' || packet.method === 'item/started') {
             const item = params.item ?? {}
             if (item.type === 'agentMessage' && packet.method === 'item/completed') {

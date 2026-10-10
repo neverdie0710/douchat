@@ -41,6 +41,8 @@ export interface LocalAgent {
   remoteAgent?: RemoteAgentBinding
   /** The connection is turned off or missing: the agent cannot run. */
   unavailable?: 'disabled' | 'missing'
+  /** Present for agents bound to a douchat-host daemon: they never run on this computer. */
+  daemon?: { connectionId: string; hostId: string; label: string }
 }
 
 /** Where an agent's commands run. A saved workspace path is only meaningful on
@@ -64,6 +66,8 @@ export interface MemberWorkspaceView {
   location: 'local' | 'remote'
   /** Remote host label, for remote members. */
   host?: string
+  /** The server is reached through douchat-host, which has no interactive terminal. */
+  noTerminal?: boolean
   /** The folder in effect; absent when the agent uses its default folder. */
   path?: string
   /** custom: chosen for this agent; legacy: the chat's earlier local folder. */
@@ -90,15 +94,19 @@ export interface RemoteDirectoryListing {
 export const REMOTE_AGENT_ADAPTERS = ['codex', 'claude', 'gemini', 'grok', 'cursor', 'opencode', 'kimi', 'openclaw', 'fastclaw', 'hermes', 'omp', 'custom'] as const
 export type RemoteAgentAdapter = typeof REMOTE_AGENT_ADAPTERS[number]
 
-/** Structured SSH launch settings. There is intentionally no free-form shell
- * command and no custom ssh option field: every value is validated in main. */
+/** Structured launch settings. There is intentionally no free-form shell
+ * command and no custom ssh option field: every value is validated in main.
+ * `daemon` runs the same remote scripts through douchat-host and the Douchat
+ * relay instead of /usr/bin/ssh; `host` is then the connection's name. */
 export interface RemoteAgentSpec {
-  transport: 'ssh'
+  transport: 'ssh' | 'daemon'
   host: string
   port?: number
   user?: string
   /** Absolute path of a private key on this computer. */
   identityFile?: string
+  /** Present exactly when transport is 'daemon'. */
+  daemon?: { hostId: string; serviceUrl: string; ownerId: string }
   adapter: RemoteAgentAdapter
   /** Remote command name or absolute POSIX path. */
   executable: string
@@ -134,7 +142,10 @@ export interface RemoteAgentBinding {
   args: string[]
 }
 
-export type RemoteConnectionKind = 'ssh'
+export type RemoteConnectionKind = 'ssh' | 'daemon'
+
+/** A douchat-host enrolled for one Douchat account (remote-connections.md 6.3). */
+export interface DaemonConnectionTarget { hostId: string; serviceUrl: string; ownerId: string; info?: { os?: string; arch?: string; version?: string } }
 
 /** A server Douchat can run agents on. Stored in main only; no keys or passwords. */
 export interface RemoteConnection {
@@ -144,7 +155,10 @@ export interface RemoteConnection {
   enabled: boolean
   /** Increased whenever host, port, user or key change; name and probe results don't count. */
   targetRevision: number
-  ssh: { host: string; port?: number; user?: string; identityFile?: string }
+  /** Present exactly when kind is 'ssh'. */
+  ssh?: { host: string; port?: number; user?: string; identityFile?: string }
+  /** Present exactly when kind is 'daemon'. */
+  daemon?: DaemonConnectionTarget
   /** Last validated probe of the server. */
   probe?: { home: string; path: string; checkedAt: number }
   createdAt: number
@@ -171,8 +185,20 @@ export interface ConnectionView extends RemoteConnection {
   label: string
 }
 
-export interface ConnectionTestStep { name: 'ssh' | 'shell' | 'environment' | 'workspace' | 'forwarding'; passed: boolean; message?: string }
+export interface ConnectionTestStep { name: 'ssh' | 'shell' | 'environment' | 'workspace' | 'forwarding' | 'host'; passed: boolean; message?: string }
 export interface ConnectionTestReport { ok: boolean; steps: ConnectionTestStep[]; durationMs: number }
+
+/** A pending daemon installation: the command is shown once and never logged. */
+export interface DaemonEnrollment {
+  id: string
+  hostId: string
+  installCommand: string
+  uninstallCommand: string
+  expiresAt: number
+  /** Owner device key fingerprint; douchat-host prints the same value during setup. */
+  fingerprint: string
+}
+export interface DaemonEnrollmentResult { hostId: string; info: { os?: string; arch?: string; version?: string } }
 
 export interface DiscoveredRemoteAgent {
   adapter: RemoteAgentAdapter
@@ -510,6 +536,8 @@ export interface ConversationActivityState {
     silentSeconds: number
     detail?: string
   }
+  /** Reply text streamed so far by a daemon agent. */
+  remoteText?: string
   conversationId: string
   topicId: string
   phase: ConversationPhase
@@ -798,6 +826,13 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   /** Adds the chosen discovered agents as remote agents on this connection. */
   addDiscoveredAgents: (id: string, agents: Array<{ adapter: RemoteAgentAdapter; executable: string; name: string }>) => Promise<LocalAgent[]>
   openConnectionTerminal: (id: string) => Promise<void>
+  /** Starts adding a daemon connection; returns the one-time install command. */
+  createDaemonEnrollment: () => Promise<DaemonEnrollment>
+  /** Resolves when the host comes online, or null when cancelled or expired. */
+  waitDaemonEnrollment: (id: string) => Promise<DaemonEnrollmentResult | null>
+  cancelDaemonEnrollment: (id: string) => Promise<void>
+  /** Saves the enrolled host as a connection under a local name. */
+  completeDaemonEnrollment: (id: string, input: { name: string }) => Promise<ConnectionView[]>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   getAttachmentData: (attachmentId: string) => Promise<string>
   getSnapshot: () => Promise<AppSnapshot>

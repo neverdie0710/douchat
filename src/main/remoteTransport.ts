@@ -7,6 +7,7 @@ import { REMOTE_BOOTSTRAP, encodePayload, probeScript } from './remoteScript'
 import { parseRemoteProbe, validateRemoteSpec } from './remoteValidate'
 import { killLocalProcess, spawnOwnedProcess, type LaunchSpec } from './localAgentConnection'
 import { loginShellSshAuthSock } from './shellPath'
+import { relaySpawn } from './remote/daemonRelay'
 export type { LaunchSpec } from './localAgentConnection'
 
 let controlDirectory: string | undefined
@@ -185,10 +186,12 @@ export interface RemoteExecOptions { input?: Uint8Array; signal?: AbortSignal; t
 
 /** The single entry point for short remote operations (prepare, upload, fetch, clean). */
 export async function remoteExec(spec: RemoteAgentSpec, script: string, options: RemoteExecOptions = {}): Promise<RemoteExecResult> {
-  const launch = await remoteLaunch(spec, script)
-  options.signal?.throwIfAborted()
+  // douchat-host carries the same script and stdio through the relay instead of ssh.
+  const relayed = spec.transport === 'daemon' ? await relaySpawn(spec, script, options.signal) : undefined
+  const launch = relayed ? undefined : await remoteLaunch(spec, script)
+  if (options.signal?.aborted) { if (relayed) killLocalProcess(relayed); options.signal.throwIfAborted() }
   return new Promise((resolve, reject) => {
-    const child = spawnLaunch(launch)
+    const child = relayed ?? spawnLaunch(launch!)
     const chunks: Buffer[] = []
     let size = 0
     let stderr = ''

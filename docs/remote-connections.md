@@ -34,7 +34,7 @@ flowchart LR
     CM[connectionManager.ts 连接注册表 + 状态机]
     RT[RemoteTransport 接口]
     SSH[SshTransport 现有实现改造]
-    DMN[daemonClient 守护进程 agent 代理]
+    DMN[daemonClient + daemonRelay 中继传输]
     RUN[localAgentRuntime / runtime]
     RWS[remoteWorkspace.ts 远端目录选择与校验]
   end
@@ -45,12 +45,11 @@ flowchart LR
   RWS --> RT
   RWS --> DMN
   RT --> SSH -->|系统 ssh| S1[(SSH 服务器)]
-  RUN -->|发任务| TS[(douchat-tanstack social_message)]
-  DMN -->|进度、审批应答、中断、控制消息| TS
-  TS -.->|douchat-host 出站领取任务、回写结果| S2[(守护进程服务器 B: douchat-host 执行端)]
+  RT --> DMN -->|签名 relay.open + 帧| TS[(douchat-tanstack relay 中继)]
+  TS -.->|douchat-host 出站长轮询取帧、回写输出| S2[(守护进程服务器 B: douchat-host 中继端)]
 ```
 
-核心思路：把「连接」从 agent 里拆出来成为一等实体，agent 只引用 `connectionId`。两种连接的执行位置不同：SSH 连接由 A 领取任务，再通过 ssh 在服务器上执行（传输层抽象见第 7 节）；守护进程连接由服务器上的 `douchat-host` 直接领取并执行任务，A 只负责发消息、显示进度和应答审批（第 6 节）。
+核心思路：把「连接」从 agent 里拆出来成为一等实体，agent 只引用 `connectionId`。两种连接的执行模型相同：都由 A 领取任务、驱动 agent 运行，记忆、审批、技能桥都在 A 端；区别只在字节怎么到达服务器。SSH 连接走系统 ssh（第 7 节），守护进程连接把同样的脚本和 stdin/stdout 帧经 douchat-tanstack 的中继转给服务器上的 `douchat-host`（第 6.1 节）。服务器侧不领取任务、不做审批。6.4–6.5、6.8 描述的「B 自主执行」模式暂缓。
 
 ## 3. 数据模型
 
@@ -108,12 +107,12 @@ export type ConnectionStatus =
 ```
 
 存储：新增 `<userData>/connections.json`，权限 `0600`。不存私钥和口令。
+
 ### 3.1 谁可以调用远程 agent
 
 早期版本在连接和远程 agent 上各有一个共享开关（两者都开才允许好友和其他智能体调用）。现已取消，远程 agent 与本机 agent 一样只由智能体权限决定：`groupHumans`、`groupAgents` 决定谁能发起请求，`localExecution` 决定执行前是否需要主人确认。
 
 升级时 `sharingMigration.ts` 在连接迁移之前运行一次（完成标记 `sharing-migration.done`）：原来实际未共享的远程 agent（连接或 agent 任一未开，或旧 `remote` 未开），其 `groupHumans`、`groupAgents` 改为 `deny`，其它权限不变，保证升级不扩大权限。之后主人在权限面板中的修改不会被覆盖。旧文件里残留的 `allowSharing` 字段读取时忽略。
-
 
 迁移（启动时一次，幂等）：
 
@@ -219,151 +218,126 @@ SSH 的测试连接依次检查免密认证与 host key、`/bin/sh` 和 `base64`
 
 ### 5.4 IPC
 
-`douchat:list-connections`、`save-connection`、`remove-connection`、`set-connection-enabled`、`test-connection`、`discover-remote-agents`、`list-remote-directories`、`create-daemon-enrollment`（生成 `DOUCHAT_ENROLL`）、`wait-daemon-enrollment`（等主机上线）、`cancel-agent-task`（守护进程 agent 的中断）。全部在 main 侧调用 `validateConnection`，renderer 校验只做提示。
+`douchat:list-connections`、`save-connection`、`remove-connection`、`set-connection-enabled`、`test-connection`、`open-connection-terminal`（仅 SSH）、`discover-remote-agents`、`list-remote-agent-directories`、`create-daemon-enrollment`（生成注册令牌和安装命令）、`wait-daemon-enrollment`（等主机上线并返回指纹）、`complete-daemon-enrollment`（保存连接）、`cancel-daemon-enrollment`（未保存就关闭向导时中止等待、删除本地记录并签名 `host-revoke` 吊销已注册的主机）；广播 `connections-changed`。守护进程任务的中断与 SSH 一样走 `stop-conversation`，中继侧发 `kill` 帧。全部在 main 侧调用 `validateConnection`，renderer 校验只做提示。
 
 ## 6. 守护进程连接
 
-### 6.1 模型：B 领取并执行绑定在它上面的 agent 的任务
+### 6.1 当前实现：douchat-host 只做中继（对标 SSH）
 
-现有消息链路（代码依据）：
+> 2026-10 起采用本节方案，替代下文 6.4–6.8 描述的「B 自主领取并执行任务」模式。那部分设计和服务端代码保留（桌面端 `HOST_EXECUTION = false` 关闭），作为以后支持「A 离线时 B 仍可应答」的备选，当前版本不启用。
 
-- 桌面端 [social.ts](../src/main/social.ts) 只发出站 HTTPS：`heartbeat` 每 10s 上报本机 agent 在线和正在等待的审批（`approvals`），`watch` 长轮询房间变更，`tasks` / `claim` / `complete` 每 2.5s 拉取并领取任务（最多 8 个并发），结果先写本地 outbox 再发布，失败可重发而不重跑。
-- 服务端 douchat-tanstack `src/modules/social/service.ts`：`tasks` 按 `localIds` 返回 `pending` 任务；`claim` 写入 claim 令牌，同时拼好 40 条历史作为 `context`；`complete` 校验 claim 后写回 `reply`。`waitForSocialChange` 最长挂起 15s，聊天变更同实例由 `notifyRoom` 立即唤醒，跨实例由 douchat-tanstack `src/modules/social/notifications.ts` 回退重查 DB，不依赖粘性会话；该回查只比较房间 revision，控制通知需新增 6.8.3 的持久化检查。
-- 现有任务按 agent 归属排队，但仅凭账号归属和客户端传入的 localIds 不能区分执行设备；守护进程接入后统一使用 6.8.1 的权威执行端绑定。
+守护进程连接和 SSH 连接只有传输方式不同。SSH 下 A 通过 `ssh` 进程连到 B；守护进程下，A 和 B 都以出站 HTTPS 连到 douchat-tanstack，由它中转字节流。提示词组装、记忆读写、技能桥、审批、回复后处理、工作区和续接全部仍在 A，走与 SSH 完全相同的代码（`remoteExec`、`SshTransport.spawn`、`openBridge`、`RemoteRun`），B 只执行 A 下发的远程脚本并转发 stdio。
 
-守护进程连接就利用这一点：被控机器 B 上的 `douchat-host` 是一个没有界面的 Douchat 执行端。agent 绑定到守护进程连接后，它的任务不再由 A（用户的 Mac）领取，而是由 B 领取、执行、回写。`room_id`、`agent_id`、消息格式都和现在一样，B 只是换了一台设备来接单。
+由此带来的行为与 SSH 一致：
 
-| 角色 | 网络行为 | 是否新开端口 |
+- A 不在线时，群里 @ 该 agent 的任务在服务端保持 `pending`；A 上线后由 `social.ts` 照常领取，再经中继在 B 上运行。
+- agent 私聊、记忆、身份文件编辑、定时任务、connectors 与 SSH agent 相同，B 上不保存任何记忆或会话内容。
+- 每一轮的审批由 A 上的 `AgentPermissionManager` 处理，B 不做任何权限判断。
+
+| 角色 | 网络行为 | 端口 |
 | --- | --- | --- |
-| B：`douchat-host` | 出站 HTTPS 到 `https://douchat.ai`，和桌面端一样 heartbeat、watch、tasks、claim、complete | 不监听任何 TCP 端口 |
-| A：Douchat 桌面端 | 不变；另外为自己的守护进程 agent 拉取进度、应答审批 | 不监听 |
-| douchat-tanstack | 现有 443；social 路由加少量 action，另加 1 个主机入口路由，新增主机、执行端绑定、任务执行记录和控制游标表（6.4.1） | 不新开端口，不新部署 relay，不引入 WebSocket |
+| B：`douchat-host` | 出站 HTTPS `POST <serviceUrl>/api/host/channel`，`dhh_` 令牌鉴权，长轮询 `relay-poll`，写 `relay-send` | 不监听 TCP；技能桥只在 B 上开 `~/.douchat-remote/b-<uuid>.sock`（0600） |
+| A：Douchat 桌面端 | 现有 `/api/desktop-auth/social`，新增 `relay-open` / `relay-send` / `relay-recv` | 不监听 |
+| douchat-tanstack | `src/modules/social/relay.ts`，数据存为 `social_message` 的 `x-relay*` 子消息 | 现有 443 |
 
 ```mermaid
-flowchart LR
-  A[A：Douchat 桌面端<br/>dch_ 令牌] -->|send / watch / 进度 / 审批应答| T[(douchat-tanstack<br/>social_message<br/>room_id 与现在一致)]
-  O[群里其他成员] -->|@ agent| T
-  B[B：douchat-host<br/>dhh_ 令牌] -->|heartbeat / tasks / claim / complete / 进度 / 审批请求| T
+sequenceDiagram
+  participant A as "A: Douchat"
+  participant S as douchat-tanstack
+  participant B as douchat-host
+  A->>S: relay-open（主人签名 relay.open，脚本或 socket 路径）
+  B->>S: relay-poll（长轮询，兼作心跳）
+  S-->>B: opened（带原始签名）
+  B->>B: 验签、防重放、执行脚本或监听 socket
+  A->>S: relay-send in / eof / kill
+  S-->>B: frames
+  B->>S: relay-send out / err / exit / accept
+  A->>S: relay-recv（长轮询）
+  S-->>A: frames
 ```
 
-三种会话的处理：
+#### 6.1.1 中继协议
 
-| 会话 | 服务端房间 | 说明 |
-| --- | --- | --- |
-| 群聊 | 现有 group 房间 | 任何成员 @ 该 agent，任务由 B 领取 |
-| 你和好友私聊 | 现有 `dm-<pair>` 房间 | 不挂 agent，不变 |
-| 你和该 agent 一对一 | 新增 agent 私聊房间 `dm-agent-<pair(ownerId, agentId)>`，持久化 `kind: 'agent'`（展示为私聊，避免与好友 `direct` 的双方成员规则混用），成员只有你，`agents` 只有这个 agent | 类比好友私聊。本地会话 `direct-<agentId>` 记下 `remoteRoomId`，之后和 `friend:` 会话一样同步。绑定前的本地历史不上传 |
+- 流：`exec`（运行一个 Douchat 远程脚本，脚本即 SSH 模式下 `REMOTE_BOOTSTRAP` 传入的同一份内容，base64 后不超过 512KB）、`listen`（在 B 上监听技能桥 socket）、`conn`（listen 上每个新连接派生的子流，由 B 以 `accept` 帧携带 `childId` 创建）。
+- 签名：A 用设备私钥签 `relay.open`，payload 含 `streamId`、`kind` 及 `script` 或 `socketPath`。服务端校验后存储原始签名，B 收到后用本地 `trust.json` 再验一次并按 `requestId` 防重放（持久化到 `seen.json`）。服务端无法替 A 伪造执行请求。
+- 帧：每个方向按 `seq` 递增、幂等写入；A→B 只允许 `in`、`eof`、`kill`，B→A 只允许 `out`、`err`、`exit`、`error`、`accept`。接收方在下一次请求里带上已处理的最大 `seq` 作为 ack，服务端删除之前的帧。每条流同一时刻只有一个发送请求在途。
+- 限额：单帧 4MB、单次发送 64 帧 / 12MB、单次响应 8MB、每方向未确认帧 512 个、每台主机同时 64 条流；超出时发送方退避重试。B 端缓冲超过 16MB 时暂停读取子进程输出，低于 4MB 恢复。
+- 生命周期：`exit` 或 `error` 帧关闭流；关闭的流 2 分钟后清理，未确认帧 10 分钟后清理。A 对尚未被 B 认领的流发 `kill` 时，服务端直接关闭它，不再下发给 B。B 长轮询被中断时，已认领但未开始跟踪的流会在下一次 `relay-poll` 重新下发，B 用已处理集合和 `requestId` 去重。
+- 失联：B 超过 45 秒没有 `relay-poll` 即视为离线；A 侧未认领的流在 B 离线时立即失败，认领后 B 离线超过 60 秒失败；B 超过 120 秒未见 A 的 `relay-recv` 时结束全部流（SIGTERM 进程组，5 秒后 SIGKILL）。
+- A 侧：`src/main/remote/daemonRelay.ts` 把一条 exec 流包装成伪 `ChildProcess`（`RelayProcess`，带 `Symbol.for('douchat.virtualProcess')` 标记），上层 `localAgentConnection`、`RemoteRun` 不感知差异。技能桥由 `openDaemonSkillBridge` 把每个 `conn` 子流接到 A 本机的 loopback 桥端口。
 
-A 侧的配合：
+#### 6.1.2 与 SSH 的差异
 
-- A 的 `heartbeat` 和 `tasks` 的 `localIds` 排除绑定在守护进程连接上的 agent，减少无效请求；服务端仍按 6.8.1 权威绑定拒绝其它桌面、旧客户端和其它 host 抢单。这些 agent 的在线状态由 B 的 `heartbeat` 上报，A 离线时 B 照常处理群里其他人的 @。
-- A 给 agent 私聊房间发消息时显式带 `agentId`（私聊不会像群聊那样自动选 agent）。
-
-数据流与隐私：守护进程 agent 的会话内容和群聊一样，以明文经过并存储在 douchat-tanstack（`claim` 时服务端拼接最多 40 条历史）。端到端加密属于 P3 可选能力（6.6）。Douchat 不主动把本轮任务提示词写入 B 的运行文件或日志；CLI 自身的原生会话记录单独按 adapter 说明，不能承诺其不保存内容。
+- 连接测试多一步「douchat-host 在线」，其后 shell、环境、工作区、转发各步与 SSH 相同，都经中继执行。
+- 不提供交互式终端：连接菜单和工作区的「在终端中打开」对守护进程连接置灰。交互式 shell 需要伪终端和低延迟通道，等长轮询换成 WebSocket 后再评估。
+- 延迟：每次往返都要经过服务端写入和长轮询唤醒，对普通对话影响不明显，但工具调用密集时会慢于直连 SSH。
+- 隐私：经过中继的提示词、记忆片段和回复在服务端以明文短暂存储（帧确认后删除，最长 10 分钟）；SSH 模式下这些内容只走 A 到 B 的 SSH 通道。端到端加密见 6.6。
 
 ### 6.2 douchat-host 形态
 
-部署分为「安装器」和「常驻程序」两层：
-
-| 层 | 形态 | 职责 |
-| --- | --- | --- |
-| 安装器 `douchat-host-installer` | 原生小二进制（Rust 或 Go，约 3MB） | 下载、校验、安装、升级、修复、回滚、卸载；常驻程序升级坏了也能修回来 |
-| 常驻程序 `douchat-host` | TypeScript 打包的 Node SEA 单文件 | 注册、连服务端、领取并执行任务、本地 IPC |
-
-P2 先不做独立安装器：`install.sh` 直接下载并校验常驻程序，升级由 `douchat-host upgrade` 完成（下载到新的版本目录，运行 `--version` 自检通过后切换 `current` 软链接，再重启服务；任一步失败都保留旧版本）。P3 再补安装器，接管升级、修复和崩溃恢复。
-
-- 实现：TypeScript，复用 Douchat main 的执行代码，包括 `performSocialTask` 的提示词组装、`localAgentConnection` 的 adapter 协议解析、`localWorkspaces`、`remoteValidate` 的白名单和危险参数表。用 esbuild 打包，再用 Node SEA 把 Node 运行时和打包后的 JS 合成一个可执行文件，提供 linux 和 darwin 的 amd64、arm64 构建产物，服务器不需要另装 Node。共享模块中用到 Electron 的部分（`safeStorage`、`dialog`、`BrowserWindow`）抽成接口，host 侧给无界面实现，执行逻辑只维护一份。
-- 体积：单文件预计约 100MB，实际以构建产物为准。下载用 gzip 压缩，同一发行构建只下载一次，升级时才重新下载。
-- 适用 agent：只支持 CLI 类 adapter（与 `RemoteAgentSpec` 相同：codex、claude、gemini 等），使用 B 上已登录的 CLI 账号。依赖 Douchat 内置模型密钥的 agent 不能绑定到守护进程连接。
-- 运行身份：普通用户，检测到 root 时拒绝启动（可用 `--allow-root` 显式放开）。
+- 代码在本仓库 `host/`，TypeScript，esbuild 打成单个 ESM 文件 `douchat-host.mjs`（几十 KB），只复用 `src/main/remote/ownerSigning.ts` 的签名格式，不复用 runtime。需要 Node.js 20+；服务器没有时，`install.sh` 下载一份官方 Node.js 到 `~/.douchat-host/runtime`（校验 `SHASUMS256.txt`）。Node SEA 单文件和独立原生安装器留到 P3。
+- 模块：`cli.ts`（子命令）、`relay.ts`（中继主循环、exec 和 listen）、`verify.ts`（主人签名校验、信任列表更新、主机签名）、`client.ts`（`/api/host/channel` 调用）、`state.ts`（本地状态文件）、`service.ts`（systemd、launchd、后台进程）。
+- 运行身份：普通用户，检测到 root 时拒绝（`DOUCHAT_HOST_ALLOW_ROOT=1` 可放开）。exec 脚本以 `/bin/sh -c` 在用户 home 下启动，独立进程组；远程脚本与 SSH 模式相同，自己按登录 shell 补齐 PATH，因此服务环境里不需要预先写入 PATH。
 - 安装目录：
 
   ```text
-  ~/.douchat-host/
-    bin/douchat-host -> versions/<version>/douchat-host   # current 软链接
-    versions/<version>/douchat-host                        # 不可变版本目录，保留当前和上一个版本
-    config.json      # 0600，含 hostId、serviceUrl、hostToken、allowedRoots
-    trust.json       # 0600，主人设备公钥、撤销记录、已应用签名版本和防重放状态
-    agents.json      # A 下发的 agent 配置缓存
-    workspaces.json  # 工作区完整绑定对象（6.5）
-    sessions/        # 原生会话续接记录，同 localWorkspaces
-    outbox/          # 未发布的结果
-    logs/            # 服务日志，按大小轮转
+  ~/.douchat-host/            # 0700，可用 DOUCHAT_HOST_HOME 覆盖
+    bin/douchat-host          # sh 包装脚本：固定 Node 路径，exec current/douchat-host.mjs
+    current -> versions/<v>   # 原子切换的软链接
+    versions/<v>/douchat-host.mjs   # 保留当前和上一个版本
+    runtime/                  # 可选：私有 Node.js
+    install.json              # 下载地址、Node 路径、版本
+    state.json                # 0600：hostId、serviceUrl、ownerId、dhh_ 令牌、主机签名私钥
+    trust.json                # 0600：主人设备公钥列表及 revision（本地信任锚）
+    seen.json                 # 0600：已接受的 requestId 及过期时间
+    service.json              # 已安装的服务类型
+    host.pid                  # 单实例锁
+    logs/host.log             # launchd 和后台模式的日志，超过 10MB 轮转一份
   ```
 
-  运行目录复用 `~/.douchat-remote`。另在 `~/.local/bin/douchat-host` 放一个软链接，方便在终端直接执行子命令。
-- 常驻：由 `douchat-host` 生成 launchd 或 systemd 配置并启动系统服务。
+- 常驻（`douchat-host service install`）：
+  - Linux：写 `~/.config/systemd/user/douchat-host.service`（`Restart=on-failure`），`systemctl --user enable` 并重启；尝试 `loginctl enable-linger`，失败时提示管理员执行，否则退出登录后服务会停。日志用 `journalctl --user -u douchat-host`。
+  - macOS：写 `~/Library/LaunchAgents/ai.douchat.host.plist`（`RunAtLoad`，`KeepAlive.SuccessfulExit=false`），`launchctl bootstrap gui/<uid>`。只在该用户登录期间运行。
+  - 都不可用（容器、无 systemd 的发行版）或设置 `DOUCHAT_HOST_SERVICE=background`：以分离的后台进程运行，重启机器后需手动 `douchat-host service start`。
+  - 主机被吊销时进程以 0 退出，服务管理器不会反复拉起；崩溃和网络异常按非 0 退出自动重启。
+- 维护：每 5 分钟拉取一次信任设备列表，只接受 revision 更大且由已信任设备签名的版本（`host.devices`）；令牌剩余不足 30 天时用主机私钥签名轮换。
 
-  macOS 写入 `~/Library/LaunchAgents/ai.douchat.host.<hash>.plist`，用 `launchctl bootstrap gui/$(id -u)` 加载（6.7 S1 依赖这一点）：
+子命令：
 
-  ```xml
-  <key>ProgramArguments</key>
-  <array><string><安装时解析的绝对 HOME>/.douchat-host/bin/douchat-host</string><string>__service</string></array>
-  <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string><安装时采集并校验的绝对 PATH></string></dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string><安装时解析的绝对 HOME>/.douchat-host/logs/service.log</string>
-  <key>StandardErrorPath</key><string><安装时解析的绝对 HOME>/.douchat-host/logs/service.log</string>
-  ```
+| 命令 | 作用 |
+| --- | --- |
+| `setup [--force] [--yes]` | 读取 `DOUCHAT_ENROLL` 注册；打印主人设备指纹并在终端询问是否一致（无终端时只打印） |
+| `run` | 前台运行中继 |
+| `service install\|start\|stop\|restart\|status\|remove` | 管理常驻服务 |
+| `status` / `doctor` | 注册信息、版本、进程状态；`doctor` 另外检查服务端可达和令牌有效 |
+| `upgrade` | 从 `install.json` 记录的地址重新下载 `install.sh` 执行，切换版本并重启服务 |
+| `uninstall [--purge]` | 向服务端注销、移除服务；`--purge` 删除整个 `~/.douchat-host` |
 
-  Linux 写入 `~/.config/systemd/user/douchat-host.service`，执行 `systemctl --user enable --now`，并提示 `loginctl enable-linger`，否则用户退出登录后服务会停：
+### 6.3 注册与安装
 
-  ```ini
-  [Unit]
-  Description=Douchat host
-  After=network-online.target
-
-  [Service]
-  Type=simple
-  Environment=PATH=<安装时采集的 PATH>
-  ExecStart=%h/.douchat-host/bin/douchat-host __service
-  Restart=always
-  RestartSec=2
-  KillMode=control-group
-
-  [Install]
-  WantedBy=default.target
-  ```
-
-  没有 systemd 时退回 `nohup` 加 crontab `@reboot`。
-- launchd 的路径在生成时展开为绝对路径并做 XML 转义，不向 plist 写字面量 `~`。PATH 必须显式写入：launchd 和 systemd 启动的服务拿不到用户 shell 的 PATH，不写就找不到 `codex`、`claude` 等 CLI（nvm、Homebrew、`~/.local/bin` 安装的尤其如此）。安装时从用户登录 shell 采集一次 PATH（`$SHELL -lc 'printf %s "$PATH"'`），过滤掉相对路径、不存在的目录、全局可写（mode & 0o002）的目录、以及不属于运行用户且不属于 root 的目录后写入配置；`douchat-host doctor` 会检查已绑定 agent 的 executable 在服务环境下能否找到。
-- `KillMode=control-group`：服务停止或重启时，连同它拉起的 CLI 子进程一起结束，不留孤儿进程。
-- 网络：只向 `serviceUrl` 发出站 HTTPS，支持 `HTTPS_PROXY`。本机只有 `~/.douchat-host/ctl.sock`（`0600`），给 `status`、`desk` 等子命令用。
-- 主循环：复用 `social.ts` 的调度结构，加入 6.8 的绑定、租约和控制游标检查。`heartbeat` 每 10s 上报本机 agent 和 `approvals`；`watch` 长轮询本机 agent 所在房间和本机控制消息；`tasks` / `claim` 每 2.5s，最多 8 个并发；结果先写 `outbox/` 再 `complete`，中断后不自动重跑。空闲时网络失败按 1s、5s、15s、60s 退避；有活动任务时独立租约计时，重试不延长 60s 停止期限。
-
-### 6.3 注册与绑定
-
-Douchat「连接 → 守护进程 → 添加」生成一条安装命令，用户复制到服务器执行：
+Douchat「设置 → 连接 → douchat-host → 添加」生成安装命令：
 
 ```sh
-curl -fsSL https://cdn.douchat.ai/host/install.sh | DOUCHAT_ENROLL='dch1_<base64url>' sh
+curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_<base64url>' sh
 ```
 
-`DOUCHAT_ENROLL` 含协议版本、初始主人设备公钥及其指纹、`serviceUrl`、`enrollTicket`（A 用 `dch_` 令牌申请，一次性，15 分钟过期，服务端只存哈希）和 `exp`。用环境变量传递，避免放入普通 argv；不得将其输出到日志。环境变量不构成对同用户或特权进程的保密边界。初始公钥来自用户从 A 复制的安装命令，B 本地保存这一信任锚，不从服务端响应替换（6.8.4）。
+- `<base>` 默认是 `<serviceUrl>/host`，即由 douchat-tanstack 的 `public/host/` 提供静态文件；桌面端可用环境变量 `DOUCHAT_HOST_DOWNLOAD_URL` 改为 CDN，必须是 HTTPS（localhost 允许 HTTP）。
+- `DOUCHAT_ENROLL` 含协议版本、`serviceUrl`、一次性 `ticket`（15 分钟，服务端只存哈希）、`hostId`、`ownerId`、主人设备公钥及指纹、`exp`。通过环境变量传入，不写日志。B 以令牌里的公钥作为信任锚，不采用服务端响应里的设备列表。
 
-`install.sh` 使用 POSIX sh，只负责下载、验证二进制并交给它完成安装：
+`install.sh`（POSIX sh）步骤：
 
-1. 识别 `uname -s`、`uname -m`；请求 `cdn.douchat.ai/host/channel/stable/<target>`，跟随重定向得到不可变的 `/host/releases/<version>/<target>`。严格校验重定向地址：不允许查询参数和片段，`version` 只能含 `[A-Za-z0-9._-]`，确保二进制和校验文件属于同一版本。
-2. 并行下载 `douchat-host.gz` 和 `SHA256SUMS`，要求恰好有一条对应记录，再用脚本内置的 minisign 公钥验证 `SHA256SUMS.minisig`，验证通过后核对二进制摘要。
-3. 解压到 `~/.douchat-host/versions/<version>/`，运行 `douchat-host --version`，自报版本必须等于选中的版本，通过后建立 `bin/douchat-host` 软链接。
-4. 调用 `douchat-host setup`：生成 Ed25519 密钥（用于轮换令牌）；调用 `enroll{ ticket, signKey, info }` 拿到 `hostId` 和 `hostToken`（`dhh_` 前缀）；按 6.2 写入 launchd plist 或 systemd unit 并启动；终端打印「已连接到 <账号> 的 Douchat」。
-5. `setup` 中途失败（退出码 3）时，脚本自动重跑一次；仍失败则打印 `douchat-host doctor` 的结论。重复执行同一条安装命令是幂等的：已安装同版本时跳过下载，票据已用过时提示重新生成。
+1. 拒绝 root；识别 Linux / macOS 与 x64 / arm64。
+2. 找 Node.js 20+：优先私有 runtime，其次系统 `node`，都没有则从 `DOUCHAT_NODE_MIRROR`（默认 `https://nodejs.org/dist`）下载固定版本并校验 SHA256。
+3. 下载 `manifest.json`（`version`、`sha256`）和 `douchat-host.mjs`，核对摘要并运行 `version` 自检，放入 `versions/<v>/`，原子切换 `current`，生成 `bin/douchat-host` 包装脚本，只保留当前和上一个版本。
+4. 有 `DOUCHAT_ENROLL` 时执行 `setup --force`（询问指纹）和 `service install`；没有令牌但已注册时视为升级，重启服务。
 
-A 的向导显示「等待服务器连接…」，看到主机上线后让用户命名（名称只存在本机 `connections.json`），再通过控制消息 `host.discover`（6.4.3）扫描 B 上的 CLI，用户勾选后创建或改绑 agent。
+A 的向导显示安装命令和设备指纹，轮询到主机上线后让用户命名并选择是否允许共享，保存为 `kind: 'daemon'` 的连接。之后与 SSH 连接一样「扫描」B 上的 CLI 并添加 agent。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
 
-绑定和解绑：
-
-- 绑定：A 签名提交执行端绑定与运行配置（adapter、executable、args、instructions、systemFiles、skills、permissions、thinkingLevel、有效 allowSharing = connection.allowSharing && agent.allowSharing !== false），服务端以事务和 CAS 更新 6.8.1 的权威绑定；B 验证签名并确认配置版本后才领取。`remote_host.agents` 只是配置分发缓存，不是归属依据。
-- 修改：A 签名同步配置，按 agent 的 configRevision / permissionsRevision 做 CAS，`agents_revision` 作为主机分发版本加一。普通配置影响后续任务；权限收紧、停用和绑定变化立即使相关授权失效，权限放宽或「总是允许」须 B 验证并确认应用后生效（6.8.4）。
-- 停用：保留目标归属并标记 disabled；吊销/卸载：目标 revoked，令牌失效。两者都不回退 A；host 离线超过租约阈值时也按不可用处理，agent 显示「执行端不可用」，排队及新任务 failed。
-- 显式解绑或改绑：用户选择新的执行端（本机时明确 deviceId、CLI、账号和目录），签名提交 CAS 切换，bindingRevision 加一。pending 由新执行端领取；running 一律 failed，回复「执行端已变更，任务未完成」，用户手动重发。既有服务端私聊房间保留，不自动迁回仅本机历史。
-- 删除连接的「停用这些 agent」沿用不可用状态；「一并删除」还需删除 agent 引用。删除、主机故障、离线或 scope 缺失均不得隐式执行解绑。
-
-子命令：`status`、`agents`（列出已绑定 agent）、`doctor`（检查服务状态、PATH、CLI 可用性、网络）、`upgrade`、`logs`、`uninstall`（停服务、删除 plist 或 unit、向服务端注销，`--purge` 时再删 `~/.douchat-host`）。已有 SSH 连接的服务器，可在连接菜单里选「安装守护进程」，Douchat 通过现有 `remoteExec`，经 stdin 传入同一条命令（P3）。
+发布：`npm run build:host` 在 `host/dist/` 生成 `douchat-host.mjs`、`install.sh`、`manifest.json`；`npm run publish:host:local` 另外复制到 `../douchat-tanstack/public/host/`（该目录已加入 douchat-tanstack 的 `.gitignore`，部署流程需要单独带上这三个文件）。当前完整性只靠同源 HTTPS 和 manifest 摘要，minisign 发布签名待补（见第 11 节）。
 
 ### 6.4 服务端改动（douchat-tanstack，复用 social）
+
+> 6.4–6.5 及 6.8 描述的是 B 自主执行模式（暂缓，见 6.1）。其中主机注册、令牌轮换、设备信任列表、主人签名、`desktop_device` 已被中继方案沿用；执行端绑定、任务租约、远程审批、agent 私聊房间等当前不启用。
 
 #### 6.4.1 数据表与迁移
 
@@ -511,7 +485,7 @@ B 侧的审批：`permissions.authorize` 先检查本地已验签权限（deny �
 
 - 进程用 `execve` 启动，不经过 shell。提示词只在内存中传给 CLI，不写文件、不进日志。支持 stdin 输入的 adapter 一律走 stdin；只能经 argv 传入的 adapter，提示词在 Linux 上可通过 `/proc/<pid>/cmdline` 或 `ps` 被同机其他用户读取，与 6.3 不让 `DOUCHAT_ENROLL` 走 argv 是同一顾虑。此类 adapter 在能力矩阵中标注「提示词对本机其他用户可见」，绑定时提示；安装文档推荐使用专用系统用户运行 `douchat-host`，或在 Linux 上以 `hidepid=2` 挂载 `/proc`。`doctor` 检测到多用户共享主机且未启用 hidepid 时给出警告。
 - `executable` 必须是 `host.discover` 结果中的绝对路径，或者 `config.json` 中 `extraExecutables` 登记的路径。
-- `adapter` 白名单与危险参数表复用 `remoteValidate` 的同一份代码；共享任务还强制检查已签名的有效 allowSharing，配置缺失或版本未确认时拒绝执行。
+- `adapter` 白名单与危险参数表复用 `remoteValidate` 的同一份代码；共享任务还强制检查已签名的 allowSharing（由权限推导），配置缺失或版本未确认时拒绝执行。
 - 工作区必须通过 4.3 的规则，并在 B 本地登记的 `allowedRoots` 之内。默认仅允许托管工作区；自选目录先由服务器主人在 B 登记具体项目根目录，不以整个 `$HOME` 默认授权。A 的签名不能扩大 B 本地 allowedRoots、extraExecutables 或禁用的能力。
 - `envProfile` 只能取枚举值（`default` / `gemini` / `claude-account` / `gui`），不接受任意环境变量。
 - 任务附件解码后存到本轮运行目录，使用 Douchat 生成的文件名并复用现有附件上传限额。产物只收集运行目录和工作区中本轮新增的普通文件，拒绝符号链接和路径穿越：图片最多 4 张、单张 ≤ 8MB、总量 ≤ 20MB；其它文件最多 10 个、单个 ≤ 20MB、总量 ≤ 50MB。历史附件通过下面的 claim 限定接口获取，配额独立校验。
@@ -737,48 +711,54 @@ export interface RemoteTransport {
 
 ## 8. 改动清单
 
+已实现（P0–P2 中继方案）：
+
 | 文件 | 改动 |
 | --- | --- |
-| `src/shared/types.ts` | `RemoteConnection`、`ConnectionStatus`、新 `RemoteAgentSpec`、`AgentWorkspaceBinding`、远程审批/签名 envelope |
+| `src/shared/types.ts` | `RemoteConnection`、`ConnectionStatus`、新 `RemoteAgentSpec`（`transport: 'ssh' \| 'daemon'`）、`AgentWorkspaceBinding`、`MemberWorkspaceView.noTerminal` |
 | `src/shared/conversationWorkspace.ts` | `memberWorkspace`；`canAssignConversationWorkspace` 放开共享房间，只允许主人给自己的 agent 设置 |
-| `src/main/connectionManager.ts`（新） | 注册表、迁移恢复、目标版本、状态机、保活、探测缓存；签名绑定 CAS 与配置确认，不自动回退 |
+| `src/main/connectionManager.ts`（新） | 注册表、迁移恢复、目标版本、状态机、保活、探测缓存 |
 | `src/main/connectionStore.ts`（新） | `connections.json` 原子读写；迁移计划、阶段标记与孤立引用恢复 |
-| `src/main/remote/transport.ts`（新） | SSH 传输接口定义 |
-| `src/main/remote/sshTransport.ts` | 由现有 4 个 remote* 文件重组 |
-| `src/main/remote/daemonClient.ts`（新） | 守护进程 agent 在 A 侧的代理：`host-control`（discover、目录浏览、workspace.get/set）、`task-progress-watch` 转为 `setActivity`、远程审批注册/签名应答，控制游标重连及版本确认、`task-cancel` |
-| `src/main/social.ts` | `heartbeat` / `tasks` 的 `localIds` 排除守护进程 agent；agent 私聊房间的创建与同步；给 agent 私聊房间发消息时带 `agentId` |
-| `src/main/store.ts` | `direct-<agentId>` 会话在 agent 绑定守护进程后记录 `remoteRoomId` |
-| `src/main/remoteWorkspace.ts`（新） | 远端目录浏览、校验、黑名单（SSH 与 douchat-host 共用校验代码） |
-| `src/main/remoteValidate.ts` | `validateConnection`、新旧 spec 兼容；危险参数表与 douchat-host 共用 |
-| `src/main/localAgentConnection.ts` | `connect` 接收进程工厂 |
-| `src/main/localAgentRuntime.ts` | SSH 通过 `connectionManager.transport()` 取传输；connectionPlan、缓存 key、RemoteRun 贯通完整工作区绑定 |
-| `src/main/localWorkspaces.ts` / `runtime.ts` | 工作区完整绑定与 fingerprint、prewarm、限定范围的目录锁、提示词；`performSocialTask` 按 `roomId` 取共享房间的 agent 工作区；`performSocialTask` 与 `permissions` 抽出可在 host 侧复用的部分 |
+| `src/main/remote/sshTransport.ts` | 由现有 4 个 remote* 文件重组，SSH 传输实现 |
+| `src/main/remote/daemonRelay.ts`（新） | 守护进程传输：签名 `relay.open`，把脚本、stdin、eof/kill 打包成帧发往中继，按 seq/ack 取回 out/err/exit；对 `localAgentConnection` 暴露与 ssh 子进程相同的流接口 |
+| `src/main/remote/daemonClient.ts`（新） | 注册令牌与安装命令（`installCommand`、`hostDownloadBase`）、等待上线、保存/取消注册（取消时签名吊销）、主机在线状态缓存、签名封装 |
+| `src/main/remote/ownerSigning.ts`（新） | 设备密钥安全存储、签名 envelope；B 端用公钥校验并以 `seen.json` 防重放 |
+| `src/main/remoteWorkspace.ts`（新） | 远端目录浏览、校验、黑名单（SSH 与 douchat-host 共用） |
+| `src/main/remoteValidate.ts` | `validateConnection`、新旧 spec 兼容 |
+| `src/main/localAgentConnection.ts` | `connect` 接收进程工厂（ssh 子进程或中继流） |
+| `src/main/localAgentRuntime.ts` | 通过 `connectionManager.transport()` 取传输；connectionPlan、缓存 key、RemoteRun 贯通完整工作区绑定 |
+| `src/main/localWorkspaces.ts` / `runtime.ts` | 工作区完整绑定与 fingerprint、prewarm、限定范围的目录锁 |
 | `src/main/localAgents.ts` | 远程 agent 引用 `connectionId`；探测改为按连接 |
-| `src/main/index.ts` / preload | 5.4 的 IPC；`choose-conversation-workspace` 拒绝纯远程会话 |
-| `src/renderer/.../ConnectionsPanel.tsx`（新） | 连接页、添加向导 |
+| `src/main/index.ts` / preload | 5.4 的 IPC；`choose-conversation-workspace` 拒绝纯远程会话；非 SSH 成员标记 `noTerminal` |
+| `src/renderer/.../ConnectionsPanel.tsx`（新） | 连接页、添加向导（安装命令、指纹核对、等待上线、扫描 agent）；daemon 连接的「在终端打开」置灰，提供「复制卸载命令」 |
 | `src/renderer/.../RemoteDirectoryPicker.tsx`（新） | 远端目录浏览 |
-| `ConversationWorkspaceSetting.tsx` / `LocalAgentEditor.tsx` / `SettingsPanel.tsx` / `ChatPane.tsx` | 按位置分流；编辑器选连接；设置入口；守护进程 agent 的流式显示、审批卡片标注连接名、停止按钮 |
-| `host/`（新，TS） | `douchat-host`：复用 main 的执行代码，实现 social 执行端主循环、无界面的 `authorize`（写审批请求）、进度上报、中断、控制消息、`workspaces.json`；esbuild + Node SEA 打包；launchd / systemd 配置生成（显式 PATH）、`setup` / `upgrade` / `doctor` / `uninstall` 子命令、版本目录与软链接切换；`install.sh`、minisign 签名流水线 |
-| douchat-tanstack `src/config/db/schema.*.ts` + `drizzle/` | 新增 remote_host、social_executor_binding、social_task_execution、social_channel_cursor 及索引/迁移（三套 schema）；social_message 保留现有结构 |
-| douchat-tanstack `src/modules/social/host.ts`（新） | 注册/设备信任分发、主机令牌、权威绑定 CAS、租约、签名配置/审批、附件下载、控制游标、清理与限速 |
-| douchat-tanstack `src/modules/social/service.ts` | `heartbeat` / `watch` / `tasks` / `claim` / `complete` / `delegate` 支持主机 scope；`messages`、`socialSnapshot`、`claim` 历史、`tasks` 排除子消息 status；`create-room` 支持 `kind: 'agent'`；新增 `host-*`、`task-*` action |
-| douchat-tanstack 桌面登录 + `schema.*.ts` | `desktop_device` 表、`desktop_session.device_id`；登录时校验设备公钥签名，令牌鉴权返回 deviceId |
-| `src/main/deviceIdentity.ts`（新） | 桌面 deviceId 与设备密钥的生成、安全存储，登录时提交；与 `ownerSigning` 共用 |
-| douchat-tanstack `src/routes/api/host/channel.ts`（新） | 主机端入口，认 `dhh_` 令牌；桌面端继续走现有 `src/routes/api/desktop-auth/social.ts` |
-| douchat-tanstack `src/modules/social/notifications.ts` | 保留 roomWake / notifyRoom 底层订阅；host.ts 新增基于持久化游标与子消息状态的等待函数 |
-| `src/shared/types.ts`（6.7） | `RemoteGuiProbe`、`AppSettings.allowRemoteLocalBrowser`、`ComputerSession.source` |
-| `src/main/runtime.ts`（6.7） | 远程 S1 条件注入原生 Computer Use 提示；审批卡片标注 host；S3 工具白名单与逐次审批 |
-| `src/main/computer.ts`（6.7） | 账号/连接/目标版本/agent 独立 partition 和会话 key、关联数据清理、HTTPS 远端帧预览 |
-| `src/main/remoteSkillBridge.ts`（6.7） | S3 浏览器工具白名单 |
-| `src/main/remote/ownerSigning.ts` / `remoteApprovals.ts`（新） | 设备密钥安全存储、签名 envelope、远程审批注册、scope 映射、配置应用确认 |
-| `host/installer`（新，P3） | 原生安装器：下载、校验、升级、修复、回滚、崩溃恢复 |
-| `host/desk`、`host/display`（新，6.7） | GUI 探测、`permissions` 子命令、Xvfb 管理、`desk` CLI、帧推送 |
+| `ConversationWorkspaceSetting.tsx` / `LocalAgentEditor.tsx` / `SettingsPanel.tsx` | 按位置分流；编辑器选连接；daemon 成员的终端按钮置灰 |
+| `host/src/`（新，TS） | `douchat-host`：`relay.ts`（长轮询取帧、spawn `/bin/sh`、回写输出）、`verify.ts` / `fingerprint.ts`（签名校验与指纹）、`state.ts`、`client.ts`、`service.ts`（systemd / launchd / 后台进程、日志轮转）、`cli.ts`（`setup` / `run` / `service` / `upgrade` / `doctor` / `status` / `uninstall`） |
+| `host/install.sh`（新） | POSIX 安装脚本：非 root、按需下载 Node、sha256 校验、版本目录与软链接切换、注册并安装服务 |
+| `scripts/build-host.mjs`（新） | esbuild 打包 `douchat-host.mjs`，生成 `manifest.json`；`--publish <dir>` 发布到服务端静态目录 |
+| douchat-tanstack `src/modules/social/host.ts` | 注册令牌、主机令牌（`dhh_`）、心跳在线、吊销 |
+| douchat-tanstack `src/modules/social/relay.ts`（新） | 中继：流状态 `x-relay-new/open/closed`、帧 seq/ack、限额与超时清理 |
+| douchat-tanstack `public/host/`（发布产物，不入库） | `install.sh`、`douchat-host.mjs`、`manifest.json` |
+
+暂缓（自主执行模式与后续扩展，对应 6.4–6.8）：
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/main/remote/remoteApprovals.ts` | B 侧审批的签名应答；中继方案下审批在 A 端，未启用 |
+| douchat-tanstack schema + `drizzle/` | remote_host 之外的 social_executor_binding、social_task_execution、social_channel_cursor；social `heartbeat` / `tasks` / `claim` 的主机 scope |
+| `src/main/deviceIdentity.ts` + douchat-tanstack `desktop_device` | 主人多设备独立登记与信任分发 |
+| `host/` 执行端 | social 执行端主循环、无界面 `authorize`、附件下载、`workspaces.json`、Node SEA 单文件、minisign 签名 |
+| 6.7 Computer Use 相关（`runtime.ts`、`computer.ts`、`remoteSkillBridge.ts`、`host/desk`、`host/display`） | S1/S2/S3 |
+| `host/installer` | 原生安装器 |
 
 ## 9. 测试与验收
 
 - P0 工作区：远程成员不能打开本机选择器；单聊/群聊按成员生效；本机旧 workspacePath 回退、远端不回退；connectionPlan、RemoteRun、Codex cwd 与 prewarm 使用同一绑定；同一路径换连接、编辑 SSH 目标、daemon 版本变化均失效并开新 thread，托管目录 fingerprint 也随目标变化；远端路径不进入本机文件工具；非法/符号链接/敏感目录及其祖先路径被拒，默认托管分支正常工作。
 - 锁：同一桌面进程同一连接内相同真实目录串行，不同会话/agent 均覆盖；B 单实例锁和进程内目录串行；不同连接、SSH/daemon 重叠只验证 UI 风险提示，不声称分布式互斥。
 - P1 迁移：去重和 allowSharing 权限不扩大；在计划落盘、连接落盘、agent registry 落盘、工作区归属迁移及完成标记各阶段模拟崩溃，重启不生成新 ID、不产生孤立引用、不丢旧路径；源文件被修改时停止恢复、不覆盖；停用/删除两种模式、退避、恶意扫描输出均覆盖。
+- P2 中继：A 离线时任务保持 pending，上线后执行，与 SSH 一致；B 离线 60 秒判定离线、A 失联 120 秒 B 杀进程树；签名篡改、过期、重放（含 B 重启后）均拒绝；帧按 seq 不重不漏，未 ack 帧在 B 重连后重投，未被领取的 new 流 2 分钟关闭；单帧/单次发送/未确认帧/每主机流数/脚本大小超限拒绝；kill 帧终止远端进程树；吊销主机后 B 以 0 退出且服务不再拉起。
+- P2 安装：`install.sh` 拒绝 root、非 https 下载地址（localhost 除外）、sha256 不符和版本自检失败，不切换 `current`；重复执行幂等，`upgrade` 只保留当前和上一个版本；systemd 用户单元（含 linger）与 launchd agent 开机自启、崩溃重启；无服务管理器时后台进程可 `service stop`；指纹在 `setup` 时人工核对，`--yes` 跳过；关闭向导未保存时主机被吊销；`doctor` 能定位离线和 CLI 不可用。
+- 暂缓项（自主执行模式，启用前验收）：
 - P2 绑定：同账号其它桌面、无 deviceId 的旧客户端、其它 host 均不能 tasks/claim/heartbeat/complete 已绑定 agent；两个 host 并发绑定、改绑与 claim 竞争、同任务并发 claim 各只成功一个；配置未确认不执行；无绑定旧 agent 保持兼容，首次绑定旧 running 按明确规则失败。事务用例覆盖 SQLite / Postgres / MySQL 的实际生产目标，不能只以 SQLite 通过代替生产 DB 验收。
 - P2 生命周期：显式切换 pending 留给新执行端，running 一律 failed「执行端已变更，任务未完成」；停用/吊销/60s 失联均不回退 A；45s 在线 UI 不提前撤租；迟到 heartbeat 不复活 claim；B 收到 401 或 60s 无续租杀进程树，晚到成功响应不恢复；旧 complete 被拒且 outbox 不无限重发；重启只发布已持久结果/中断失败，不重跑。
 - P2 签名：服务端替换初始公钥或新增未获信任设备失败；多台主人设备独立登记、签名撤销和 B 本地重新配对；篡改审批参数、method、host/task/claim/bindingRevision、权限版本、过期时间或签名均拒绝；同一 requestId 幂等、跨任务重放和进程重启后的重放被拒；服务端伪造任务仍不能扩大本地白名单或伪造 ask 审批，不把此用例理解为能认证群任务发送者。
@@ -796,12 +776,14 @@ export interface RemoteTransport {
 | --- | --- | --- |
 | P0 | 工作区完整绑定 `{ path, executionTargetId, targetRevision }`；纳入 fingerprint；贯通 runtime、connectionPlan、RemoteRun、prewarm；legacy SSH 目标校验和进程内目录串行 | 无，可单独发版 |
 | P1 | SSH 传输抽象（第 7 节）+ 连接模块；目标版本、迁移阶段恢复和引用校验；锁承诺仍限同一桌面进程/连接 | P0 |
-| P2 | 先落实 6.8 协议：权威绑定/CAS、任务执行租约、持久化控制游标、主人多设备签名与远程审批；再实现 host（TS + Node SEA）、安装/升级、agent 私聊、历史附件下载、A 侧进度/审批/中断/工作区；配置应用确认及 adapter 能力矩阵。服务端先发布，桌面检测协议版本/能力齐全才展示。S1 单独 spike，通过后增量开放，不阻塞基础守护进程 | P1；6.8 协议及生产 DB/长轮询能力验收 |
-| P3（可选） | 通过 SSH 一键安装守护进程；独立原生安装器（6.2）；守护进程 agent 端到端加密（6.6）；6.7 S2 Linux 虚拟桌面；6.7 S3 远程操控本机 Douchat 浏览器；按需评估 Durable Objects WebSocket 替换长轮询以降延迟 | P2 |
+| P2（已实现） | 守护进程纯中继（6.1，对标 SSH）：服务端 relay、A 侧 daemonRelay 传输、`douchat-host` 中继端与签名校验；`install.sh` + systemd / launchd 服务、`upgrade` / `doctor`；注册向导与取消吊销；daemon 连接无终端（置灰） | P1 |
+| P2.x | minisign 签名发布产物；Node SEA 单文件；daemon 连接的交互终端；生产部署下长轮询时限验收 | P2 |
+| P3（可选） | B 自主执行模式（6.4、6.5、6.8：绑定/CAS、租约、控制游标、多设备签名与远程审批、附件下载）；通过 SSH 一键安装守护进程；原生安装器；端到端加密（6.6）；6.7 Computer Use S1/S2/S3；按需评估 WebSocket 替换长轮询 | P2 |
 
 ## 11. 发布前置条件与运行参数
 
-- P2 发布前明确生产部署和数据库，验证绑定 CAS、租约扫描、跨实例控制通知及清理。Cloudflare Workers 使用 Cron Trigger，Node 部署使用受控的定时任务；按实际部署验证长轮询时限与一致性，不以本地 SQLite 通过替代生产验收。
+- 守护进程中继发布前：douchat-tanstack 需在 `<serviceUrl>/host/` 提供 `install.sh`、`douchat-host.mjs`、`manifest.json`（`npm run build:host` 生成，`publish:host:local` 复制到 `../douchat-tanstack/public/host`，生产由发布流程上传）；下载地址必须是 https，可用 `DOUCHAT_HOST_DOWNLOAD_URL` 覆盖。产物目前只有 manifest 的 sha256 校验，manifest 与脚本同源，不能防服务端被篡改；正式对外前补 minisign 签名，公钥内置于 `install.sh` 与 `upgrade`。验证生产部署下长轮询时限、跨实例唤醒与 closed 流 / 未确认帧的清理。
+- 自主执行模式启用前明确生产部署和数据库，验证绑定 CAS、租约扫描、跨实例控制通知及清理。Cloudflare Workers 使用 Cron Trigger，Node 部署使用受控的定时任务；按实际部署验证长轮询时限与一致性，不以本地 SQLite 通过替代生产验收。
 - S1 先验证 6.7.2 的插件可用性、TCC 授权主体与同账号并发限制；未通过时保持 unsupported，不阻塞基础守护进程发布。
 - P3 为可选扩展，S2、S3、端到端加密及独立安装器分别验收、独立开放，不作为 P0–P2 的交付依赖。
-- 60 秒租约、附件配额和帧限额为默认参数，可根据压测调整。调整不得改变失联停止、不自动重跑、不回退本机和签名审批的原则。
+- 中继限额（单帧 4MB、单次发送 64 帧/12MB、单次响应 8MB、每方向 512 个未确认帧、每主机 64 条流、脚本 512KB）和超时（closed 流 2 分钟、未确认帧 10 分钟、在线 45 秒、A 判定离线 60 秒、B 判定 A 失联 120 秒），以及 60 秒租约、附件配额和帧限额为默认参数，可根据压测调整。调整不得改变失联停止、不自动重跑、不回退本机和签名审批的原则。

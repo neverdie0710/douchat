@@ -7097,3 +7097,7 @@ html.native-dialog-window,
 /* Plain muted text like .local-agent-version next to it. */
 .local-agent-remote-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .agent-select-host { margin-left: 6px; color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
+.daemon-command { display: flex; align-items: flex-start; gap: 8px; margin: 6px 0 10px; }
+.daemon-command code { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); font-size: 12px; word-break: break-all; white-space: pre-wrap; user-select: all; }
+.daemon-command button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+.typing-remote-text { display: block; margin-top: 6px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--ink); font-size: calc(13px * var(--font-scale, .92)); line-height: 1.5; }

@@ -5,7 +5,7 @@ import { createSkillInstallationTools, skillInstallationPrompt } from './skillIn
 import { openLocalSkillBridge } from './localSkillBridge'
 import { remoteBridgeUnavailablePrompt } from './remoteSkillBridge'
 import { openSshTransport } from './remote/sshTransport'
-import { cachedRemoteAgentLabel, cachedRemoteAgentSpec, remoteAgentPlacement, remoteAgentSpec } from './localAgents'
+import { cachedRemoteAgentLabel, cachedRemoteAgentSpec, remoteAgentPlacement } from './localAgents'
 import { remoteHostLabel } from './remoteValidate'
 import type { AgentWorkspaceBinding, ExecutionTarget, RemoteAgentSpec } from '../shared/types'
 import { editableIdentityFiles, identityFileSnapshot, identityEditingPrompt, localAgentFileEdits, FILE_EDIT_OPEN, FILE_EDIT_CLOSE, type AgentFileEdit } from '../shared/agentFileEdits'
@@ -411,7 +411,28 @@ export class DouchatRuntime {
   private readonly sharedFileUrls = new Map<string, Set<string>>()
   private readonly generatedFiles = new Map<string, string[]>()
   private readonly permissions = new AgentPermissionBroker(() => this.store.currentAccountId, () => this.emit())
-  resolveAgentPermission(id: string, allow: import('../shared/agentPermissions').PermissionApproval): void { this.permissions.resolve(id, allow) }
+  async resolveAgentPermission(id: string, allow: import('../shared/agentPermissions').PermissionApproval): Promise<void> {
+    // Requests raised on a douchat-host are answered with an owner-signed decision.
+    if (id.startsWith('remote:')) {
+      if (!this.remoteBridge) throw new Error('This request was already answered or has expired.')
+      await this.remoteBridge.resolveApproval(id, allow)
+      return
+    }
+    this.permissions.resolve(id, allow)
+  }
+
+  private remoteBridge?: import('./remote/daemonClient').RemoteExecutionBridge
+  private agentRoomLinker?: (conversationId: string) => Promise<string>
+  /** Agents on a douchat-host: their progress and approvals come from the service, never a local process. */
+  setRemoteBridge(bridge: import('./remote/daemonClient').RemoteExecutionBridge, linkAgentRoom: (conversationId: string) => Promise<string>): void {
+    this.remoteBridge = bridge
+    this.agentRoomLinker = linkAgentRoom
+  }
+  remoteChanged(): void { this.emit() }
+  private isDaemonConversation(conversation: Conversation): boolean {
+    return Boolean(this.remoteBridge) && conversation.type === 'direct' && !conversation.person && conversation.agentIds.length === 1
+      && !conversation.id.startsWith('im-') && this.remoteBridge!.isDaemonAgent(conversation.agentIds[0])
+  }
 
   private humanSender?: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) => Promise<void>
   setHumanSender(sender: (conversationId: string, text: string, images?: MessageImageInput[], files?: MessageFileInput[], mentions?: SelectedMention[]) => Promise<void>): void {
@@ -538,11 +559,12 @@ export class DouchatRuntime {
         Object.fromEntries(Object.entries(this.store.groupHealth(conversation.id)).filter(([id]) => conversation.agentIds.includes(id)).map(([id, health]) => [id, { status: health.status, checkedAt: health.checkedAt }]))])),
       groupGames: [...new Map(this.store.groupGames().map(game => [`${game.conversationId}:${game.topicId}`, gameView(game)])).values()],
       groupWorkflows: [...new Map(this.store.groupWorkflows().map(workflow => [`${workflow.conversationId}:${workflow.topicId}`, workflowView(workflow)])).values()],
-      permissionRequests: this.permissions.snapshot(),
+      permissionRequests: [...this.permissions.snapshot(), ...(this.remoteBridge?.approvals() ?? [])],
       conversations,
       messages: this.store.recentMessages().filter((message) => conversationIds.has(message.conversationId)),
       privateMessages: this.store.privateMessages.filter((message) => conversationIds.has(message.conversationId)),
-      activity: [...this.activity.values()].filter((activity) => conversationIds.has(activity.conversationId)),
+      activity: [...this.activity.values(), ...(this.remoteBridge?.activity().filter(remote => !this.activity.has(remote.conversationId)) ?? [])]
+        .filter((activity) => conversationIds.has(activity.conversationId)),
       computers: this.computer.snapshots().filter((computer) => agents.some((agent) => agent.id === computer.agentId)),
       routines,
       runs,
@@ -2953,7 +2975,9 @@ export class DouchatRuntime {
         total += file.data.byteLength
         if (total > MAX_IM_FILE_BYTES) throw new Error('附件总大小不能超过 20 MB。')
       }
-      if (conversation.remoteRoomId) {
+      // A daemon agent's chat becomes its private agent room on first send; it never runs here.
+      if (!conversation.remoteRoomId && this.isDaemonConversation(conversation)) await this.agentRoomLinker!(conversationId)
+      if (conversation.remoteRoomId || this.store.conversation(conversationId)?.remoteRoomId) {
         if (!this.humanSender) throw new Error('Remote chat unavailable')
         await this.humanSender(conversationId, text, images, files, mentions)
         return
@@ -2993,6 +3017,7 @@ export class DouchatRuntime {
       if (owner !== this.store.currentAccountId) throw new Error('Account changed')
       const conversation = this.store.conversation(conversationId)
       if (!conversation || conversation.ownerId !== owner || conversation.type !== 'direct' || conversation.agentIds[0] !== agentId) throw new Error('Contact not found')
+      if (this.remoteBridge?.isDaemonAgent(agentId)) throw new IMMediaError('这个 agent 运行在服务器的 douchat-host 上，暂不支持通过 IM 渠道对话。')
       const receipt = receiptId ? this.store.imReceipt(receiptId, conversationId) : undefined
       if (receiptId && !receipt) throw new Error('IM receipt not found')
       const replies: ChatMessage[] = []
@@ -3146,6 +3171,8 @@ export class DouchatRuntime {
   }
 
   stopConversation(conversationId: string): void {
+    // Cancel is a signed request; the host stops the process and reports back.
+    void this.remoteBridge?.cancelConversation(conversationId).catch(() => { /* The progress watch keeps showing the task. */ })
     this.greetings.get(conversationId)?.abort()
     this.greetings.delete(conversationId)
     for (const turn of this.imTurns.values()) if (turn.conversationId === conversationId) turn.abort.abort()
@@ -3983,7 +4010,7 @@ export class DouchatRuntime {
     const conversation = this.store.conversation(conversationId)
     if (!conversation || !this.store.currentAccountId || conversation.ownerId !== this.store.currentAccountId) return
     // Shared rooms only run explicitly addressed tasks through server claims.
-    if (conversation.remoteRoomId) return
+    if (conversation.remoteRoomId || this.isDaemonConversation(conversation)) return
     const topicId = this.store.activeTopicId(conversationId)
     if (this.store.contextMessages(conversationId, topicId).length || this.greetings.has(conversationId)) return
     const group = conversation.type === 'group' ? this.group(conversation) : undefined
@@ -4310,7 +4337,7 @@ Not sure where to start? Tell me what you'd like to accomplish, and we'll try it
 
 /** Remote agents cannot see the human's computer; they must not claim otherwise. */
 function remoteAgentPrompt(host: string): string {
-  return `You are running on the server ${host} over SSH, not on the human's computer. You cannot access the human's local files, desktop, browser or applications, and paths you see refer to the server. Do not create douchat-file: or file: links; Douchat shows them as plain text. Deliver files through the outbox directory or Douchat file tools described in this request.`
+  return `You are running on the remote server ${host}, not on the human's computer. You cannot access the human's local files, desktop, browser or applications, and paths you see refer to the server. Do not create douchat-file: or file: links; Douchat shows them as plain text. Deliver files through the outbox directory or Douchat file tools described in this request.`
 }
 
 /** Downgrade local-file Markdown links from a remote reply to plain text. */

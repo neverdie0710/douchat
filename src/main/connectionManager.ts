@@ -11,9 +11,30 @@ import { randomUUID } from 'node:crypto'
 export const RETRY_DELAYS = [5_000, 15_000, 60_000, 300_000]
 export const KEEPALIVE_MS = 60_000
 
+/** What the manager needs from the daemon client; daemons are reached through douchat.ai, not SSH. */
+export interface DaemonBackend {
+  /** Resolves when the host is online; rejects with a readable reason otherwise. */
+  check(connection: RemoteConnection): Promise<number>
+  discover(connection: RemoteConnection, signal?: AbortSignal): Promise<DiscoveredRemoteAgent[]>
+  /** Owner-signed revoke; the host stops and its token is invalidated. */
+  revoke(connection: RemoteConnection): Promise<void>
+}
+
+export function connectionLabel(connection: RemoteConnection): string {
+  if (connection.kind === 'daemon') {
+    const info = connection.daemon?.info
+    return [info?.os, info?.arch].filter(Boolean).join(' ') || 'douchat-host'
+  }
+  return connection.ssh ? remoteHostLabel(connection.ssh) : ''
+}
+
 /** A probe through a disabled or edited connection must never reach the server. */
 function baseSpec(connection: RemoteConnection) {
   return connectionSpec(connection, { adapter: 'custom', executable: 'true', args: [] })
+}
+/** Closes SSH multiplexing for an SSH connection; daemon connections have nothing to close. */
+async function closeSsh(connection: RemoteConnection): Promise<void> {
+  if (connection.kind === 'ssh') await closeRemoteConnections(baseSpec(connection)).catch(() => {})
 }
 
 /** "<name>\t<absolute path>\t<version>" lines from the discovery script. The server is untrusted. */
@@ -45,7 +66,17 @@ export class ConnectionManager {
   private readonly entries = new Map<string, Entry>()
   private readonly listeners = new Set<(id: string, status: ConnectionStatus) => void>()
   private stopped = false
-  constructor(readonly store: ConnectionStore, private readonly agentsOn: (id: string) => Promise<string[]>, private readonly check: (connection: RemoteConnection) => Promise<number> = defaultCheck) {}
+  private daemon?: DaemonBackend
+  constructor(readonly store: ConnectionStore, private readonly agentsOn: (id: string) => Promise<string[]>, private readonly sshCheck: (connection: RemoteConnection) => Promise<number> = defaultCheck) {}
+
+  setDaemonBackend(backend: DaemonBackend): void { this.daemon = backend }
+  private daemonBackend(): DaemonBackend {
+    if (!this.daemon) throw new Error('Daemon connections are unavailable.')
+    return this.daemon
+  }
+  private check(connection: RemoteConnection): Promise<number> {
+    return connection.kind === 'daemon' ? this.daemonBackend().check(connection) : this.sshCheck(connection)
+  }
 
   onStatus(listener: (id: string, status: ConnectionStatus) => void): () => void {
     this.listeners.add(listener)
@@ -57,7 +88,7 @@ export class ConnectionManager {
   async list(): Promise<ConnectionView[]> {
     const connections = await this.store.list()
     return Promise.all(connections.map(async connection => ({
-      ...connection, label: remoteHostLabel(connection.ssh), agentIds: await this.agentsOn(connection.id),
+      ...connection, label: connectionLabel(connection), agentIds: await this.agentsOn(connection.id),
       status: connection.enabled ? this.entries.get(connection.id)?.status ?? { state: 'connecting' } : { state: 'disabled' }
     })))
   }
@@ -80,6 +111,7 @@ export class ConnectionManager {
 
   async save(input: unknown): Promise<RemoteConnection> {
     const value = validateConnectionInput(input)
+    if (value.id && (await this.store.get(value.id))?.kind === 'daemon') throw new Error('A daemon connection is renamed from its own settings.')
     // Resolve the identity file on this computer; renderer checks are only hints.
     const spec = await validateRemoteSpec({ transport: 'ssh', ...value.ssh, adapter: 'custom', executable: 'true', args: [] })
     const ssh: RemoteConnectionInput['ssh'] = { ...value.ssh, ...(spec.identityFile ? { identityFile: spec.identityFile } : {}) }
@@ -87,7 +119,7 @@ export class ConnectionManager {
     const saved = await this.store.save({ ...value, ssh })
     if (previous && previous.targetRevision !== saved.targetRevision) {
       // The old target is gone: close its multiplexed connection and forget its probe.
-      await closeRemoteConnections(baseSpec(previous)).catch(() => {})
+      await closeSsh(previous)
       forgetRemoteProbes()
     }
     if (saved.enabled) void this.refresh(saved.id)
@@ -100,17 +132,26 @@ export class ConnectionManager {
     else {
       this.clear(id)
       this.publish(id, { state: 'disabled' })
-      await closeRemoteConnections(baseSpec(saved)).catch(() => {})
+      await closeSsh(saved)
     }
     return saved
   }
 
   async remove(id: string): Promise<void> {
     const connection = await this.store.get(id)
+    // A daemon is revoked first: removing only the local entry would leave it running.
+    if (connection?.kind === 'daemon') await this.daemonBackend().revoke(connection)
     await this.store.remove(id)
     this.clear(id)
     this.entries.delete(id)
-    if (connection) await closeRemoteConnections(baseSpec(connection)).catch(() => {})
+    if (connection) await closeSsh(connection)
+  }
+
+  /** Saves a newly enrolled host (or renames a known one) and starts checking it. */
+  async saveDaemon(input: Parameters<ConnectionStore['saveDaemon']>[0]): Promise<RemoteConnection> {
+    const saved = await this.store.saveDaemon(input)
+    if (saved.enabled) void this.refresh(saved.id)
+    return saved
   }
 
   private clear(id: string): void { clearTimeout(this.entries.get(id)?.timer) }
@@ -185,7 +226,11 @@ export class ConnectionManager {
       catch (error) { steps.push({ name, passed: false, message: error instanceof Error ? error.message : String(error) }); return false }
     }
     let home = ''
-    const ok = await step('ssh', async () => { await remoteCheck(spec, 'true\n', { signal, timeoutMs: 20_000 }) })
+    // douchat-host runs the same checks as SSH once the host is online; only the first step differs.
+    const reach = connection.kind === 'daemon'
+      ? step('host', async () => { await this.daemonBackend().check(connection); await remoteCheck(spec, 'true\n', { signal, timeoutMs: 30_000 }); return connectionLabel(connection) })
+      : step('ssh', async () => { await remoteCheck(spec, 'true\n', { signal, timeoutMs: 20_000 }) })
+    const ok = await reach
       && await step('shell', async () => {
         const output = (await remoteCheck(spec, 'set -u\ncommand -v base64 >/dev/null || { echo "base64 is missing on the server" >&2; exit 3; }\nuname -s\n', { signal, timeoutMs: 20_000, maxStdout: 256 })).toString('utf8').trim()
         return output
@@ -205,7 +250,9 @@ export class ConnectionManager {
     // Optional: without it agents still run, but Douchat skill tools are unavailable on this server.
     if (ok) await step('forwarding', async () => {
       const bridge = await (await openSshTransport(spec, signal)).openBridge([], signal ?? new AbortController().signal)
-      if (!bridge) throw new Error('This server does not allow UNIX-socket forwarding over SSH (AllowStreamLocalForwarding). Agents still run, but Douchat skill tools are unavailable.')
+      if (!bridge) throw new Error(connection.kind === 'daemon'
+        ? 'douchat-host could not open the skill-bridge socket in ~/.douchat-remote. Agents still run, but Douchat skill tools are unavailable.'
+        : 'This server does not allow UNIX-socket forwarding over SSH (AllowStreamLocalForwarding). Agents still run, but Douchat skill tools are unavailable.')
       bridge.close()
     })
     const passed = ok

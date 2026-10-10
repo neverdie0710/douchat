@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import { resolveExecutable, executableEnvironment } from './shellPath'
 import { normalizeRemoteSpec, remoteHostLabel } from './remoteValidate'
 import { ConnectionStore, connectionSpec, connectionTargetId, legacyTargetId } from './connectionStore'
+import { connectionLabel } from './connectionManager'
 import { forgetRemoteProbes, probeRemoteAgent } from './remoteTransport'
 
 const execFileAsync = promisify(execFile)
@@ -58,18 +59,23 @@ function placementTarget(definition: CustomLocalAgentDefinition, connection: Rem
   // A migrated agent keeps its P0 identity while it stays on this, unedited,
   // connection: its saved folders and native threads stay valid. Saved folders
   // are also re-bound to the connection at startup (workspaceMigration).
-  if (legacy && legacy.connectionId === connection.id && connection.targetRevision === 0) {
+  if (legacy && connection.ssh && legacy.connectionId === connection.id && connection.targetRevision === 0) {
     return { executionTargetId: legacyTargetId(connection.ssh), targetRevision: legacy.revision }
   }
   return { executionTargetId: connectionTargetId(connection), targetRevision: connection.targetRevision }
 }
 
-async function placementOf(definition: CustomLocalAgentDefinition, connections: RemoteConnection[]): Promise<RemotePlacementInfo | { unavailable: 'disabled' | 'missing'; connectionId: string } | undefined> {
+/** An agent bound to a douchat-host: its tasks are claimed by the host, never run here. */
+export interface DaemonPlacementInfo { daemon: { connectionId: string; hostId: string; label: string }; connection: RemoteConnection; binding: RemoteAgentBinding }
+
+async function placementOf(definition: CustomLocalAgentDefinition, connections: RemoteConnection[]): Promise<RemotePlacementInfo | DaemonPlacementInfo | { unavailable: 'disabled' | 'missing'; connectionId: string } | undefined> {
   const binding = definition.remoteAgent
   if (!binding) return undefined
   const connection = connections.find(item => item.id === binding.connectionId)
   if (!connection) return { unavailable: 'missing', connectionId: binding.connectionId }
   if (!connection.enabled) return { unavailable: 'disabled', connectionId: connection.id }
+  // A douchat-host connection runs the agent exactly like SSH: this computer
+  // orchestrates, and only the transport differs (remote/daemonRelay.ts).
   return { spec: connectionSpec(connection, binding), target: placementTarget(definition, connection), connection }
 }
 
@@ -81,14 +87,16 @@ async function customDefinitions(): Promise<CustomLocalAgentDefinition[]> {
     definitions = Array.isArray(parsed) ? parsed.map(customDefinition).filter((item): item is CustomLocalAgentDefinition => Boolean(item)).slice(0, 75) : []
   } catch { definitions = [] }
   const connections = connectionStore ? await connectionStore.list().catch(() => []) : []
-  remoteSpecs.clear(); remoteTargets.clear(); remoteLabels.clear()
+  remoteSpecs.clear(); remoteTargets.clear(); remoteLabels.clear(); daemonAgents.clear()
   for (const item of definitions) {
     const placement = await placementOf(item, connections)
     if (placement && 'spec' in placement) { remoteSpecs.set(item.id, placement.spec); remoteTargets.set(item.id, placement.target) }
     // Remote even while unavailable: earlier replies stay marked as coming from a server.
     if (item.remoteAgent) {
       const connection = connections.find(entry => entry.id === item.remoteAgent!.connectionId)
-      remoteLabels.set(item.id, connection ? remoteHostLabel(connection.ssh) : 'a removed server')
+      remoteLabels.set(item.id, connection ? (connection.kind === 'daemon' ? connection.name : connectionLabel(connection)) : 'a removed server')
+      // Daemon agents are no longer host-claimed (P2 relay): they run from here like SSH agents,
+      // so `daemonAgents` stays empty and nothing routes them to a host executor.
     }
   }
   return definitions
@@ -98,6 +106,16 @@ async function customDefinitions(): Promise<CustomLocalAgentDefinition[]> {
 const remoteSpecs = new Map<string, RemoteAgentSpec>()
 const remoteTargets = new Map<string, ExecutionTarget>()
 const remoteLabels = new Map<string, string>()
+const daemonAgents = new Map<string, { connectionId: string; hostId: string; label: string; binding: RemoteAgentBinding; enabled: boolean }>()
+/** Daemon placement of a local agent id from the last registry read (synchronous, for routing). */
+export function cachedDaemonAgent(id: string | undefined): { connectionId: string; hostId: string; label: string; binding: RemoteAgentBinding; enabled: boolean } | undefined {
+  return id ? daemonAgents.get(id) : undefined
+}
+/** Fresh registry read of every daemon-bound local agent. */
+export async function daemonAgentDefinitions(): Promise<Map<string, { connectionId: string; hostId: string; label: string; binding: RemoteAgentBinding; enabled: boolean }>> {
+  await customDefinitions()
+  return new Map(daemonAgents)
+}
 /** Host label of any agent configured to run on a server, available or not. */
 export function cachedRemoteAgentLabel(id: string | undefined): string | undefined {
   return id ? remoteLabels.get(id) : undefined
@@ -113,6 +131,8 @@ export async function remoteAgentPlacement(id: string | undefined): Promise<Remo
   const definition = (await customDefinitions()).find(item => item.id === id)
   if (!definition) return undefined
   const placement = await placementOf(definition, connectionStore ? await connectionStore.list() : [])
+  if (placement && 'daemon' in placement) throw new Error(`This agent runs on the daemon connection "${placement.daemon.label}" and cannot run on this computer.`)
+  if (definition.remoteAgent && daemonAgents.has(definition.id)) throw new Error('This agent\'s daemon connection is turned off. Turn it on in Settings → Connections.')
   if (placement && 'unavailable' in placement) throw new Error(placement.unavailable === 'disabled' ? 'This agent\'s server connection is turned off. Turn it on in Settings → Connections.' : 'This agent\'s server connection was removed. Choose another connection for it in Settings → Agents.')
   return placement
 }
@@ -351,11 +371,15 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
     // Remote agents are not resolved through this computer's PATH; the server is probed at launch.
     if (override?.remoteAgent && isCustom) {
       const placement = await placementOf(override, connections)
+      if (placement && 'daemon' in placement) return { id, name: override.name, command: override.remoteAgent.executable, args: override.remoteAgent.args, avatar: override.avatar,
+        installed: true, discovered: true, version: placement.daemon.label, chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true,
+        connectionId: placement.connection.id, remoteAgent: override.remoteAgent, daemon: placement.daemon } satisfies LocalAgent
+      const daemon = daemonAgents.get(id)
       if (placement && 'spec' in placement) return { ...remoteLocalAgent(id, override.name, override.avatar, placement.spec, placement.target, placement.connection.id), remoteAgent: override.remoteAgent }
       // Kept in the list so the owner can see and fix it; never launched.
       return { id, name: override.name, command: override.remoteAgent.executable, args: override.remoteAgent.args, avatar: override.avatar, installed: false, discovered: true,
         chatSupported: true, status: 'not-found', authentication: 'unchecked', custom: true, connectionId: override.remoteAgent.connectionId,
-        remoteAgent: override.remoteAgent, unavailable: placement?.unavailable ?? 'missing' }
+        remoteAgent: override.remoteAgent, unavailable: placement?.unavailable ?? 'missing', ...(daemon ? { daemon: { connectionId: daemon.connectionId, hostId: daemon.hostId, label: daemon.label } } : {}) }
     }
     name = override?.name ?? name
     command = override?.command ?? command
@@ -389,9 +413,11 @@ function remoteLocalAgent(id: string, name: string, avatar: string | undefined, 
   }
 }
 
-export async function validateLocalAgent(id: string): Promise<LocalAgent> {
+/** A runnable local agent. Daemon agents are refused unless `allowDaemon`: they must never start here. */
+export async function validateLocalAgent(id: string, options: { allowDaemon?: boolean } = {}): Promise<LocalAgent> {
   const agent = (await detectLocalAgents({ version: async () => undefined }, id)).find((item) => item.id === id)
   if (!agent) throw new Error('Unknown local agent')
+  if (agent.daemon && !options.allowDaemon) throw new Error(`${agent.name} runs on the daemon connection "${agent.daemon.label}" and cannot run on this computer.`)
   if (!agent.installed) throw new Error(`${agent.name} is not installed. Refresh Agents in Settings after installing it.`)
   return agent
 }

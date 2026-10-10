@@ -11,8 +11,15 @@ let localAgentsLoaded = false
 /** `loaded` turns true once the first local agent scan has finished, even if it failed. */
 export function setRemoteAgents(agents: LocalAgent[], loaded = true): void {
   localAgentsLoaded = loaded
-  remoteHosts = new Map(agents.filter(agent => agent.remote).map(agent => [agent.id, agent.remote!.host]))
-  remoteAdapters = new Map(agents.filter(agent => agent.remote).map(agent => [agent.id, agent.remote!.adapter]))
+  remoteHosts = new Map(agents.flatMap(agent => agent.daemon ? [[agent.id, agent.daemon.label] as const] : agent.remote ? [[agent.id, agent.remote.host] as const] : []))
+  remoteAdapters = new Map(agents.flatMap(agent => agent.remote ? [[agent.id, agent.remote.adapter] as const] : agent.daemon && agent.remoteAgent ? [[agent.id, agent.remoteAgent.adapter] as const] : []))
+  daemonAgents = new Set(agents.filter(agent => agent.daemon).map(agent => agent.id))
+}
+
+let daemonAgents = new Set<string>()
+/** Agents run by a douchat-host: they keep working while this computer is offline. */
+export function isDaemonAgent(localAgentId?: string): boolean {
+  return Boolean(localAgentId && daemonAgents.has(localAgentId))
 }
 
 /** Whether custom and remote agents can be resolved to their icons yet. */
