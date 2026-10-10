@@ -1,0 +1,64 @@
+name: Publish douchat-host
+
+# A host-v<version> tag builds douchat-host and mirrors it to
+# https://cdn.douchat.ai/host/ (<version>/ immutable, install.sh and latest.txt
+# pointing at it). Publish the host before a desktop release that needs it.
+on:
+  push:
+    tags:
+      - "host-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-host
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check the tag matches HOST_VERSION
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(sed -nE "s/^export const HOST_VERSION = '([^']+)'.*/\1/p" host/src/cli.ts)
+          if [ "host-v$version" != "$RELEASE_TAG" ]; then
+            echo "Tag $RELEASE_TAG does not match HOST_VERSION $version" >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: |
+          npx vitest run src/main/remote/hostRelease.test.ts src/main/remote/daemonClient.test.ts
+          npx tsc --noEmit -p host/tsconfig.json
+
+      - name: Build
+        run: npm run build:host
+
+      - name: Verify the install flow
+        run: sh scripts/check-host-install.sh
+
+      - name: Publish to CDN
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_MAX_ATTEMPTS: "5"
+          AWS_RETRY_MODE: standard
+        run: bash scripts/publish-host.sh host/dist

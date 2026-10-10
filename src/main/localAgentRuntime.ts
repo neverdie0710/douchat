@@ -18,11 +18,12 @@ import { validateLocalAgent } from './localAgents'
 import { spawnEnvironment } from './shellPath'
 import { GrokStream } from './grokStream'
 import { GeminiStream, geminiImagePolicy } from './geminiStream'
-import { localWorkspace, resetLocalWorkspaces } from './localWorkspaces'
+import { localWorkspace, resetLocalWorkspaces, type RemotePlacement } from './localWorkspaces'
 import type { RemoteAgentSpec } from '../shared/types'
 import { RemoteRun, outboxPrompt } from './remoteFileChannel'
-import { assertArgvPrompt, probeRemoteAgent, remoteLaunch, remotePrompt, spawnLaunch } from './remoteTransport'
-import { PROMPT_ARG, customRemoteArguments, launchScript, markPromptArguments, type PromptChannel, type RemoteArg } from './remoteScript'
+import { assertArgvPrompt, remotePrompt } from './remoteTransport'
+import { openSshTransport } from './remote/sshTransport'
+import { PROMPT_ARG, customRemoteArguments, markPromptArguments, type PromptChannel, type RemoteArg, type RemoteWorkspaceRef } from './remoteScript'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
  * Keep the official CLI untouched and retain strict sandbox arguments below. */
@@ -498,13 +499,15 @@ async function executeRemoteAgent(
   config: AgentConfig, agent: LocalAgent, input: RemoteAgentSpec, prompt: string,
   signal: AbortSignal | undefined, inputImages: LocalAgentImage[], options: LocalRunOptions
 ): Promise<LocalAgentReply> {
-  const spec = await probeRemoteAgent(input, signal)
+  const transport = await openSshTransport(input, signal)
+  const spec = transport.spec
   signal?.throwIfAborted()
   const adapter = spec.adapter
   const custom = adapter === 'custom'
   // Same session rule as local agents; the folder lives on the server.
-  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, undefined, { remote: true }) : undefined
-  const run = new RemoteRun(spec, workspace?.remoteKey)
+  const placement = remotePlacement(agent, options)
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, undefined, { remote: placement }) : undefined
+  const run = new RemoteRun(transport, remoteWorkspaceRef(workspace, placement))
   try {
     await run.prepare(signal)
     const imagePaths = await run.uploadImages(inputImages, signal)
@@ -528,13 +531,13 @@ async function executeRemoteAgent(
     let grokStream: GrokStream | undefined
     let geminiStream: GeminiStream | undefined
     const execute = async (accountLogin: boolean): Promise<string> => {
-      const launch = await remoteLaunch(spec, launchScript({
-        runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args, channel, remotePath: spec.remotePath,
-        environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
-      }))
       signal?.throwIfAborted()
+      const child = await transport.spawn({
+        runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args, channel,
+        environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
+      })
+      if (signal?.aborted) { killLocalProcess(child); signal.throwIfAborted() }
       return new Promise<string>((resolve, reject) => {
-        const child = spawnLaunch(launch)
         let stdout = ''
         let stderr = ''
         let bytes = 0
@@ -668,8 +671,10 @@ function conversationMatcher(conversationId: string, topicId?: string, directAge
 /** Close idle processes for this chat after its folder changes. Running turns
  * finish undisturbed; the connection key includes the folder, so later turns
  * never reuse a process started in the old folder. */
-export function releaseIdleLocalAgentConnections(conversationId: string, directAgentIds: string[] = []): void {
-  const matches = conversationMatcher(conversationId, undefined, directAgentIds)
+export function releaseIdleLocalAgentConnections(conversationId: string, directAgentIds: string[] = [], roomId?: string): void {
+  const conversation = conversationMatcher(conversationId, undefined, directAgentIds)
+  const room = roomId ? `:room:${encodeURIComponent(roomId)}` : undefined
+  const matches = (sessionKey: string): boolean => conversation(sessionKey) || Boolean(room && sessionKey.startsWith('social:') && sessionKey.endsWith(room))
   for (const [key, entry] of connections) if (!entry.busy && matches(entry.sessionKey)) evictConnection(key, entry)
 }
 export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = [], owner = ''): void {
@@ -684,7 +689,22 @@ interface ConnectionPlan {
   kind: 'codex' | 'claude'
   options: LocalRunOptions
   remoteSpec?: RemoteAgentSpec
+  placement?: RemotePlacement
   workspace?: ReturnType<typeof localWorkspace>
+}
+
+/** The server identity of a remote run, and the chosen folder if it belongs to
+ * that server at its current revision. A folder from any other target is dropped. */
+function remotePlacement(agent: LocalAgent | undefined, options: LocalRunOptions): RemotePlacement | undefined {
+  if (!agent?.remote) return undefined
+  // Main always resolves the target with the connection; never guess one.
+  if (!agent.remoteTarget) throw new Error('This remote agent has no server connection.')
+  const target = agent.remoteTarget
+  const chosen = options.remoteWorkspace
+  return { target, ...(chosen && chosen.executionTargetId === target.executionTargetId && chosen.targetRevision === target.targetRevision ? { workspace: chosen } : {}) }
+}
+function remoteWorkspaceRef(workspace: ReturnType<typeof localWorkspace> | undefined, placement: RemotePlacement | undefined): RemoteWorkspaceRef {
+  return { ...(workspace ? { key: workspace.remoteKey } : {}), ...(placement?.workspace ? { path: placement.workspace.path } : {}) }
 }
 
 /** Everything that decides which process may serve a turn. Prewarming uses the
@@ -692,18 +712,19 @@ interface ConnectionPlan {
 function connectionPlan(config: AgentConfig, options: LocalRunOptions): ConnectionPlan {
   const remoteSpec = options.agentOverride?.remote
   const kind = connectionKind(config, options)!
-  // Remote sessions never use a folder on this computer; the server folder is derived from the session.
-  if (remoteSpec) options = { ...options, workspaceDirectory: undefined }
-  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory, { remote: Boolean(remoteSpec) }) : undefined
+  // A remote session never uses a folder on this computer, and a local one never a server folder.
+  options = remoteSpec ? { ...options, workspaceDirectory: undefined } : { ...options, remoteWorkspace: undefined }
+  const placement = remotePlacement(options.agentOverride, options)
+  const workspace = options.sessionKey && !options.transient ? localWorkspace(config, options.sessionKey, options.workspaceDirectory, { remote: placement }) : undefined
   if (kind === 'claude' && workspace?.claudeAccountLogin) options = { ...options, claudeAccountLogin: true }
-  const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args, remoteSpec ?? null]
+  const launchSettings = [localAgentSettingsVersion(config.localAgentId!), options.agentOverride?.path, options.agentOverride?.args, remoteSpec ?? null, placement ? [placement.target, placement.workspace?.path ?? null] : null]
   // Include account and complete configuration: edits cannot inherit old persona or login state.
   const keyFor = (accountLogin: boolean | undefined): string => JSON.stringify([launchSettings, config.ownerId, config.id, options.sessionKey, config.localAgentId, config.instructions, config.role, config.name, config.model, config.thinkingLevel, accountLogin, Boolean(options.onApproval), Boolean(options.transient), options.workspaceDirectory ?? null])
   let key = keyFor(options.claudeAccountLogin)
   if (kind === 'claude' && !connections.has(key) && !options.claudeAccountLogin && connections.has(keyFor(true))) {
     key = keyFor(true); options = { ...options, claudeAccountLogin: true }
   }
-  return { key, kind, options, remoteSpec, workspace }
+  return { key, kind, options, remoteSpec, placement, workspace }
 }
 
 function createConnection(config: AgentConfig, plan: ConnectionPlan, signal: AbortSignal | undefined, busy: boolean): ConnectedSession {
@@ -728,17 +749,18 @@ function createConnection(config: AgentConfig, plan: ConnectionPlan, signal: Abo
       const [agent, env, cwd] = await Promise.all([options.agentOverride ?? validateLocalAgent(config.localAgentId!), spawnEnvironment(), directory])
       signal?.throwIfAborted()
       if (remoteSpec) {
-        const spec = await probeRemoteAgent(remoteSpec, signal)
-        const run = new RemoteRun(spec, workspace?.remoteKey)
+        const transport = await openSshTransport(remoteSpec, signal)
+        const spec = transport.spec
+        const run = new RemoteRun(transport, remoteWorkspaceRef(workspace, plan.placement))
         resolveRun(run)
         await run.prepare(signal)
         signal?.throwIfAborted()
         await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
           cwd: run.workspace,
-          launch: async (agentArgs) => remoteLaunch(spec, launchScript({
-            runId: run.id, workspaceKey: run.workspaceKey, executable: spec.executable, args: agentArgs, channel: 'stdin', remotePath: spec.remotePath,
+          spawn: agentArgs => transport.spawn({
+            runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args: agentArgs, channel: 'stdin',
             environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
-          }))
+          })
         })
         return { agent, env, directory: cwd, run }
       }
@@ -850,7 +872,7 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
     evictConnection(key, current)
     if (kind === 'claude' && current.persistent && !options.freshSessionRetry
       && /No conversation found with session ID/i.test(String(error))) {
-      localWorkspace(config, options.sessionKey, options.workspaceDirectory)?.remember(undefined)
+      localWorkspace(config, options.sessionKey, options.workspaceDirectory, { remote: plan.placement })?.remember(undefined)
       return runConnectedAgent(config, prompt, signal, images, { ...options, freshSessionRetry: true })
     }
     if (kind === 'claude' && !options.claudeAccountLogin && !signal?.aborted && current.connection.canRetryAuthentication

@@ -2,25 +2,44 @@ import { agentPermissions } from '../shared/agentPermissions'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { groupMemberSessionId } from '../shared/bot/group'
 import { runLocalAgent } from './localAgentRuntime'
 import { DouchatRuntime } from './runtime'
 import { DouchatStore } from './store'
+import { configureLocalWorkspaces, localExecutionTarget } from './localWorkspaces'
 
 vi.mock('./localAgentRuntime', async (original) => ({ ...await original<object>(), runLocalAgent: vi.fn() }))
+// Agents whose localAgentId starts with "custom:srv" run on a server in these tests.
+const servers = vi.hoisted(() => new Map<string, { executionTargetId: string; targetRevision: number }>())
+vi.mock('./localAgents', async (original) => {
+  const actual = await original<typeof import('./localAgents')>()
+  const spec = (host: string) => ({ transport: 'ssh' as const, host, adapter: 'codex' as const, executable: 'codex', args: [] })
+  return {
+    ...actual,
+    remoteAgentPlacement: async (id?: string) => id && servers.has(id) ? { spec: spec(id.slice(7)), target: servers.get(id)! } : undefined,
+    remoteAgentSpec: async (id?: string) => id && servers.has(id) ? spec(id.slice(7)) : undefined,
+    cachedRemoteAgentSpec: (id?: string) => id && servers.has(id) ? spec(id.slice(7)) : undefined
+  }
+})
+vi.mock('./remote/sshTransport', async (original) => {
+  const actual = await original<typeof import('./remote/sshTransport')>()
+  return { ...actual, openSshTransport: async (spec: never) => ({ ...actual.sshTransport({ ...(spec as object), remotePath: '/usr/bin', remoteHome: '/home/me' } as never), openBridge: async () => undefined }) }
+})
+vi.mock('./remoteTransport', async (original) => ({ ...await original<object>(), probeRemoteAgent: async (input: object) => ({ ...input, remotePath: '/usr/bin', remoteHome: '/home/me' }) }))
 vi.mock('./localWorkspaces', async (original) => {
   const actual = await original<typeof import('./localWorkspaces')>()
   return { ...actual, resolveSavedWorkspace: (path: string) => actual.resolveSavedWorkspace(path, { systemRoots: [] }) }
 })
 const directories: string[] = []
-afterEach(() => { vi.clearAllMocks(); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })) })
+afterEach(() => { vi.clearAllMocks(); servers.clear(); configureLocalWorkspaces(); directories.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })) })
 
 function setup() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'douchat-workspace-runtime-')))
   directories.push(directory)
   const project = join(directory, 'project')
   mkdirSync(project)
+  configureLocalWorkspaces(join(directory, 'user-data'))
   const store = new DouchatStore(join(directory, 'state.json'))
   store.setCurrentAccountId('me')
   const runtime = new DouchatRuntime(store, { snapshots: () => [], start: vi.fn(), stop: vi.fn(), show: vi.fn(), createTools: () => [], dispose: vi.fn() }, () => undefined)
@@ -180,4 +199,103 @@ it.each(['allow', 'decline', 'cancel', 'account-change'])('handles on-demand fol
   }
   expect(await result).toBe(decision === 'allow' ? 'allowed' : 'denied')
   expect(store.conversation(conversation.id)?.allowedFolders ?? []).toEqual(decision === 'allow' ? [project] : [])
+})
+
+describe('per-member folders', () => {
+  const server = { executionTargetId: 'ssh-legacy:box', targetRevision: 0 }
+  const remoteMember = (store: DouchatStore) => {
+    servers.set('custom:srvbox', server)
+    return store.createAgent({ name: 'Server Codex', role: 'Engineer', instructions: '', color: '#14B8A6', provider: 'local', model: 'default', localAgentId: 'custom:srvbox' })
+  }
+  const options = (index = 0) => vi.mocked(runLocalAgent).mock.calls[index][4]!
+
+  it('gives each member its own folder on its own target and never a local folder to a remote member', async () => {
+    const { store, group, project, codex, claude, run } = setup()
+    const srv = remoteMember(store)
+    store.updateConversation(group.id, { agentIds: [codex.id, claude.id, srv.id] })
+    store.setConversationWorkspace(group.id, project)
+    const other = join(project, 'claude-only'); mkdirSync(other)
+    store.setAgentWorkspace(group.id, claude.id, { path: other, ...localExecutionTarget() })
+    store.setAgentWorkspace(group.id, srv.id, { path: '/home/me/proj', ...server })
+    vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
+    await run(codex.id); await run(claude.id); await run(srv.id)
+    expect(options(0)).toMatchObject({ workspaceDirectory: project, remoteWorkspace: undefined })
+    expect(options(1)).toMatchObject({ workspaceDirectory: other, remoteWorkspace: undefined })
+    expect(options(2).workspaceDirectory).toBeUndefined()
+    expect(options(2).remoteWorkspace).toEqual({ path: '/home/me/proj', ...server })
+    expect(vi.mocked(runLocalAgent).mock.calls[2][1]).toContain('project folder on srvbox: /home/me/proj')
+    expect(vi.mocked(runLocalAgent).mock.calls[2][1]).not.toContain(project)
+  })
+
+  it('drops a folder after the server is edited and says so, without falling back to a local folder', async () => {
+    const { store, group, project, run } = setup()
+    const srv = remoteMember(store)
+    store.updateConversation(group.id, { agentIds: [srv.id] })
+    store.setConversationWorkspace(group.id, project)
+    store.setAgentWorkspace(group.id, srv.id, { path: '/home/me/proj', ...server })
+    servers.set('custom:srvbox', { ...server, targetRevision: 1 })
+    vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
+    await run(srv.id)
+    expect(options().workspaceDirectory).toBeUndefined()
+    expect(options().remoteWorkspace).toBeUndefined()
+    expect(vi.mocked(runLocalAgent).mock.calls[0][1]).toContain('belongs to another computer or server')
+  })
+
+  it('never uses a local folder saved on another computer', async () => {
+    const { store, group, project, codex, run } = setup()
+    store.setAgentWorkspace(group.id, codex.id, { path: project, executionTargetId: 'local:another-device', targetRevision: 0 })
+    vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
+    await run(codex.id)
+    expect(options().workspaceDirectory).toBeUndefined()
+  })
+
+  it('uses the owner\'s folder in a shared room, whoever asked', async () => {
+    const { store, runtime, codex } = setup()
+    const srv = remoteMember(store)
+    const room = { id: 'room-1', name: 'Team', kind: 'group' as const, createdAt: new Date(0).toISOString(), members: [{ id: 'me', name: 'Me', email: 'me@x' }],
+      agents: [{ id: 'server-srv', localId: srv.id, ownerId: 'me', name: srv.name }, { id: 'server-codex', localId: codex.id, ownerId: 'me', name: codex.name }] }
+    store.syncFriendConversation('me', room, [])
+    const local = store.accountConversations.find(item => item.remoteRoomId === 'room-1')!
+    store.setAgentWorkspace(local.id, srv.id, { path: '/home/me/team', ...server })
+    vi.mocked(runLocalAgent).mockResolvedValue({ text: 'ok', images: [] })
+    // Bob is another member; the owner has allowed them to run this agent.
+    const permissions = agentPermissions(); permissions.sensitive.localExecution = 'allow'
+    store.updateAgent(srv.id, { permissions })
+    await runtime.executeSocialTask('me', srv.id, 'task-1', 'hello', new AbortController().signal, '', { roomId: 'room-1', requesterId: 'bob', requester: 'Bob', roomName: 'Team', delegate: async () => {} })
+    expect(options().remoteWorkspace).toEqual({ path: '/home/me/team', ...server })
+    // Another member's agent in the same room keeps its own default folder.
+    await runtime.executeSocialTask('me', codex.id, 'task-2', 'hello', new AbortController().signal, '', { roomId: 'room-1', requesterId: 'me', requester: 'Me', roomName: 'Team', delegate: async () => {} })
+    expect(options(1).workspaceDirectory).toBeUndefined()
+  })
+
+  it('serializes turns on the same server folder and runs other targets in parallel', async () => {
+    const { store, group, codex, claude, run } = setup()
+    const srv = remoteMember(store)
+    servers.set('custom:srvtwo', server)
+    const srv2 = store.createAgent({ name: 'Second', role: 'Engineer', instructions: '', color: '#14B8A6', provider: 'local', model: 'default', localAgentId: 'custom:srvtwo' })
+    store.updateConversation(group.id, { agentIds: [codex.id, claude.id, srv.id, srv2.id] })
+    for (const agent of [srv, srv2]) store.setAgentWorkspace(group.id, agent.id, { path: '/home/me/proj', ...server })
+    const started: string[] = [], release = new Map<string, () => void>()
+    vi.mocked(runLocalAgent).mockImplementation(async (config) => {
+      started.push(config.id)
+      await new Promise<void>(resolve => release.set(config.id, resolve))
+      return { text: 'ok', images: [] }
+    })
+    const first = run(srv.id), second = run(srv2.id), local = run(codex.id)
+    await vi.waitFor(() => expect(started.sort()).toEqual([codex.id, srv.id].sort()))
+    release.get(srv.id)!(); await first
+    await vi.waitFor(() => expect(started).toContain(srv2.id))
+    release.get(srv2.id)!(); release.get(codex.id)!()
+    await Promise.all([second, local])
+  })
+
+  it('clears a member\'s folder when the member leaves or is deleted', () => {
+    const { store, group, project, codex, claude } = setup()
+    store.setAgentWorkspace(group.id, codex.id, { path: project, ...localExecutionTarget() })
+    store.setAgentWorkspace(group.id, claude.id, { path: project, ...localExecutionTarget() })
+    store.updateConversation(group.id, { agentIds: [claude.id] })
+    expect(Object.keys(store.conversation(group.id)!.agentWorkspaces!)).toEqual([claude.id])
+    store.deleteAgent(claude.id)
+    expect(store.conversation(group.id)!.agentWorkspaces).toBeUndefined()
+  })
 })

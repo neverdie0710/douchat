@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
-import { LocalAgentConnection, spawnOwnedProcess, stopLocalProcess } from './localAgentConnection'
+import { LocalAgentConnection, spawnOwnedProcess, stopLocalProcess, MODEL_STALL_MS, MODEL_RETRY_DETAIL, MODEL_STALL_LOCAL } from './localAgentConnection'
 import { runLocalAgent, disposeLocalAgentSessions, disposeAllLocalAgentSessions, prepareLocalAgentSession, resetLocalAgentConversation } from './localAgentRuntime'
 import { validateLocalAgent } from './localAgents'
 import { configureLocalWorkspaces } from './localWorkspaces'
@@ -59,6 +59,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(prompt==='crash'){process.exit(12);return;}
  if(prompt==='invalid'){send(null);return;}
  if(prompt==='wait')return;
+ if(prompt==='model-retry'){send({method:'error',params:{threadId,turnId:'turn-'+count,willRetry:true,error:{message:'error code: 522'}}});return;}
+ if(prompt==='model-working'){send({method:'error',params:{threadId,turnId:'turn-'+count,willRetry:true,error:{message:'error code: 522'}}});setTimeout(()=>send({method:'item/started',params:{threadId,item:{type:'commandExecution'}}}),50);return;}
  if(prompt==='work-then-no-credit'){send({type:'assistant',message:{content:[{type:'tool_use',name:'Bash'}]}});send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='no-credit' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'Credit balance is too low'});return;}
  if(prompt==='auth-conflict' && process.env.ANTHROPIC_API_KEY){send({type:'result',is_error:true,result:'claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set'});return;}
@@ -535,3 +537,31 @@ describe('persistent local agent connections', () => {
   })
 })
 const optionsWithProgress: Parameters<typeof runLocalAgent>[4] = { ...options }
+
+describe('model stall watchdog', () => {
+  it('shows retries and fails when the model never answers', async () => {
+    const child = await connected()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    const seen: Array<string | undefined> = []
+    const turn = child.turn('model-retry', undefined, progress => seen.push(progress.detail))
+    turn.catch(() => undefined)
+    await vi.waitFor(() => expect(seen).toContain(MODEL_RETRY_DETAIL))
+    await vi.advanceTimersByTimeAsync(MODEL_STALL_MS + 15_000)
+    await expect(turn).rejects.toThrow(MODEL_STALL_LOCAL)
+  })
+
+  it('keeps a turn alive once the model recovers from retries', async () => {
+    const child = await connected()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    let settled = false
+    const seen: Array<string | undefined> = []
+    const turn = child.turn('model-working', undefined, progress => seen.push(progress.detail))
+    turn.then(() => { settled = true }, () => { settled = true })
+    await vi.waitFor(() => expect(seen).toContain('Running a command'))
+    expect(seen).toContain(MODEL_RETRY_DETAIL)
+    await vi.advanceTimersByTimeAsync(MODEL_STALL_MS * 2)
+    expect(settled).toBe(false)
+    child.close()
+    await expect(turn).rejects.toThrow()
+  })
+})

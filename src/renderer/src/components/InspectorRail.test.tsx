@@ -53,7 +53,7 @@ describe('chat details rail', () => {
     setConversationPinned = vi.fn(async () => snapshot)
     Object.defineProperty(window, 'douchat', {
       configurable: true,
-      value: { updateConversation, setConversationPinned } as unknown as DouchatApi
+      value: { updateConversation, setConversationPinned, conversationWorkspaces: vi.fn(async () => ({ eligible: false, members: [] })) } as unknown as DouchatApi
     })
   })
 

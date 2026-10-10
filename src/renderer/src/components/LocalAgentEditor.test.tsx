@@ -67,3 +67,29 @@ it('cancels an in-flight test when the editor closes', async () => {
   expect(cancel).toHaveBeenCalledOnce()
   await act(async () => reject(new Error('Cancelled')))
 })
+
+const connection = (id: string, extra: object = {}) => ({ id, name: id === 'conn_a' ? 'Box' : 'Off', kind: 'ssh', enabled: true, targetRevision: 0, ssh: { host: 'box' }, createdAt: 0, label: 'box', agentIds: [], status: { state: 'connected', agents: 0 }, ...extra })
+it('adds a remote agent by connection, never by host', async () => {
+  add.mockResolvedValue([])
+  ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a'), connection('conn_b', { enabled: false })])
+  await render()
+  await act(async () => container.querySelectorAll<HTMLInputElement>('input[name=location]')[1].click())
+  const select = [...container.querySelectorAll('label')].find(label => label.textContent?.startsWith('Connection'))!.querySelector('select')!
+  expect(select.value).toBe('conn_a')
+  expect([...select.options].find(option => option.value === 'conn_b')!.disabled).toBe(true)
+  expect(container.textContent).not.toContain('Host alias')
+  await act(async () => { const name = container.querySelector<HTMLInputElement>('input[required]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Server Codex'); name.dispatchEvent(new Event('input', { bubbles: true })) })
+  await click('Save')
+  expect(add).toHaveBeenCalledWith({ name: 'Server Codex', command: 'codex', avatar: '', args: [], remoteAgent: { connectionId: 'conn_a', adapter: 'codex', executable: 'codex', args: [] } })
+  expect(add.mock.calls[0][0]).not.toHaveProperty('remote')
+})
+it('explains an agent whose connection is gone and keeps its saved settings', async () => {
+  ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a')])
+  const orphan: LocalAgent = { id: 'custom:x', name: 'Orphan', command: 'claude', installed: false, discovered: true, status: 'not-found', chatSupported: true, authentication: 'unchecked', custom: true, connectionId: 'conn_gone', unavailable: 'missing',
+    remoteAgent: { connectionId: 'conn_gone', adapter: 'claude', executable: '/opt/claude', args: ['--x'] } }
+  await render(orphan)
+  expect(container.querySelector('[role=alert]')?.textContent).toContain('was removed')
+  expect(container.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(true)
+  const select = [...container.querySelectorAll('label')].find(label => label.textContent?.startsWith('Agent type'))!.querySelector('select')!
+  expect(select.value).toBe('claude')
+})

@@ -33,20 +33,80 @@ export interface LocalAgent {
   args?: string[]
   /** Present only for user-registered agents that run on a remote server over SSH. */
   remote?: RemoteAgentSpec
+  /** Identity of the server a remote agent runs on; set by main, never by the renderer. */
+  remoteTarget?: ExecutionTarget
+  /** The connection a remote agent runs on. */
+  connectionId?: string
+  /** What is saved for a remote agent, even while its connection is unavailable. */
+  remoteAgent?: RemoteAgentBinding
+  /** The connection is turned off or missing: the agent cannot run. */
+  unavailable?: 'disabled' | 'missing'
+  /** Present for agents bound to a douchat-host daemon: they never run on this computer. */
+  daemon?: { connectionId: string; hostId: string; label: string }
+}
+
+/** Where an agent's commands run. A saved workspace path is only meaningful on
+ * the target it was chosen on, at the revision it was chosen at. */
+export interface ExecutionTarget {
+  /** local:<deviceId> | ssh-legacy:<hash of host, port, user and key> */
+  executionTargetId: string
+  /** Increased whenever the target's identity is edited. */
+  targetRevision: number
+}
+
+/** A folder chosen for one agent in one chat, bound to the target it belongs to. */
+export interface AgentWorkspaceBinding extends ExecutionTarget {
+  /** Canonical absolute path on the execution target. */
+  path: string
+}
+
+/** One row of a chat's workspace settings, resolved in main. */
+export interface MemberWorkspaceView {
+  agentId: string
+  location: 'local' | 'remote'
+  /** Remote host label, for remote members. */
+  host?: string
+  /** The server is reached through douchat-host, which has no interactive terminal. */
+  noTerminal?: boolean
+  /** The folder in effect; absent when the agent uses its default folder. */
+  path?: string
+  /** custom: chosen for this agent; legacy: the chat's earlier local folder. */
+  source: 'custom' | 'legacy' | 'default'
+  /** A saved folder belongs to another server or an earlier version of this one. */
+  stale?: boolean
+}
+
+export interface ConversationWorkspaceView {
+  eligible: boolean
+  members: MemberWorkspaceView[]
+  /** The chat's earlier single local folder, kept for local members only. */
+  legacyPath?: string
+  /** The earlier local folder exists but no member can use it. */
+  legacyUnused?: boolean
+}
+
+export interface RemoteDirectoryListing {
+  /** Canonical path of the listed folder on the server. */
+  path: string
+  directories: string[]
 }
 
 export const REMOTE_AGENT_ADAPTERS = ['codex', 'claude', 'gemini', 'grok', 'cursor', 'opencode', 'kimi', 'openclaw', 'fastclaw', 'hermes', 'omp', 'custom'] as const
 export type RemoteAgentAdapter = typeof REMOTE_AGENT_ADAPTERS[number]
 
-/** Structured SSH launch settings. There is intentionally no free-form shell
- * command and no custom ssh option field: every value is validated in main. */
+/** Structured launch settings. There is intentionally no free-form shell
+ * command and no custom ssh option field: every value is validated in main.
+ * `daemon` runs the same remote scripts through douchat-host and the Douchat
+ * relay instead of /usr/bin/ssh; `host` is then the connection's name. */
 export interface RemoteAgentSpec {
-  transport: 'ssh'
+  transport: 'ssh' | 'daemon'
   host: string
   port?: number
   user?: string
   /** Absolute path of a private key on this computer. */
   identityFile?: string
+  /** Present exactly when transport is 'daemon'. */
+  daemon?: { hostId: string; serviceUrl: string; ownerId: string }
   adapter: RemoteAgentAdapter
   /** Remote command name or absolute POSIX path. */
   executable: string
@@ -56,8 +116,6 @@ export interface RemoteAgentSpec {
   remotePath?: string
   /** Remote $HOME discovered by the connection probe. */
   remoteHome?: string
-  /** Friends and other owners may call this agent only when enabled. */
-  allowSharing: boolean
 }
 
 export interface CustomLocalAgentInput {
@@ -67,7 +125,86 @@ export interface CustomLocalAgentInput {
   avatar?: string
   /** One argument per entry; custom commands may use {prompt}. */
   args?: string[]
+  /** Earlier builds: SSH settings stored on the agent itself. Read-only; migrated to a connection. */
   remote?: RemoteAgentSpec
+  /** An agent on a server, referring to a saved connection. */
+  remoteAgent?: RemoteAgentBinding
+}
+
+/** A remote agent refers to its server by connection id; host, port, user and
+ * key are stored once, on the connection. */
+export interface RemoteAgentBinding {
+  connectionId: string
+  adapter: RemoteAgentAdapter
+  /** Remote command name or absolute POSIX path. */
+  executable: string
+  /** One argument per entry; only the custom adapter may use {prompt}. */
+  args: string[]
+}
+
+export type RemoteConnectionKind = 'ssh' | 'daemon'
+
+/** A douchat-host enrolled for one Douchat account (remote-connections.md 6.3). */
+export interface DaemonConnectionTarget { hostId: string; serviceUrl: string; ownerId: string; info?: { os?: string; arch?: string; version?: string } }
+
+/** A server Douchat can run agents on. Stored in main only; no keys or passwords. */
+export interface RemoteConnection {
+  id: string
+  name: string
+  kind: RemoteConnectionKind
+  enabled: boolean
+  /** Increased whenever host, port, user or key change; name and probe results don't count. */
+  targetRevision: number
+  /** Present exactly when kind is 'ssh'. */
+  ssh?: { host: string; port?: number; user?: string; identityFile?: string }
+  /** Present exactly when kind is 'daemon'. */
+  daemon?: DaemonConnectionTarget
+  /** Last validated probe of the server. */
+  probe?: { home: string; path: string; checkedAt: number }
+  createdAt: number
+}
+
+export interface RemoteConnectionInput {
+  /** Absent for a new connection. */
+  id?: string
+  name: string
+  ssh: { host: string; port?: number; user?: string; identityFile?: string }
+}
+
+export type ConnectionStatus =
+  | { state: 'disabled' }
+  | { state: 'connecting' }
+  | { state: 'connected'; latencyMs?: number; agents: number }
+  | { state: 'error'; message: string; retryAt?: number }
+
+export interface ConnectionView extends RemoteConnection {
+  status: ConnectionStatus
+  /** Local agent ids that run on this connection. */
+  agentIds: string[]
+  /** Short label such as user@host:port. */
+  label: string
+}
+
+export interface ConnectionTestStep { name: 'ssh' | 'shell' | 'environment' | 'workspace' | 'forwarding' | 'host'; passed: boolean; message?: string }
+export interface ConnectionTestReport { ok: boolean; steps: ConnectionTestStep[]; durationMs: number }
+
+/** A pending daemon installation: the command is shown once and never logged. */
+export interface DaemonEnrollment {
+  id: string
+  hostId: string
+  installCommand: string
+  uninstallCommand: string
+  expiresAt: number
+  /** Owner device key fingerprint; douchat-host prints the same value during setup. */
+  fingerprint: string
+}
+export interface DaemonEnrollmentResult { hostId: string; info: { os?: string; arch?: string; version?: string } }
+
+export interface DiscoveredRemoteAgent {
+  adapter: RemoteAgentAdapter
+  /** Absolute path on the server. */
+  executable: string
+  version?: string
 }
 
 export interface AgentConfig {
@@ -182,8 +319,10 @@ export interface Conversation {
   leadAgentId?: string
   topics: Topic[]
   activeTopicId: string
-  /** User-selected folder for local CLI agents. Used only while every member is the owner's local agent. */
+  /** Earlier single folder for the whole chat. Only a fallback for members running on this computer. */
   workspacePath?: string
+  /** Folder per member, each bound to the computer or server it was chosen on. */
+  agentWorkspaces?: Record<string, AgentWorkspaceBinding>
   allowedFolders?: string[]
   savedToContacts?: boolean
   muted?: boolean
@@ -397,6 +536,8 @@ export interface ConversationActivityState {
     silentSeconds: number
     detail?: string
   }
+  /** Reply text streamed so far by a daemon agent. */
+  remoteText?: string
   conversationId: string
   topicId: string
   phase: ConversationPhase
@@ -675,6 +816,23 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   testLocalAgent: (id: string | undefined, input: CustomLocalAgentInput) => Promise<{ reply: string; durationMs: number; version?: string }>
   cancelLocalAgentTest: () => Promise<void>
   listSshHosts: () => Promise<string[]>
+  listConnections: () => Promise<ConnectionView[]>
+  saveConnection: (input: RemoteConnectionInput) => Promise<ConnectionView[]>
+  /** `mode` applies to agents still on this connection. */
+  removeConnection: (id: string, mode: 'disable-agents' | 'delete-agents') => Promise<ConnectionView[]>
+  setConnectionEnabled: (id: string, enabled: boolean) => Promise<ConnectionView[]>
+  testConnection: (id: string) => Promise<ConnectionTestReport>
+  discoverRemoteAgents: (id: string) => Promise<DiscoveredRemoteAgent[]>
+  /** Adds the chosen discovered agents as remote agents on this connection. */
+  addDiscoveredAgents: (id: string, agents: Array<{ adapter: RemoteAgentAdapter; executable: string; name: string }>) => Promise<LocalAgent[]>
+  openConnectionTerminal: (id: string) => Promise<void>
+  /** Starts adding a daemon connection; returns the one-time install command. */
+  createDaemonEnrollment: () => Promise<DaemonEnrollment>
+  /** Resolves when the host comes online, or null when cancelled or expired. */
+  waitDaemonEnrollment: (id: string) => Promise<DaemonEnrollmentResult | null>
+  cancelDaemonEnrollment: (id: string) => Promise<void>
+  /** Saves the enrolled host as a connection under a local name. */
+  completeDaemonEnrollment: (id: string, input: { name: string }) => Promise<ConnectionView[]>
   removeCustomLocalAgent: (id: string) => Promise<LocalAgent[]>
   getAttachmentData: (attachmentId: string) => Promise<string>
   getSnapshot: () => Promise<AppSnapshot>
@@ -699,10 +857,19 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   startDirectChat: (agentId: string) => Promise<{ snapshot: AppSnapshot; conversationId: string }>
   createGroup: (input: CreateGroupInput) => Promise<AppSnapshot>
   updateConversation: (conversationId: string, input: UpdateConversationInput) => Promise<AppSnapshot>
-  /** Opens a folder picker; resolves unchanged if cancelled. */
-  openConversationWorkspace: (conversationId: string) => Promise<void>
-  chooseConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
-  clearConversationWorkspace: (conversationId: string) => Promise<AppSnapshot>
+  conversationWorkspaces: (conversationId: string) => Promise<ConversationWorkspaceView>
+  /** Opens a folder picker for a member on this computer; resolves unchanged if cancelled. */
+  chooseAgentWorkspace: (conversationId: string, agentId: string) => Promise<ConversationWorkspaceView>
+  /** Lists one level of folders on a remote member's server; `name` descends into a child of `parent`. */
+  listRemoteAgentDirectories: (conversationId: string, agentId: string, parent?: string, name?: string) => Promise<RemoteDirectoryListing>
+  /** `parent` is a folder the server listed; `name`, when given, is one of its children. */
+  chooseRemoteAgentWorkspace: (conversationId: string, agentId: string, parent: string, name?: string) => Promise<ConversationWorkspaceView>
+  clearAgentWorkspace: (conversationId: string, agentId: string) => Promise<ConversationWorkspaceView>
+  openAgentWorkspace: (conversationId: string, agentId: string) => Promise<void>
+  /** Opens an SSH session in a terminal, inside the remote member's folder. */
+  openRemoteAgentWorkspaceTerminal: (conversationId: string, agentId: string) => Promise<void>
+  /** Removes the chat's earlier single local folder. */
+  clearConversationWorkspace: (conversationId: string) => Promise<ConversationWorkspaceView>
   openCodeArtifact: (input: CodeArtifactInput) => Promise<void>
   getCodeArtifact: (artifactId: string) => Promise<CodeArtifactInput | null>
   connanyCommand: (command: import('./connany').ConnectorCommand) => Promise<unknown>
@@ -737,6 +904,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   onAuthState: (listener: (state: DesktopAuthState) => void) => () => void
   onCreditsUpdated: (listener: () => void) => () => void
   onUpdateState: (listener: (state: UpdateState) => void) => () => void
+  onConnectionsChanged: (listener: () => void) => () => void
   onConnanyChanged: (listener: () => void) => () => void
   onSnapshot: (listener: (snapshot: AppSnapshot) => void) => () => void
 }

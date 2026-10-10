@@ -2,7 +2,7 @@ import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './Age
 import { useContext, useState, type ReactElement } from 'react'
 import { agentPermissions, permissionLabels, sensitiveCapabilities, type AgentPermissions, type PermissionApproval, type PermissionDecision, type PermissionRequest } from '../../../shared/agentPermissions'
 import type { AgentConfig } from '../../../shared/types'
-import { t } from '../preferences'
+import { t, tr } from '../preferences'
 import type { SocialSnapshot } from '../../../shared/social'
 import { AgentAvatar, agentDisplayName, UserAvatar } from './common'
 
@@ -101,8 +101,9 @@ export function AgentPermissionPrompt({ request, agent, social, onResolve }: { r
         <span className="permission-requester-copy"><small className="muted">{t('Requested by')}</small><strong>{requesterName}</strong></span>
       </div> : <p className="muted" title={request.requesterId}>{t('Requested by')}: {requesterName} · {t('Agent')}</p>)}
       {room && <p className="muted">{t('Group')}: {room}</p>}
+      {request.executorLabel && <p className="permission-notice">{tr('Request from douchat-host on {server}. Allowing it runs there, not on this computer.', { server: request.executorLabel })}</p>}
       {!actionLabel && <p>{request.operation}</p>}
-      {nativeTool === 'Bash' && <p>{t('This runs the command below on your computer.')}</p>}
+      {nativeTool === 'Bash' && <p>{request.executorLabel ? tr('This runs the command below on {server}.', { server: request.executorLabel }) : t('This runs the command below on your computer.')}</p>}
       {desktopApp ? <>
         <p>{t('Application')}: <strong>{desktopApp}</strong></p>
         <p>{t('Allow this agent to view and interact with this app through Computer Use.')}</p>
@@ -111,7 +112,7 @@ export function AgentPermissionPrompt({ request, agent, social, onResolve }: { r
         <pre className="permission-details">{command}</pre>
         <details><summary>{t('Full request details')}</summary><pre className="permission-details">{request.details}</pre></details>
       </> : <pre className="permission-details">{request.details}</pre>}
-      {request.capability === 'localExecution' && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
+      {request.capability === 'localExecution' && !request.executorLabel && <p className="permission-notice">{t('Allowing a run may let the agent read files, execute commands and access the internet on your computer. Codex Computer Use requests separate approval; other internal actions are controlled by the local agent.')}</p>}
       {request.context !== 'direct' && <p className="muted">{t('Results may be visible to everyone in this group.')}</p>}
       {request.taskScope && <p className="permission-notice">{t('Task approval scope')}: {request.taskScope}<br />{t('Expires when this task ends. Other resources still require approval.')}</p>}
       {request.sessionScope && <p className="permission-notice">{t('Session approval applies only to this app. Other apps and separate sensitive-action confirmations still require approval.')}<br />{t('Expires when the native session closes, including idle cleanup, stop, reset or app restart.')}</p>}
