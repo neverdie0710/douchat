@@ -41,12 +41,23 @@ const FLOW_MAX_AGE_MS = 10 * 60 * 1000
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024
 
 export function createLoopbackSuccessPage(): string {
+  return createLoopbackResultPage()
+}
+
+function createLoopbackResultPage(error?: string): string {
+  const title = error ? '登录未完成' : '登录成功'
+  const description = error
+    ? `请回到桌面客户端重新开始登录。${error}`
+    : '账号已连接到 Douchat。你可以回到桌面客户端继续使用。'
+  const escapedDescription = description.replace(/[&<>"']/g, character => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[character]!)
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>登录成功 · Douchat</title>
+  <title>${title} · Douchat</title>
   <style>
     :root {
       color-scheme: light;
@@ -145,11 +156,11 @@ export function createLoopbackSuccessPage(): string {
   <main>
     <div class="status" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-        <path d="m5 12 4.2 4.2L19 6.8" />
+        <path d="${error ? 'M6 6l12 12M6 18L18 6' : 'm5 12 4.2 4.2L19 6.8'}" />
       </svg>
     </div>
-    <h1>登录成功</h1>
-    <p>账号已连接到 Douchat。你可以回到桌面客户端继续使用。</p>
+    <h1>${title}</h1>
+    <p>${escapedDescription}</p>
     <a class="button" href="${DOUCHAT_PRODUCTION_ORIGIN}">
       返回 Douchat 官网
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -482,7 +493,8 @@ export class DesktopAuth {
   private startLoopbackCallback(expectedState: string): Promise<string> {
     this.stopLoopbackCallback()
     return new Promise((resolve, reject) => {
-      const server = createServer((request, response) => {
+      let callbackInProgress = false
+      const server = createServer(async (request, response) => {
         const address = server.address()
         if (!request.url || !address || typeof address === 'string') {
           response.writeHead(400).end('Invalid callback')
@@ -498,15 +510,28 @@ export class DesktopAuth {
           response.writeHead(404).end('Not found')
           return
         }
-        response.writeHead(200, {
+        // A refresh must not exchange the same one-time code a second time.
+        if (callbackInProgress) {
+          response.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' })
+          response.end('正在完成登录，请返回客户端查看结果。')
+          return
+        }
+        callbackInProgress = true
+        let result: DesktopAuthState
+        try {
+          result = await this.handleCallback(callbackUrl.toString())
+        } catch {
+          result = this.setState({ status: 'error', error: 'Login could not be completed.' })
+        }
+        const error = result.status === 'signed-in' ? undefined : result.status === 'error' ? result.error : 'Login could not be completed.'
+        response.writeHead(error ? 502 : 200, {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'no-store',
           'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
           'Referrer-Policy': 'no-referrer',
           'X-Content-Type-Options': 'nosniff'
         })
-        response.end(createLoopbackSuccessPage())
-        void this.handleCallback(callbackUrl.toString())
+        response.end(createLoopbackResultPage(error))
       })
       server.once('error', reject)
       server.listen(0, '127.0.0.1', () => {
@@ -555,7 +580,8 @@ export class DesktopAuth {
       response = await fetch(new URL('/api/desktop-auth/token', this.webAppUrl), {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID })
+        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID }),
+        signal: AbortSignal.timeout(30_000)
       })
     } catch {
       throw new Error('Could not reach the login service. Check your connection and try again.')
@@ -566,7 +592,9 @@ export class DesktopAuth {
       user?: Partial<DesktopAuthUser>
     }> | null
     if (!response.ok || !payload?.data) {
-      throw new Error(payload?.message || 'The login request expired or was already used. Start again.')
+      const message = typeof payload?.message === 'string' ? payload.message.trim() : ''
+      if (message && message !== 'HTTPError') throw new Error(message)
+      throw new Error(`Could not complete desktop login (HTTP ${response.status}). Return to the app and try again.`)
     }
     const accessToken = payload.data.accessToken || ''
     if (!accessToken.startsWith('dch_')) throw new Error('Login service returned an invalid session.')

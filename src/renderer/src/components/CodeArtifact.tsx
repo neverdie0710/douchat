@@ -2,6 +2,7 @@ import { useState, type ReactElement } from 'react'
 import { CodeBlock, type CustomRendererProps } from 'streamdown'
 import { ExternalLink, FileCode2 } from 'lucide-react'
 import { t, tr } from '../preferences'
+import { CodeCopyButton } from './CodeCopyButton'
 
 export const codeArtifactLanguages = [
   'html', 'css', 'javascript', 'js', 'typescript', 'ts', 'jsx', 'tsx',
@@ -49,7 +50,7 @@ export function CodeArtifact({ code, language, meta, isIncomplete }: CustomRende
   const [opening, setOpening] = useState(false)
   const [error, setError] = useState(false)
   if (isIncomplete || !isFileSizedCode(code, meta)) {
-    return <CodeBlock code={code} language={language} isIncomplete={isIncomplete} />
+    return <CodeBlock code={code} language={language} isIncomplete={isIncomplete}><CodeCopyButton code={code} /></CodeBlock>
   }
 
   const title = inferArtifactName(language, meta)

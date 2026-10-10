@@ -47,6 +47,54 @@ describe('desktop authentication', () => {
     expect(page).not.toContain('douchat://')
   })
 
+  it.each([true, false])('waits for token exchange before returning the browser result (success=%s)', async (success) => {
+    const directory = mkdtempSync(join(tmpdir(), 'douchat-auth-'))
+    directories.push(directory)
+    const auth = new DesktopAuth('https://douchat.ai', 'douchat', true, directory, vi.fn())
+    let finishExchange!: (response: Response) => void
+    let exchangeStarted!: () => void
+    const started = new Promise<void>(resolve => { exchangeStarted = resolve })
+    globalThis.fetch = vi.fn(() => {
+      exchangeStarted()
+      return new Promise<Response>(resolve => { finishExchange = resolve })
+    }) as typeof fetch
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await auth.startLogin()
+      const flow = JSON.parse(readFileSync(join(directory, 'auth-flow.json'), 'utf8'))
+      const callback = `${flow.redirectUri}?state=${flow.state}&code=${'c'.repeat(43)}`
+      let browserResponded = false
+      const browser = originalFetch(callback).then(response => { browserResponded = true; return response })
+      await started
+      expect(auth.getState().status).toBe('checking')
+      expect(browserResponded).toBe(false)
+      const duplicate = await originalFetch(callback)
+      expect(duplicate.status).toBe(409)
+      await duplicate.text()
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1)
+      finishExchange(new Response(JSON.stringify(success ? {
+        code: 0,
+        data: { accessToken: 'dch_test', user: { id: 'user-1', email: 'user@example.com' } }
+      } : { message: 'HTTPError' }), { status: success ? 200 : 503 }))
+      const response = await browser
+      const page = await response.text()
+      expect(response.status).toBe(success ? 200 : 502)
+      expect(page).toContain(success ? '登录成功' : '登录未完成')
+      if (!success) {
+        expect(page).not.toContain('登录成功')
+        expect(page).toContain('HTTP 503')
+        expect(page).not.toContain('HTTPError')
+        expect(auth.getState()).toMatchObject({ status: 'error', error: expect.stringContaining('HTTP 503') })
+      } else {
+        expect(auth.getState().status).toBe('signed-in')
+      }
+    } finally {
+      warning.mockRestore()
+      globalThis.fetch = vi.fn(async () => new Response(null, { status: 204 })) as typeof fetch
+      await auth.signOut()
+    }
+  })
+
   it('cancels a pending browser login and rejects its late callback', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'douchat-auth-'))
     directories.push(directory)

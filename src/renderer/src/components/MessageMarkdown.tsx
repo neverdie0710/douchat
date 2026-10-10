@@ -82,7 +82,7 @@ export const messageMarkdownPlugins: PluginConfig = {
   ]
 }
 export const messageMarkdownControls = {
-  code: false,
+  code: { copy: true, download: false },
   table: false,
   image: false,
   mermaid: { copy: false, download: false, fullscreen: true, panZoom: true }
@@ -120,6 +120,8 @@ export const MessageMarkdown = memo(function MessageMarkdown({ text }: { text: s
       errorComponent: MermaidError
     }}
     translations={{
+      copyCode: t('Copy code'),
+      copied: t('Copied'),
       viewFullscreen: t('Enlarge diagram'),
       exitFullscreen: t('Close enlarged diagram'),
       zoomIn: t('Zoom in'),
