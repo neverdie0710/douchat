@@ -96,12 +96,10 @@ export function normalizeRemoteSpec(input: unknown): RemoteAgentSpec {
   // remoteCwd from earlier builds is ignored: Douchat assigns the server folder.
   const remotePath = value.remotePath === undefined || value.remotePath === '' ? undefined : validRemotePath(String(value.remotePath))
   const remoteHome = value.remoteHome === undefined || value.remoteHome === '' ? undefined : validRemoteHome(String(value.remoteHome))
-  if (typeof value.allowSharing !== 'boolean' && value.allowSharing !== undefined) throw new Error('Invalid sharing setting.')
   return {
     transport: 'ssh', host, ...(port ? { port } : {}), ...(user ? { user } : {}), ...(identityFile ? { identityFile } : {}),
     adapter, executable, args: [...args as string[]],
-    ...(remotePath ? { remotePath } : {}), ...(remoteHome ? { remoteHome } : {}),
-    allowSharing: value.allowSharing === true
+    ...(remotePath ? { remotePath } : {}), ...(remoteHome ? { remoteHome } : {})
   }
 }
 

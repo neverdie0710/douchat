@@ -79,7 +79,7 @@ describe('local agent draft connection test', () => {
 })
 
 describe('agent startup arguments', () => {
-  const remote = { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: ['--base-url', 'http://127.0.0.1:1'], allowSharing: false }
+  const remote = { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: ['--base-url', 'http://127.0.0.1:1'] }
   const runtime = { id: 'custom:mini', name: 'mini', command: 'fastclaw', custom: true, installed: true, discovered: true, chatSupported: true, status: 'ready' as const, authentication: 'unchecked' as const, args: remote.args, remote }
 
   it('merges into the SSH spec so launch-time validation covers both', async () => {

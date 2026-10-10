@@ -59,6 +59,7 @@ import { DouchatStore } from './store'
 import { addCustomLocalAgent, agentsOnConnection, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { ConnectionManager } from './connectionManager'
 import { migrateConnections, skippedMigrationAgents } from './connectionStore'
+import { migrateSharingToPermissions } from './sharingMigration'
 import { migrateWorkspaceTargets } from './workspaceMigration'
 import { closeRemoteConnections, configureRemoteTransport } from './remoteTransport'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
@@ -858,8 +859,8 @@ app.whenReady().then(async () => {
     const id = input && typeof input === 'object' ? (input as { id?: unknown }).id : undefined
     const previous = typeof id === 'string' ? await connectionRegistry().get(id) : undefined
     const saved = await connections.save(input)
-    // A new target, or sharing withdrawn: work started under the old settings must not continue.
-    if (previous && (previous.targetRevision !== saved.targetRevision || (previous.allowSharing && !saved.allowSharing))) await stopAgentsOn(saved.id)
+    // A new target: work started under the old settings must not continue.
+    if (previous && previous.targetRevision !== saved.targetRevision) await stopAgentsOn(saved.id)
     cancelLocalModelQueries()
     connectionChanged(); scheduleBroadcast()
     return connections.list()
@@ -916,7 +917,7 @@ app.whenReady().then(async () => {
     const connection = await connectionRegistry().get(connectionRequest(event, id))
     if (!connection) throw new Error('Connection not found')
     if (!connection.enabled) throw new Error('This connection is turned off.')
-    await openSshTerminal(remoteTerminalArgs({ transport: 'ssh', ...connection.ssh, adapter: 'custom', executable: 'true', args: [], allowSharing: false }))
+    await openSshTerminal(remoteTerminalArgs({ transport: 'ssh', ...connection.ssh, adapter: 'custom', executable: 'true', args: [] }))
   })
   ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
@@ -1485,6 +1486,9 @@ app.whenReady().then(async () => {
 
   // Agents are not started until connections are migrated (docs/remote-connections.md §3).
   try {
+    // Before migrateConnections: it no longer carries the old sharing switch over.
+    const narrowed = await migrateSharingToPermissions(app.getPath('userData'), store)
+    if (narrowed) diagnostics.write('connections.sharing-migrated', String(narrowed))
     const migrated = await migrateConnections(app.getPath('userData'), connectionRegistry())
     migrateWorkspaceTargets(store, migrated)
   } catch (error) {

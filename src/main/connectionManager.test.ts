@@ -22,7 +22,7 @@ describe('connection state machine', () => {
     const manager = new ConnectionManager(store, async () => ['custom:a'], check)
     const states: string[] = []
     manager.onStatus((_id, status) => states.push(status.state))
-    const saved = await store.save({ name: 'Box', ssh: { host: 'box' }, allowSharing: false })
+    const saved = await store.save({ name: 'Box', ssh: { host: 'box' } })
 
     check.mockResolvedValueOnce(12)
     await manager.refresh(saved.id)
@@ -63,10 +63,10 @@ describe('connection state machine', () => {
     const hosts: string[] = []
     let finish!: (value: number) => void
     const manager = new ConnectionManager(store, async () => [], (connection: any) => { hosts.push(connection.ssh.host); return hosts.length === 1 ? new Promise(resolve => { finish = resolve }) : Promise.resolve(7) })
-    const saved = await store.save({ name: 'Box', ssh: { host: 'box' }, allowSharing: false })
+    const saved = await store.save({ name: 'Box', ssh: { host: 'box' } })
     const pending = manager.refresh(saved.id)
     await vi.waitFor(() => expect(hosts).toEqual(['box']))
-    await store.save({ id: saved.id, name: 'Box', ssh: { host: 'other' }, allowSharing: false })
+    await store.save({ id: saved.id, name: 'Box', ssh: { host: 'other' } })
     const second = manager.refresh(saved.id)
     finish(3)
     await Promise.all([pending, second])
@@ -81,7 +81,7 @@ describe('connection state machine', () => {
     let fail!: (error: Error) => void
     const check = vi.fn(() => new Promise<number>((_resolve, reject) => { fail = reject }))
     const manager = new ConnectionManager(store, async () => [], check)
-    const saved = await store.save({ name: 'Box', ssh: { host: 'box' }, allowSharing: false })
+    const saved = await store.save({ name: 'Box', ssh: { host: 'box' } })
     const pending = manager.refresh(saved.id)
     await vi.advanceTimersByTimeAsync(0)
     await store.setEnabled(saved.id, false)
@@ -96,7 +96,7 @@ describe('connection state machine', () => {
   it('lists connections with their agents and status', async () => {
     const store = new ConnectionStore(join(directory, 'connections.json'))
     const manager = new ConnectionManager(store, async id => id ? ['custom:a', 'custom:b'] : [], async () => 1)
-    const saved = await store.save({ name: 'Box', ssh: { host: 'box', user: 'me', port: 2200 }, allowSharing: false })
+    const saved = await store.save({ name: 'Box', ssh: { host: 'box', user: 'me', port: 2200 } })
     await store.setEnabled(saved.id, false)
     expect(await manager.list()).toEqual([expect.objectContaining({ id: saved.id, label: 'me@box:2200', agentIds: ['custom:a', 'custom:b'], status: { state: 'disabled' } })])
   })

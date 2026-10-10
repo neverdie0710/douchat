@@ -26,10 +26,9 @@ export function validateConnectionInput(input: unknown): RemoteConnectionInput {
   const spec = normalizeRemoteSpec({ transport: 'ssh', host: ssh.host, port: ssh.port, user: ssh.user, identityFile: ssh.identityFile, adapter: 'codex', executable: 'codex', args: [] })
   const name = String(value.name ?? '').trim() || remoteHostLabel(spec)
   if (name.length > 80 || /[\0-\x1f\x7f]/.test(name)) throw new Error('Enter a connection name of 80 characters or fewer.')
-  if (value.allowSharing !== undefined && typeof value.allowSharing !== 'boolean') throw new Error('Invalid sharing setting.')
   if (value.id !== undefined && (typeof value.id !== 'string' || !CONNECTION_ID.test(value.id))) throw new Error('Invalid connection.')
   return {
-    ...(value.id ? { id: value.id as string } : {}), name, allowSharing: value.allowSharing === true,
+    ...(value.id ? { id: value.id as string } : {}), name,
     ssh: { host: spec.host, ...(spec.port ? { port: spec.port } : {}), ...(spec.user ? { user: spec.user } : {}), ...(spec.identityFile ? { identityFile: spec.identityFile } : {}) }
   }
 }
@@ -38,11 +37,11 @@ function validConnection(value: unknown): RemoteConnection | undefined {
   if (!value || typeof value !== 'object') return undefined
   const item = value as RemoteConnection
   try {
-    const input = validateConnectionInput({ id: item.id, name: item.name, ssh: item.ssh, allowSharing: item.allowSharing })
+    const input = validateConnectionInput({ id: item.id, name: item.name, ssh: item.ssh })
     if (!input.id || !Number.isSafeInteger(item.targetRevision) || item.targetRevision < 0) return undefined
     const probe = item.probe && typeof item.probe.home === 'string' && typeof item.probe.path === 'string' && Number.isFinite(item.probe.checkedAt) ? item.probe : undefined
     return { id: input.id, name: input.name, kind: 'ssh', enabled: item.enabled !== false, targetRevision: item.targetRevision, ssh: input.ssh,
-      allowSharing: input.allowSharing, ...(probe ? { probe } : {}), createdAt: Number.isFinite(item.createdAt) ? item.createdAt : 0 }
+      ...(probe ? { probe } : {}), createdAt: Number.isFinite(item.createdAt) ? item.createdAt : 0 }
   } catch { return undefined }
 }
 
@@ -93,7 +92,7 @@ export class ConnectionStore {
     return this.mutate(connections => {
       if (!input.id) {
         if (connections.length >= 64) throw new Error('Up to 64 connections can be saved.')
-        const created: RemoteConnection = { id: `conn_${randomUUID().replaceAll('-', '')}`, name: input.name, kind: 'ssh', enabled: true, targetRevision: 0, ssh: input.ssh, allowSharing: input.allowSharing, createdAt: Date.now() }
+        const created: RemoteConnection = { id: `conn_${randomUUID().replaceAll('-', '')}`, name: input.name, kind: 'ssh', enabled: true, targetRevision: 0, ssh: input.ssh, createdAt: Date.now() }
         connections.push(created)
         return created
       }
@@ -101,7 +100,7 @@ export class ConnectionStore {
       if (index < 0) throw new Error('Connection not found')
       const previous = connections[index]
       const moved = sshTargetKey(previous.ssh) !== sshTargetKey(input.ssh)
-      connections[index] = { ...previous, name: input.name, ssh: input.ssh, allowSharing: input.allowSharing,
+      connections[index] = { ...previous, name: input.name, ssh: input.ssh,
         targetRevision: previous.targetRevision + (moved ? 1 : 0), ...(moved ? { probe: undefined } : {}) }
       if (moved) delete connections[index].probe
       return connections[index]
@@ -136,13 +135,9 @@ export class ConnectionStore {
 
 /** The SSH spec a connection and an agent binding make together. Probe
  * results are not included: launches always re-validate them. */
-export function connectionSpec(connection: RemoteConnection, agent: { adapter: RemoteAgentSpec['adapter']; executable: string; args: string[]; allowSharing?: boolean }): RemoteAgentSpec {
-  return {
-    transport: 'ssh', ...connection.ssh, adapter: agent.adapter, executable: agent.executable, args: [...agent.args],
-    // Both must allow it, and an agent only shares when it said so: turning sharing
-    // on for a connection later never exposes agents that did not opt in.
-    allowSharing: connection.allowSharing && agent.allowSharing === true
-  }
+export function connectionSpec(connection: RemoteConnection, agent: { adapter: RemoteAgentSpec['adapter']; executable: string; args: string[] }): RemoteAgentSpec {
+  // Who may call the agent is decided by its permissions, as for agents on this computer.
+  return { transport: 'ssh', ...connection.ssh, adapter: agent.adapter, executable: agent.executable, args: [...agent.args] }
 }
 
 // ─── Migration from per-agent SSH settings ───────────────────────────────────
@@ -203,11 +198,9 @@ export async function migrateConnections(userData: string, store: ConnectionStor
       const key = sshTargetKey(ssh)
       let connection = byTarget.get(key)
       if (!connection) {
-        connection = { id: `conn_${sha(`migrated:${key}`).slice(0, 32)}`, name: remoteHostLabel(spec), kind: 'ssh', enabled: true, targetRevision: 0, ssh, allowSharing: false, createdAt: Date.now() }
+        connection = { id: `conn_${sha(`migrated:${key}`).slice(0, 32)}`, name: remoteHostLabel(spec), kind: 'ssh', enabled: true, targetRevision: 0, ssh, createdAt: Date.now() }
         byTarget.set(key, connection)
       }
-      // The connection shares if any of its agents did; the others are narrowed when rewritten.
-      connection.allowSharing ||= spec.allowSharing
       agents[item.id] = { connectionId: connection.id, legacyTargetId: legacyTargetId(ssh), legacyRevision: Number.isSafeInteger(item.remoteTargetRevision) ? item.remoteTargetRevision as number : 0 }
     }
     plan = { version: 1, sourceHash: sha(text), connections: [...byTarget.values()], agents, skipped, phase: 'planned' }
@@ -245,8 +238,8 @@ export async function migrateConnections(userData: string, store: ConnectionStor
           // Folders and threads saved for the agent's earlier target stay valid while it
           // stays on this connection and the connection is not edited.
           legacyTarget: { connectionId: connection.id, revision: migrated.legacyRevision },
-          // Each agent keeps exactly the sharing it had; the connection allows it if any agent did.
-          remoteAgent: { connectionId: connection.id, adapter: spec.adapter, executable: spec.executable, args: spec.args, allowSharing: spec.allowSharing } }
+          // Sharing was moved to the agent's permissions before this step (sharingMigration.ts).
+          remoteAgent: { connectionId: connection.id, adapter: spec.adapter, executable: spec.executable, args: spec.args } }
       })
       await write(registry, `${JSON.stringify(rewritten, null, 2)}\n`)
     }

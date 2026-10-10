@@ -33,7 +33,6 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
   const [connections, setConnections] = useState<ConnectionView[]>()
   const [advanced, setAdvanced] = useState(Boolean(agent?.remoteAgent && (agent.remoteAgent.args.length || agent.remoteAgent.executable !== DEFAULT_COMMANDS[agent.remoteAgent.adapter])))
   const [executable, setExecutable] = useState(agent?.remoteAgent?.executable ?? 'codex')
-  const [allowSharing, setAllowSharing] = useState(agent?.remoteAgent?.allowSharing === true)
   const [busy, setBusy] = useState<'test' | 'save' | 'avatar' | ''>('')
   const [error, setError] = useState('')
   const [result, setResult] = useState('')
@@ -61,9 +60,7 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
   // Host, port, user and key belong to the connection; the agent only names it.
   const connection = connections?.find(item => item.id === connectionId)
   const remoteAgent = (): RemoteAgentBinding => ({
-    connectionId, adapter, executable: executable.trim() || DEFAULT_COMMANDS[adapter], args: argumentList(),
-    // Saved as chosen; it only takes effect while the connection also allows sharing.
-    allowSharing
+    connectionId, adapter, executable: executable.trim() || DEFAULT_COMMANDS[adapter], args: argumentList()
   })
   const draft = (): CustomLocalAgentInput => remote
     ? { name, command: remoteAgent().executable, avatar, args: [], remoteAgent: remoteAgent() }
@@ -88,10 +85,6 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
       onSaved(agents)
       if (mounted.current) onClose()
     } catch (cause) { if (mounted.current) { setError(messageSendError(cause)); setBusy('') } }
-  }
-  const toggleSharing = (checked: boolean) => {
-    if (checked && !window.confirm(t('Friends and other agents will be able to run commands on your server through this agent. Allow sharing?'))) return
-    setAllowSharing(checked); changed()
   }
   const icon = avatar || (agent && agentIcons[agent.remoteAgent?.adapter ?? agent.id]) || (remote ? agentIcons[adapter] : undefined)
   return <NativeDialog className="modal-backdrop" onClose={onClose} width={560}>
@@ -140,7 +133,6 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
             <label>{t('Executable on the server')}<input maxLength={1024} value={executable} placeholder={DEFAULT_COMMANDS[adapter] || '/path/to/agent'} spellCheck={false} onChange={event => { setExecutable(event.target.value); changed() }} /></label>
             <label>{t('Startup arguments')}<textarea value={args} rows={3} spellCheck={false} placeholder={adapter === 'custom' ? '--message\n{prompt}' : '--profile\nwork'} onChange={event => { setArgs(event.target.value); changed() }} /></label>
             <p className="settings-note">{t(adapter === 'custom' ? 'One argument per line. Use {prompt} for the message; otherwise it is appended as the last argument.' : 'One argument per line. Added to the built-in launch arguments. Options that disable the sandbox or approvals are rejected.')}</p>
-            {connection?.allowSharing && <label className="local-agent-checkbox"><input type="checkbox" checked={allowSharing} onChange={event => toggleSharing(event.target.checked)} />{t('Allow friends and other agents to call this agent')}</label>}
           </>}
           <p className="settings-note">{t('Conversation context and attachments are sent to this server.')}</p>
         </>}

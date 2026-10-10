@@ -68,7 +68,7 @@ it('cancels an in-flight test when the editor closes', async () => {
   await act(async () => reject(new Error('Cancelled')))
 })
 
-const connection = (id: string, extra: object = {}) => ({ id, name: id === 'conn_a' ? 'Box' : 'Off', kind: 'ssh', enabled: true, targetRevision: 0, ssh: { host: 'box' }, allowSharing: false, createdAt: 0, label: 'box', agentIds: [], status: { state: 'connected', agents: 0 }, ...extra })
+const connection = (id: string, extra: object = {}) => ({ id, name: id === 'conn_a' ? 'Box' : 'Off', kind: 'ssh', enabled: true, targetRevision: 0, ssh: { host: 'box' }, createdAt: 0, label: 'box', agentIds: [], status: { state: 'connected', agents: 0 }, ...extra })
 it('adds a remote agent by connection, never by host', async () => {
   add.mockResolvedValue([])
   ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a'), connection('conn_b', { enabled: false })])
@@ -80,7 +80,7 @@ it('adds a remote agent by connection, never by host', async () => {
   expect(container.textContent).not.toContain('Host alias')
   await act(async () => { const name = container.querySelector<HTMLInputElement>('input[required]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Server Codex'); name.dispatchEvent(new Event('input', { bubbles: true })) })
   await click('Save')
-  expect(add).toHaveBeenCalledWith({ name: 'Server Codex', command: 'codex', avatar: '', args: [], remoteAgent: { connectionId: 'conn_a', adapter: 'codex', executable: 'codex', args: [], allowSharing: false } })
+  expect(add).toHaveBeenCalledWith({ name: 'Server Codex', command: 'codex', avatar: '', args: [], remoteAgent: { connectionId: 'conn_a', adapter: 'codex', executable: 'codex', args: [] } })
   expect(add.mock.calls[0][0]).not.toHaveProperty('remote')
 })
 it('explains an agent whose connection is gone and keeps its saved settings', async () => {

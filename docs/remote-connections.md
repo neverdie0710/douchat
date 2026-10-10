@@ -77,7 +77,6 @@ export interface RemoteConnection {
     path: string
     checkedAt: number
   }
-  allowSharing: boolean            // 从 agent 级上移到连接级，agent 级可再收紧
 }
 
 export interface RemoteAgentSpec {
@@ -85,7 +84,6 @@ export interface RemoteAgentSpec {
   adapter: RemoteAgentAdapter
   executable: string
   args: string[]
-  allowSharing?: boolean           // 只能比连接更严格
 }
 
 export interface AgentWorkspaceBinding {
@@ -110,11 +108,17 @@ export type ConnectionStatus =
 ```
 
 存储：新增 `<userData>/connections.json`，权限 `0600`。不存私钥和口令。
+### 3.1 谁可以调用远程 agent
+
+早期版本在连接和远程 agent 上各有一个共享开关（两者都开才允许好友和其他智能体调用）。现已取消，远程 agent 与本机 agent 一样只由智能体权限决定：`groupHumans`、`groupAgents` 决定谁能发起请求，`localExecution` 决定执行前是否需要主人确认。
+
+升级时 `sharingMigration.ts` 在连接迁移之前运行一次（完成标记 `sharing-migration.done`）：原来实际未共享的远程 agent（连接或 agent 任一未开，或旧 `remote` 未开），其 `groupHumans`、`groupAgents` 改为 `deny`，其它权限不变，保证升级不扩大权限。之后主人在权限面板中的修改不会被覆盖。旧文件里残留的 `allowSharing` 字段读取时忽略。
+
 
 迁移（启动时一次，幂等）：
 
 1. 扫描所有 `custom` agent 的旧 `remote` 字段，按 `[host, port, user, identityFile]` 去重，生成 `kind: 'ssh'` 的连接，`remotePath`、`remoteHome` 迁到 `connection.probe`。
-2. 旧 spec 改写为 `{ connectionId, adapter, executable, args }`，旧 `allowSharing` 为 true 的，连接级 `allowSharing` 取 true，其它 agent 的 agent 级写 false，保证权限不扩大。
+2. 旧 spec 改写为 `{ connectionId, adapter, executable, args }`。共享开关已取消（见 3.1），旧 `allowSharing` 在此之前由 `sharingMigration.ts` 折算到智能体权限。
 3. 迁移前备份 `local-agents.json.bak-before-connections`，并生成持久化迁移计划（源文件哈希、稳定的旧目标 → connectionId 映射、阶段标记）。先原子写入 `connections.json`，再原子改写 agent registry，校验所有引用存在后标记完成；各文件使用同目录临时文件、flush 和 rename。迁移期间不开放 registry 写入或启动 agent。
 4. 任一阶段崩溃后按计划继续，不重新生成 ID；源文件哈希不匹配时停止并恢复备份或提示冲突，不覆盖用户修改。允许中间状态存在暂未引用的连接，不允许 agent 引用尚未写入的连接。`remoteValidate` 同时接受旧格式（只读）和新格式；完成标记落盘前，备份和计划均保留。
 5. P0 的旧 SSH 目标用 `ssh-legacy:<hash(host, port, user, identityFile)>` 标识（默认值先归一化），目标配置变更时递增持久化版本。P1 在同一迁移计划中将工作区归属映射为 `ssh:<connectionId>`，保留目标版本；同步使旧缓存连接和 thread 失效。只迁移已知归属的数据，无法证明归属的路径保持失效并要求重新选择。

@@ -19,7 +19,7 @@ import { configureLocalWorkspaces } from './localWorkspaces'
 const target = { executionTargetId: 'ssh-legacy:box', targetRevision: 3 }
 const agent = (adapter: 'codex' | 'gemini'): LocalAgent => ({
   id: 'custom:00000000-0000-4000-8000-000000000000', name: 'Server', command: adapter, installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true,
-  remote: { transport: 'ssh', host: 'box', adapter, executable: adapter, args: [], allowSharing: false }, remoteTarget: target
+  remote: { transport: 'ssh', host: 'box', adapter, executable: adapter, args: [] }, remoteTarget: target
 })
 const config = { id: 'a', ownerId: 'me', localAgentId: 'custom:00000000-0000-4000-8000-000000000000', model: 'default', name: 'Server', role: '', instructions: '' } as AgentConfig
 let directory = ''

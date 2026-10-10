@@ -14,7 +14,7 @@ vi.mock('./localAgentRuntime', async (original) => ({ ...await original<object>(
 const servers = vi.hoisted(() => new Map<string, { executionTargetId: string; targetRevision: number }>())
 vi.mock('./localAgents', async (original) => {
   const actual = await original<typeof import('./localAgents')>()
-  const spec = (host: string) => ({ transport: 'ssh' as const, host, adapter: 'codex' as const, executable: 'codex', args: [], allowSharing: true })
+  const spec = (host: string) => ({ transport: 'ssh' as const, host, adapter: 'codex' as const, executable: 'codex', args: [] })
   return {
     ...actual,
     remoteAgentPlacement: async (id?: string) => id && servers.has(id) ? { spec: spec(id.slice(7)), target: servers.get(id)! } : undefined,

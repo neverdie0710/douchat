@@ -12,7 +12,7 @@ beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'douchat-connections-'
 afterEach(() => { configureLocalAgentRegistry(); rmSync(directory, { recursive: true, force: true }) })
 
 const id = (n: number) => `custom:00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-const legacy = (n: number, remote: Record<string, unknown>, extra: object = {}) => ({ id: id(n), name: `Agent ${n}`, command: 'codex', args: [], remote: { transport: 'ssh', adapter: 'codex', executable: 'codex', args: [], allowSharing: false, ...remote }, ...extra })
+const legacy = (n: number, remote: Record<string, unknown>, extra: object = {}) => ({ id: id(n), name: `Agent ${n}`, command: 'codex', args: [], remote: { transport: 'ssh', adapter: 'codex', executable: 'codex', args: [], ...remote }, ...extra })
 const registry = () => join(directory, 'local-agents.json')
 const writeRegistry = (items: unknown[]) => writeFile(registry(), JSON.stringify(items, null, 2))
 const readRegistry = async () => JSON.parse(await readFile(registry(), 'utf8'))
@@ -20,25 +20,25 @@ const readRegistry = async () => JSON.parse(await readFile(registry(), 'utf8'))
 describe('connection store', () => {
   it('saves with mode 0600 and raises the revision only when the target changes', async () => {
     const store = new ConnectionStore(join(directory, 'connections.json'))
-    const created = await store.save(validateConnectionInput({ name: 'Box', ssh: { host: 'box' }, allowSharing: false }))
+    const created = await store.save(validateConnectionInput({ name: 'Box', ssh: { host: 'box' } }))
     expect(statSync(store.path).mode & 0o777).toBe(0o600)
     expect(created).toMatchObject({ id: expect.stringMatching(/^conn_[0-9a-f]{32}$/), targetRevision: 0, enabled: true })
-    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box' }, allowSharing: true })).targetRevision).toBe(0)
+    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box' } })).targetRevision).toBe(0)
     await store.recordProbe(created.id, 0, { home: '/home/me', path: '/usr/bin', checkedAt: 1 })
-    const moved = await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box', port: 2222 }, allowSharing: true })
+    const moved = await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box', port: 2222 } })
     expect(moved.targetRevision).toBe(1)
     expect(moved.probe).toBeUndefined()
     // A probe for the old target is ignored.
     await store.recordProbe(created.id, 0, { home: '/old', path: '/usr/bin', checkedAt: 2 })
     expect((await store.get(created.id))?.probe).toBeUndefined()
     // Default port is not a change.
-    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box', port: 22 }, allowSharing: true })).targetRevision).toBe(2)
-    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box' }, allowSharing: true })).targetRevision).toBe(2)
+    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box', port: 22 } })).targetRevision).toBe(2)
+    expect((await store.save({ id: created.id, name: 'Renamed', ssh: { host: 'box' } })).targetRevision).toBe(2)
   })
   it('rejects malformed input and drops corrupt entries on read', async () => {
     for (const bad of [{ ssh: { host: 'a b' } }, { ssh: { host: 'box', port: 70000 } }, { ssh: { host: 'box', user: 'x;y' } }, { ssh: { host: 'box', identityFile: 'relative' } }, { ssh: { host: 'box' }, id: 'conn_x' }, { name: 'x'.repeat(81), ssh: { host: 'box' } }])
       expect(() => validateConnectionInput(bad), JSON.stringify(bad)).toThrow()
-    await writeFile(join(directory, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'conn_bad', ssh: { host: 'x' } }, { id: `conn_${'a'.repeat(32)}`, name: 'ok', ssh: { host: 'ok' }, targetRevision: 0, allowSharing: false }] }))
+    await writeFile(join(directory, 'connections.json'), JSON.stringify({ version: 1, connections: [{ id: 'conn_bad', ssh: { host: 'x' } }, { id: `conn_${'a'.repeat(32)}`, name: 'ok', ssh: { host: 'ok' }, targetRevision: 0 }] }))
     expect((await new ConnectionStore(join(directory, 'connections.json')).list()).map(item => item.name)).toEqual(['ok'])
   })
 })
@@ -46,7 +46,7 @@ describe('connection store', () => {
 describe('migration from per-agent SSH settings', () => {
   const run = async () => { const store = new ConnectionStore(join(directory, 'connections.json')); configureLocalAgentRegistry(directory, store); return { store, result: await migrateConnections(directory, store) } }
 
-  it('groups agents by target, keeps every agent and never widens sharing', async () => {
+  it('groups agents by target, keeps every agent and drops the old sharing switch', async () => {
     await writeRegistry([
       legacy(1, { host: 'box', user: 'me', allowSharing: true }),
       legacy(2, { host: 'BOX', user: 'me', port: 22, adapter: 'claude', executable: 'claude' }),
@@ -56,16 +56,15 @@ describe('migration from per-agent SSH settings', () => {
     const { store, result } = await run()
     const connections = await store.list()
     expect(connections).toHaveLength(2)
-    const box = connections.find(item => item.ssh.host === 'box')!
-    expect(box).toMatchObject({ allowSharing: true, targetRevision: 0, enabled: true })
+    const box = connections.find(item => item.ssh?.host === 'box')!
+    expect(box).toMatchObject({ targetRevision: 0, enabled: true })
+    expect(box).not.toHaveProperty('allowSharing')
     const agents = await readRegistry()
     expect(agents.find((item: any) => item.id === 'codex')).toEqual({ id: 'codex', name: 'Codex', command: '/usr/bin/codex', args: [] })
     expect(agents.every((item: any) => !item.remote)).toBe(true)
-    expect(agents.find((item: any) => item.id === id(1)).remoteAgent).toEqual({ connectionId: box.id, adapter: 'codex', executable: 'codex', args: [], allowSharing: true })
-    // Agent 2 did not share: it keeps that under a sharing connection.
-    expect(agents.find((item: any) => item.id === id(2)).remoteAgent).toMatchObject({ connectionId: box.id, adapter: 'claude', allowSharing: false })
-    expect((await remoteAgentPlacement(id(1)))?.spec.allowSharing).toBe(true)
-    expect((await remoteAgentPlacement(id(2)))?.spec.allowSharing).toBe(false)
+    // Sharing now lives in the agent's permissions (sharingMigration.ts).
+    expect(agents.find((item: any) => item.id === id(1)).remoteAgent).toEqual({ connectionId: box.id, adapter: 'codex', executable: 'codex', args: [] })
+    expect(agents.find((item: any) => item.id === id(2)).remoteAgent).toEqual({ connectionId: box.id, adapter: 'claude', executable: 'claude', args: [] })
     // Each agent keeps the P0 identity its folders and threads were saved with.
     expect((await remoteAgentPlacement(id(1)))?.target).toEqual({ executionTargetId: legacyTargetId({ host: 'box', user: 'me' }), targetRevision: 0 })
     expect((await remoteAgentPlacement(id(3)))?.target).toEqual({ executionTargetId: legacyTargetId({ host: 'other' }), targetRevision: 2 })
@@ -82,7 +81,7 @@ describe('migration from per-agent SSH settings', () => {
     await writeRegistry([legacy(1, { host: 'box' })])
     const { store } = await run()
     const [connection] = await store.list()
-    await store.save({ id: connection.id, name: connection.name, ssh: { host: 'box', user: 'root' }, allowSharing: false })
+    await store.save({ id: connection.id, name: connection.name, ssh: { host: 'box', user: 'root' } })
     expect((await remoteAgentPlacement(id(1)))?.target).toEqual({ executionTargetId: `ssh:${connection.id}`, targetRevision: 1 })
   })
 
@@ -162,15 +161,6 @@ describe('migration from per-agent SSH settings', () => {
     configureLocalAgentRegistry(directory, restarted)
     await migrateConnections(directory, restarted)
     expect((await readRegistry()).find((item: any) => item.id === id(1))?.remoteAgent?.connectionId).toMatch(/^conn_/)
-  })
-
-  it('does not expose an agent that never shared when its connection starts sharing', async () => {
-    await writeRegistry([legacy(1, { host: 'box' })])
-    const { store } = await run()
-    const [connection] = await store.list()
-    expect(connection.allowSharing).toBe(false)
-    await store.save({ id: connection.id, name: connection.name, ssh: connection.ssh, allowSharing: true })
-    expect((await remoteAgentPlacement(id(1)))?.spec.allowSharing).toBe(false)
   })
 
   it('is a no-op without remote agents or a registry', async () => {

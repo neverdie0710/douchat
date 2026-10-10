@@ -3,7 +3,7 @@ import type { RemoteAgentSpec } from '../shared/types'
 import { checkFolderName, checkRemoteFolderPolicy, listRemoteDirectories, remoteTerminalArgs, resolveRemoteWorkspace } from './remoteWorkspace'
 import { REMOTE_BOOTSTRAP } from './remoteScript'
 
-const spec = { transport: 'ssh', host: 'box', user: 'me', adapter: 'codex', executable: 'codex', args: [], allowSharing: false, remoteHome: '/home/me' } as RemoteAgentSpec & { remoteHome: string }
+const spec = { transport: 'ssh', host: 'box', user: 'me', adapter: 'codex', executable: 'codex', args: [], remoteHome: '/home/me' } as RemoteAgentSpec & { remoteHome: string }
 const answer = (text: string) => vi.fn().mockResolvedValue(Buffer.from(text))
 
 describe('server folder policy', () => {

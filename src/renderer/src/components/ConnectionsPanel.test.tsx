@@ -8,7 +8,7 @@ vi.mock('../preferences', () => ({ t: (text: string) => text }))
 import { ConnectionsPanel } from './ConnectionsPanel'
 
 let container: HTMLDivElement, root: Root
-const view = (extra: Partial<ConnectionView> = {}): ConnectionView => ({ id: `conn_${'a'.repeat(32)}`, name: 'Box', kind: 'ssh', enabled: true, targetRevision: 0, ssh: { host: 'box', user: 'me' }, allowSharing: false, createdAt: 0, label: 'me@box', agentIds: [], status: { state: 'connected', latencyMs: 40, agents: 0 }, ...extra })
+const view = (extra: Partial<ConnectionView> = {}): ConnectionView => ({ id: `conn_${'a'.repeat(32)}`, name: 'Box', kind: 'ssh', enabled: true, targetRevision: 0, ssh: { host: 'box', user: 'me' }, createdAt: 0, label: 'me@box', agentIds: [], status: { state: 'connected', latencyMs: 40, agents: 0 }, ...extra })
 let api: Record<string, ReturnType<typeof vi.fn>>
 beforeEach(() => {
   ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -48,7 +48,7 @@ it('adds a connection from the SSH config', async () => {
   await render()
   await act(async () => button('Add').click())
   await act(async () => button('Save').click())
-  expect(api.saveConnection).toHaveBeenCalledWith({ name: '', allowSharing: false, ssh: { host: 'box' } })
+  expect(api.saveConnection).toHaveBeenCalledWith({ name: '', ssh: { host: 'box' } })
 })
 
 it('asks before deleting a connection that agents use, and can keep them', async () => {

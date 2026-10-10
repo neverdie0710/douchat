@@ -108,8 +108,6 @@ export interface RemoteAgentSpec {
   remotePath?: string
   /** Remote $HOME discovered by the connection probe. */
   remoteHome?: string
-  /** Friends and other owners may call this agent only when enabled. */
-  allowSharing: boolean
 }
 
 export interface CustomLocalAgentInput {
@@ -134,8 +132,6 @@ export interface RemoteAgentBinding {
   executable: string
   /** One argument per entry; only the custom adapter may use {prompt}. */
   args: string[]
-  /** Can only narrow the connection's setting: false always wins. */
-  allowSharing?: boolean
 }
 
 export type RemoteConnectionKind = 'ssh'
@@ -149,8 +145,6 @@ export interface RemoteConnection {
   /** Increased whenever host, port, user or key change; name and probe results don't count. */
   targetRevision: number
   ssh: { host: string; port?: number; user?: string; identityFile?: string }
-  /** Friends and other owners may call agents on this server only when enabled. */
-  allowSharing: boolean
   /** Last validated probe of the server. */
   probe?: { home: string; path: string; checkedAt: number }
   createdAt: number
@@ -161,7 +155,6 @@ export interface RemoteConnectionInput {
   id?: string
   name: string
   ssh: { host: string; port?: number; user?: string; identityFile?: string }
-  allowSharing: boolean
 }
 
 export type ConnectionStatus =

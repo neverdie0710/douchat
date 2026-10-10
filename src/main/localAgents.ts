@@ -144,8 +144,7 @@ export function validateRemoteAgentBinding(input: unknown): RemoteAgentBinding {
   if (!/^conn_[0-9a-f]{32}$/.test(connectionId)) throw new Error('Choose a server connection.')
   // Adapter, executable, arguments and the dangerous-argument table are the same rules as before.
   const spec = normalizeRemoteSpec({ transport: 'ssh', host: 'placeholder', adapter: value.adapter, executable: value.executable, args: value.args ?? [] })
-  if (value.allowSharing !== undefined && typeof value.allowSharing !== 'boolean') throw new Error('Invalid sharing setting.')
-  return { connectionId, adapter: spec.adapter, executable: spec.executable, args: spec.args, allowSharing: value.allowSharing === true }
+  return { connectionId, adapter: spec.adapter, executable: spec.executable, args: spec.args }
 }
 
 export function validateLocalAgentInput(input: CustomLocalAgentInput): CustomLocalAgentInput {

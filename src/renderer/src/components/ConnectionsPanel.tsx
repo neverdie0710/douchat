@@ -93,7 +93,6 @@ function ConnectionEditor({ connection, onClose, onSaved }: { connection?: Conne
   const [port, setPort] = useState(connection?.ssh.port ? String(connection.ssh.port) : '')
   const [user, setUser] = useState(connection?.ssh.user ?? '')
   const [identityFile, setIdentityFile] = useState(connection?.ssh.identityFile ?? '')
-  const [allowSharing, setAllowSharing] = useState(connection?.allowSharing ?? false)
   const [hosts, setHosts] = useState<string[]>([])
   const [manual, setManual] = useState(Boolean(connection))
   const [busy, setBusy] = useState(false)
@@ -113,14 +112,10 @@ function ConnectionEditor({ connection, onClose, onSaved }: { connection?: Conne
   const save = async (): Promise<void> => {
     if (moved && connection.agentIds.length && !window.confirm(t('Changing the server stops running turns on it, and folders chosen on the old server will no longer be used. Continue?'))) return
     setBusy(true); setError('')
-    const input: RemoteConnectionInput = { ...(connection ? { id: connection.id } : {}), name: name.trim(), allowSharing,
+    const input: RemoteConnectionInput = { ...(connection ? { id: connection.id } : {}), name: name.trim(),
       ssh: { host: host.trim(), ...(port.trim() ? { port: Number(port) } : {}), ...(user.trim() ? { user: user.trim() } : {}), ...(identityFile.trim() ? { identityFile: identityFile.trim() } : {}) } }
     try { onSaved(await window.douchat.saveConnection(input)) }
     catch (cause) { if (mounted.current) { setError(messageSendError(cause)); setBusy(false) } }
-  }
-  const toggleSharing = (checked: boolean): void => {
-    if (checked && !window.confirm(t('Friends and other agents will be able to run commands on your server through agents on this connection. Allow sharing?'))) return
-    setAllowSharing(checked)
   }
   return <NativeDialog className="modal-backdrop" onClose={onClose} width={520}>
     <form className="local-agent-editor" role="dialog" aria-modal="true" aria-labelledby="connection-editor-title" onSubmit={event => { event.preventDefault(); if (!busy && host.trim()) void save() }}>
@@ -137,7 +132,6 @@ function ConnectionEditor({ connection, onClose, onSaved }: { connection?: Conne
           <label>{t('Identity file')}<input maxLength={1024} value={identityFile} placeholder="~/.ssh/id_ed25519" spellCheck={false} onChange={event => setIdentityFile(event.target.value)} /></label>
         </div>
         <label>{t('Name')}<input maxLength={80} value={name} placeholder={host || 'dev-box'} onChange={event => setName(event.target.value)} /></label>
-        <label className="local-agent-checkbox"><input type="checkbox" checked={allowSharing} onChange={event => toggleSharing(event.target.checked)} />{t('Allow friends and other agents to call agents on this server')}</label>
         <p className="settings-note">{t('Leave user, port and key empty to use your SSH config (~/.ssh/config). Uses the ssh client, keys and ssh-agent on this computer; passwords are not stored. Confirm the host key once in Terminal with ssh before testing.')}</p>
       </fieldset>
       {error && <p className="settings-error" role="alert">{t(error)}</p>}

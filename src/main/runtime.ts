@@ -3183,10 +3183,6 @@ export class DouchatRuntime {
     const taskAbort = new AbortController()
     signal = AbortSignal.any([signal, taskAbort.signal])
     try {
-      if (caller && (caller.requesterId !== ownerId || caller.requesterAgentId) && config.localAgentId) {
-        const remote = await remoteAgentSpec(config.localAgentId)
-        if (remote && !remote.allowSharing) throw new Error('This agent runs on its owner\'s server and is not shared with other people or agents.')
-      }
       if (caller) {
         this.sharedCallers.set(sessionKey, { ...caller, signal })
         if (caller.requesterId !== ownerId || caller.requesterAgentId) {
