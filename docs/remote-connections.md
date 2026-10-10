@@ -333,7 +333,7 @@ curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_
 
 A 的向导显示安装命令和设备指纹，轮询到主机上线后让用户命名并选择是否允许共享，保存为 `kind: 'daemon'` 的连接。之后与 SSH 连接一样「扫描」B 上的 CLI 并添加 agent。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
 
-发布：`npm run build:host` 在 `host/dist/` 生成 `douchat-host.mjs`、`install.sh`、`manifest.json`；`npm run publish:host:local` 另外复制到 `../douchat-tanstack/public/host/`（该目录已加入 douchat-tanstack 的 `.gitignore`，部署流程需要单独带上这三个文件）。当前完整性只靠同源 HTTPS 和 manifest 摘要，minisign 发布签名待补（见第 11 节）。
+发布：`npm run build:host` 在 `host/dist/` 生成 `latest.txt` 和 `<version>/` 下的 `douchat-host.mjs`、`install.sh`、`manifest.json`，根目录另有 `install.sh` 和 `latest.txt`；`npm run publish:host:local` 另外复制到 `../douchat-tanstack/public/host/`（已加入 `.gitignore`，仅供本地联调）。生产分发见第 11 节。
 
 ### 6.4 服务端改动（douchat-tanstack，复用 social）
 
@@ -747,7 +747,7 @@ export interface RemoteTransport {
 | `src/main/remote/remoteApprovals.ts` | B 侧审批的签名应答；中继方案下审批在 A 端，未启用 |
 | douchat-tanstack schema + `drizzle/` | remote_host 之外的 social_executor_binding、social_task_execution、social_channel_cursor；social `heartbeat` / `tasks` / `claim` 的主机 scope |
 | `src/main/deviceIdentity.ts` + douchat-tanstack `desktop_device` | 主人多设备独立登记与信任分发 |
-| `host/` 执行端 | social 执行端主循环、无界面 `authorize`、附件下载、`workspaces.json`、Node SEA 单文件、minisign 签名 |
+| `host/` 执行端 | social 执行端主循环、无界面 `authorize`、附件下载、`workspaces.json`、Node SEA 单文件 |
 | 6.7 Computer Use 相关（`runtime.ts`、`computer.ts`、`remoteSkillBridge.ts`、`host/desk`、`host/display`） | S1/S2/S3 |
 | `host/installer` | 原生安装器 |
 
@@ -777,12 +777,17 @@ export interface RemoteTransport {
 | P0 | 工作区完整绑定 `{ path, executionTargetId, targetRevision }`；纳入 fingerprint；贯通 runtime、connectionPlan、RemoteRun、prewarm；legacy SSH 目标校验和进程内目录串行 | 无，可单独发版 |
 | P1 | SSH 传输抽象（第 7 节）+ 连接模块；目标版本、迁移阶段恢复和引用校验；锁承诺仍限同一桌面进程/连接 | P0 |
 | P2（已实现） | 守护进程纯中继（6.1，对标 SSH）：服务端 relay、A 侧 daemonRelay 传输、`douchat-host` 中继端与签名校验；`install.sh` + systemd / launchd 服务、`upgrade` / `doctor`；注册向导与取消吊销；daemon 连接无终端（置灰） | P1 |
-| P2.x | minisign 签名发布产物；Node SEA 单文件；daemon 连接的交互终端；生产部署下长轮询时限验收 | P2 |
+| P2.x | Node SEA 单文件；daemon 连接的交互终端；生产部署下长轮询时限验收 | P2 |
 | P3（可选） | B 自主执行模式（6.4、6.5、6.8：绑定/CAS、租约、控制游标、多设备签名与远程审批、附件下载）；通过 SSH 一键安装守护进程；原生安装器；端到端加密（6.6）；6.7 Computer Use S1/S2/S3；按需评估 WebSocket 替换长轮询 | P2 |
 
 ## 11. 发布前置条件与运行参数
 
-- 守护进程中继发布前：douchat-tanstack 需在 `<serviceUrl>/host/` 提供 `install.sh`、`douchat-host.mjs`、`manifest.json`（`npm run build:host` 生成，`publish:host:local` 复制到 `../douchat-tanstack/public/host`，生产由发布流程上传）；下载地址必须是 https，可用 `DOUCHAT_HOST_DOWNLOAD_URL` 覆盖。产物目前只有 manifest 的 sha256 校验，manifest 与脚本同源，不能防服务端被篡改；正式对外前补 minisign 签名，公钥内置于 `install.sh` 与 `upgrade`。验证生产部署下长轮询时限、跨实例唤醒与 closed 流 / 未确认帧的清理。
+- 守护进程中继发布前：
+  - 数据库：生产是 Cloudflare D1，`drizzle/0004_remote_hosts.sql` 由 `wrangler d1 migrations apply <DB> --remote`（douchat-tanstack `pnpm cf:migrate`）执行，必须先于新服务端代码上线；`tests/migration-0004.test.ts` 在 D1 运行时上执行该文件并与 `schema.sqlite.ts` 逐列比对。
+  - 分发：生产产物在 `https://cdn.douchat.ai/host/`（R2）：`<version>/` 下的 `install.sh`、`douchat-host.mjs`、`manifest.json` 不可变、不覆盖；根目录 `install.sh`（缓存 5 分钟）和 `latest.txt`（不缓存）指向最新版本，最后上传。推送 `host-v<version>` tag 由 `.github/workflows/publish-host.yml` 构建、端到端校验（`scripts/check-host-install.sh`）并上传（`scripts/publish-host.sh`）。douchat.ai 之外的服务（本地联调）用 `<serviceUrl>/host`（`publish:host:local`）；`DOUCHAT_HOST_DOWNLOAD_URL` 可覆盖。
+  - 校验：对标 raft（`curl -fsSL https://cdn.raft.build/computer/install.sh | sh`，只做同源 SHA256SUMS 校验、无签名）：安装命令为 `curl <base>/install.sh | sh`，`install.sh` 按版本 `manifest.json` 的 sha256 核对 bundle，Node.js 下载与脚本内固定哈希比对；`upgrade` 读 `latest.txt`、拒绝降级、核对新版本 `install.sh` 哈希后执行。能发现下载损坏和版本错配，不防下载地址本身被篡改；需要时再加离线签名。
+  - 发版顺序：先发 host（`host-v*`），再发桌面端；桌面端 `release.yml` 在 CDN 上没有 host 发布时拒绝发版。
+  - 待验证：生产部署下长轮询时限、跨实例唤醒（当前依赖 250ms 数据库轮询兜底）与 closed 流 / 未确认帧的清理，以及中继轮询对 D1 读用量的影响。
 - 自主执行模式启用前明确生产部署和数据库，验证绑定 CAS、租约扫描、跨实例控制通知及清理。Cloudflare Workers 使用 Cron Trigger，Node 部署使用受控的定时任务；按实际部署验证长轮询时限与一致性，不以本地 SQLite 通过替代生产验收。
 - S1 先验证 6.7.2 的插件可用性、TCC 授权主体与同账号并发限制；未通过时保持 unsupported，不阻塞基础守护进程发布。
 - P3 为可选扩展，S2、S3、端到端加密及独立安装器分别验收、独立开放，不作为 P0–P2 的交付依赖。

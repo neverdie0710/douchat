@@ -1,5 +1,5 @@
 #!/bin/sh
-# douchat-host installer (remote-connections.md 7.2).
+# douchat-host installer (remote-connections.md 7.2, 11).
 #
 #   curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_...' sh
 #
@@ -7,8 +7,15 @@
 # with Douchat when DOUCHAT_ENROLL is set, and keeps it running as a user
 # service. Without DOUCHAT_ENROLL on an existing install it upgrades in place.
 #
+# <base>/latest.txt names the newest version; <base>/<version>/ is immutable.
+# The bundle must match the sha256 in that version's manifest.json, and Node.js
+# downloads must match the hashes pinned below. Like most install scripts this
+# guards against broken or mixed-up downloads, not against a compromised
+# download address.
+#
 # Environment:
-#   DOUCHAT_HOST_URL      Download base holding manifest.json and the bundle (required)
+#   DOUCHAT_HOST_URL      Download base holding latest.txt and <version>/ (required)
+#   DOUCHAT_HOST_VERSION  Version to install (default: latest.txt)
 #   DOUCHAT_ENROLL        One-time install token from Douchat
 #   DOUCHAT_HOST_HOME     Install folder (default ~/.douchat-host)
 #   DOUCHAT_NODE_MIRROR   Node.js download mirror (default https://nodejs.org/dist)
@@ -18,6 +25,16 @@ set -eu
 
 NODE_VERSION="v22.20.0"
 NODE_MAJOR_MIN=20
+# sha256 of the official $NODE_VERSION archives (nodejs.org SHASUMS256.txt).
+node_sha256() {
+  case "$1" in
+    node-v22.20.0-darwin-arm64) echo cc04a76a09f79290194c0646f48fec40354d88969bec467789a5d55dd097f949 ;;
+    node-v22.20.0-darwin-x64) echo 00df9c5df3e4ec6848c26b70fb47bf96492f342f4bed6b17f12d99b3a45eeecc ;;
+    node-v22.20.0-linux-arm64) echo 4181609e03dcb9880e7e5bf956061ecc0503c77a480c6631d868cb1f65a2c7dd ;;
+    node-v22.20.0-linux-x64) echo eeaccb0378b79406f2208e8b37a62479c70595e20be6b659125eb77dd1ab2a29 ;;
+    *) echo "" ;;
+  esac
+}
 
 say() { printf '%s\n' "douchat-host: $*"; }
 fail() { printf '%s\n' "douchat-host: $*" >&2; exit 1; }
@@ -26,6 +43,16 @@ fail() { printf '%s\n' "douchat-host: $*" >&2; exit 1; }
 BASE="${DOUCHAT_HOST_URL:-}"
 [ -n "$BASE" ] || fail "DOUCHAT_HOST_URL is not set. Copy the install command from Douchat again."
 BASE="${BASE%/}"
+case "$BASE" in
+  https://*) ;;
+  http://localhost|http://localhost[:/]*|http://127.0.0.1|http://127.0.0.1[:/]*|http://\[::1\]|http://\[::1\][:/]*) ;;
+  *) fail "The download address must use HTTPS: $BASE" ;;
+esac
+WANT="${DOUCHAT_HOST_VERSION:-}"
+case "$WANT" in
+  '') ;;
+  *[!0-9A-Za-z.-]*) fail "Invalid DOUCHAT_HOST_VERSION: $WANT" ;;
+esac
 HOST_HOME="${DOUCHAT_HOST_HOME:-$HOME/.douchat-host}"
 case "$HOST_HOME" in *\'*|'') fail "Unsupported install folder: $HOST_HOME" ;; esac
 command -v curl >/dev/null 2>&1 || fail "curl is required."
@@ -63,11 +90,11 @@ elif command -v node >/dev/null 2>&1 && node_ok "$(command -v node)"; then NODE=
 else
   MIRROR="${DOUCHAT_NODE_MIRROR:-https://nodejs.org/dist}"
   NAME="node-$NODE_VERSION-$OS-$ARCH"
+  EXPECTED="$(node_sha256 "$NAME")"
+  [ -n "$EXPECTED" ] || fail "No pinned Node.js build for $OS-$ARCH. Install Node.js $NODE_MAJOR_MIN+ and run the command again."
   say "Node.js $NODE_MAJOR_MIN+ not found; downloading $NAME…"
-  fetch "$MIRROR/$NODE_VERSION/SHASUMS256.txt" "$WORK/SHASUMS256.txt"
   fetch "$MIRROR/$NODE_VERSION/$NAME.tar.gz" "$WORK/node.tar.gz"
-  EXPECTED="$(grep " $NAME.tar.gz\$" "$WORK/SHASUMS256.txt" | cut -d' ' -f1)"
-  [ -n "$EXPECTED" ] && [ "$(sha256 "$WORK/node.tar.gz")" = "$EXPECTED" ] || fail "The Node.js download failed verification."
+  [ "$(sha256 "$WORK/node.tar.gz")" = "$EXPECTED" ] || fail "The Node.js download failed verification."
   tar -xzf "$WORK/node.tar.gz" -C "$WORK"
   rm -rf "$HOST_HOME/runtime"
   mv "$WORK/$NAME" "$HOST_HOME/runtime"
@@ -75,11 +102,17 @@ else
   node_ok "$NODE" || fail "The downloaded Node.js does not run on this system."
 fi
 
-# ── douchat-host bundle ──
-fetch "$BASE/manifest.json" "$WORK/manifest.json"
-VERSION="$("$NODE" -e "const m=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!/^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.]+)?\$/.test(m.version)||!/^[0-9a-f]{64}\$/.test(m.sha256))process.exit(1);console.log(m.version)" "$WORK/manifest.json")" || fail "The release manifest is invalid."
+# ── douchat-host bundle: the version's manifest, then the bundle it names ──
+if [ -z "$WANT" ]; then
+  fetch "$BASE/latest.txt" "$WORK/latest.txt"
+  WANT="$(tr -d ' \r\n' < "$WORK/latest.txt")"
+  case "$WANT" in ''|*[!0-9A-Za-z.-]*) fail "The latest-version pointer is invalid." ;; esac
+fi
+fetch "$BASE/$WANT/manifest.json" "$WORK/manifest.json"
+VERSION="$("$NODE" -e "const m=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));if(!/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?\$/.test(m.version)||!/^[0-9a-f]{64}\$/.test(m.sha256))process.exit(1);console.log(m.version)" "$WORK/manifest.json")" || fail "The release manifest is invalid."
+[ "$VERSION" = "$WANT" ] || fail "The manifest is for $VERSION, not the requested $WANT."
 SHA="$("$NODE" -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).sha256)" "$WORK/manifest.json")"
-fetch "$BASE/douchat-host.mjs" "$WORK/douchat-host.mjs"
+fetch "$BASE/$VERSION/douchat-host.mjs" "$WORK/douchat-host.mjs"
 [ "$(sha256 "$WORK/douchat-host.mjs")" = "$SHA" ] || fail "The douchat-host download failed verification."
 "$NODE" "$WORK/douchat-host.mjs" version >/dev/null 2>&1 || fail "douchat-host $VERSION does not run with $("$NODE" --version)."
 

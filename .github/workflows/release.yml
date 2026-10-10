@@ -76,6 +76,17 @@ jobs:
           npm test
           npm run typecheck
 
+      - name: Check douchat-host is published
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest=$(curl --fail --silent --show-error --retry 5 --retry-all-errors https://cdn.douchat.ai/host/latest.txt | tr -d ' \r\n') || {
+            echo "douchat-host is not on the CDN. Push a host-v* tag first." >&2
+            exit 1
+          }
+          curl --fail --silent --show-error -o /dev/null "https://cdn.douchat.ai/host/$latest/manifest.json"
+          curl --fail --silent --show-error -o /dev/null "https://cdn.douchat.ai/host/install.sh"
   build:
     needs: [select-matrix, verify]
     strategy:

@@ -70,13 +70,16 @@ export function deviceFingerprint(publicKey: string): string {
   const hex = createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex').slice(0, 16)
   return hex.match(/.{4}/g)!.join('-')
 }
+/** The install command. The token only contains base64url characters and the base is a validated URL, so single quotes are enough. */
 export function installCommand(token: string, downloadBase: string): string {
-  // The token only contains base64url characters and the base is a validated URL, so single quotes are enough.
   return `curl -fsSL '${downloadBase}/install.sh' | DOUCHAT_HOST_URL='${downloadBase}' DOUCHAT_ENROLL='${token}' sh`
 }
-/** Where install.sh and the host bundle are served: the Douchat service itself unless overridden (e.g. a CDN). */
+/** Production releases are on the CDN; other services (local testing) serve them at <service>/host. */
+export const PRODUCTION_HOST_DOWNLOAD = 'https://cdn.douchat.ai/host'
+/** Where install.sh and the host bundle are served, unless overridden. */
 export function hostDownloadBase(serviceUrl: string, override = process.env.DOUCHAT_HOST_DOWNLOAD_URL): string {
-  const base = new URL(override?.trim() || `${serviceUrl}/host`)
+  const fallback = new URL(serviceUrl).origin === 'https://douchat.ai' ? PRODUCTION_HOST_DOWNLOAD : `${serviceUrl.replace(/\/+$/, '')}/host`
+  const base = new URL(override?.trim() || fallback)
   if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))
     throw new Error('The douchat-host download address must use HTTPS.')
   if (/['\s\\]/.test(base.href)) throw new Error('Invalid douchat-host download address.')

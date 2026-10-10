@@ -5,11 +5,12 @@ import { arch, platform } from 'node:os'
 import { join } from 'node:path'
 import { callChannel, HostClient, UnauthorizedError } from './client'
 import { Relay, type OpenRequest } from './relay'
+import { compareVersions, isLocalBase, parseManifest, ReleaseError, sha256Hex, type ReleaseManifest } from './release'
 import { installedService, installService, PID_FILE, removeService, restartService, rotateLog, serviceStatus, startService, stopService } from './service'
 import { ensureHome, HOST_HOME, loadState, loadTrust, purgeHome, saveState, saveTrust, SeenRequests, type HostState, type TrustState } from './state'
 import { acceptOwnerCommand, deviceFingerprint, generateHostKey, nextTrust, signAsHost, VerifyError } from './verify'
 
-export const HOST_VERSION = '0.1.0'
+export const HOST_VERSION = '0.1.1'
 const ENROLLMENT_PREFIX = 'dch1_'
 const TRUST_REFRESH_MS = 5 * 60 * 1000
 const ROTATE_BEFORE_MS = 30 * 24 * 60 * 60 * 1000
@@ -232,15 +233,36 @@ function installInfo(): { base?: string; node?: string; version?: string } {
   try { return JSON.parse(readFileSync(INSTALL_FILE, 'utf8')) } catch { return {} }
 }
 
-/** Re-runs install.sh from where this copy came from; it swaps the version and restarts the service. */
+/**
+ * Upgrades from where this copy came from: reads latest.txt, refuses to go
+ * back to an older version, checks that version's install.sh against its
+ * manifest, then runs it to switch versions and restart the service.
+ */
 async function upgrade(): Promise<void> {
   refuseRoot()
-  const base = process.env.DOUCHAT_HOST_URL || installInfo().base
+  const base = (process.env.DOUCHAT_HOST_URL || installInfo().base || '').replace(/\/+$/, '')
   if (!base) die('Unknown download address. Run the install command from Douchat again.')
-  const response = await fetch(`${base}/install.sh`, { signal: AbortSignal.timeout(60_000) })
-  if (!response.ok) die(`Could not download the installer (HTTP ${response.status}).`)
-  const script = await response.text()
-  const child = spawn('/bin/sh', ['-s'], { stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env, DOUCHAT_HOST_URL: base, DOUCHAT_HOST_HOME: HOST_HOME } })
+  if (!base.startsWith('https://') && !isLocalBase(base)) die(`Refusing to upgrade from a non-HTTPS address: ${base}`)
+  const download = async (url: string): Promise<Buffer> => {
+    const response = await fetch(url, { signal: AbortSignal.timeout(60_000) }).catch(() => undefined)
+    if (!response?.ok) die(`Could not download ${url}${response ? ` (HTTP ${response.status})` : ''}.`)
+    return Buffer.from(await response!.arrayBuffer())
+  }
+  let manifest: ReleaseManifest
+  try {
+    const latest = (await download(`${base}/latest.txt`)).toString('utf8').trim()
+    if (!/^[0-9A-Za-z.-]{1,64}$/.test(latest)) throw new ReleaseError('The latest-version pointer is invalid.')
+    manifest = parseManifest(await download(`${base}/${latest}/manifest.json`))
+    if (manifest.version !== latest) throw new ReleaseError(`The manifest is for ${manifest.version}, not ${latest}.`)
+  } catch (error) {
+    return die(error instanceof ReleaseError ? error.message : String(error))
+  }
+  const order = compareVersions(manifest.version, HOST_VERSION)
+  if (order < 0) die(`The download address offers ${manifest.version}, older than the installed ${HOST_VERSION}; refusing to downgrade.`)
+  if (order === 0 && !process.argv.includes('--force')) { console.log(`douchat-host ${HOST_VERSION} is the latest version.`); return }
+  const script = await download(`${base}/${manifest.version}/install.sh`)
+  if (sha256Hex(script) !== manifest.installSha256) die('The installer failed verification. The download may have been tampered with.')
+  const child = spawn('/bin/sh', ['-s'], { stdio: ['pipe', 'inherit', 'inherit'], env: { ...process.env, DOUCHAT_HOST_URL: base, DOUCHAT_HOST_VERSION: manifest.version, DOUCHAT_HOST_HOME: HOST_HOME } })
   child.stdin.end(script)
   const code = await new Promise<number>(resolve => child.on('close', value => resolve(value ?? 1)))
   if (code) process.exit(code)
@@ -278,7 +300,7 @@ const USAGE = `Usage: douchat-host <command>
   service <action>          install | start | stop | restart | status | remove
   status                    Show the registration and process
   doctor                    Status plus a connection check
-  upgrade                   Download and switch to the latest version
+  upgrade [--force]         Download and switch to the latest version
   uninstall [--purge]       Remove this server from Douchat (--purge deletes ${HOST_HOME})
   version                   Print the version
 `

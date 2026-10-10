@@ -12,11 +12,13 @@ it('builds a one-time install command carrying the owner device key', () => {
   const body = JSON.parse(Buffer.from(token.slice(5), 'base64url').toString('utf8'))
   expect(body).toEqual({ v: 1, serviceUrl: 'https://douchat.ai', ticket: 'det_abcdefghijklmnopqrstuvwxyz', hostId: 'hst_00000000-0000-4000-8000-000000000000', ownerId: 'u1',
     devicePublicKey: publicKey, deviceId: 'dev_1', fingerprint: deviceFingerprint(publicKey), exp: 123 })
-  expect(installCommand(token, 'https://douchat.ai/host')).toBe(`curl -fsSL 'https://douchat.ai/host/install.sh' | DOUCHAT_HOST_URL='https://douchat.ai/host' DOUCHAT_ENROLL='${token}' sh`)
+  expect(installCommand(token, 'https://cdn.douchat.ai/host')).toBe(
+    `curl -fsSL 'https://cdn.douchat.ai/host/install.sh' | DOUCHAT_HOST_URL='https://cdn.douchat.ai/host' DOUCHAT_ENROLL='${token}' sh`)
 })
 
-it('serves the host bundle from the service unless overridden, over HTTPS only', () => {
-  expect(hostDownloadBase('https://douchat.ai', '')).toBe('https://douchat.ai/host')
+it('serves production releases from the CDN, local services from <service>/host, over HTTPS only', () => {
+  expect(hostDownloadBase('https://douchat.ai', '')).toBe('https://cdn.douchat.ai/host')
+  expect(hostDownloadBase('https://douchat.ai/', undefined)).toBe('https://cdn.douchat.ai/host')
   expect(hostDownloadBase('http://localhost:3000', undefined)).toBe('http://localhost:3000/host')
   expect(hostDownloadBase('https://douchat.ai', 'https://cdn.example.com/host/')).toBe('https://cdn.example.com/host')
   expect(() => hostDownloadBase('https://douchat.ai', 'http://cdn.example.com/host')).toThrow(/HTTPS/)

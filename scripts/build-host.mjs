@@ -1,34 +1,55 @@
-// Builds the douchat-host release: host/dist/{douchat-host.mjs, install.sh, manifest.json}.
+// Builds a douchat-host release (remote-connections.md 11):
+//
+//   host/dist/latest.txt                  newest version (never cached)
+//   host/dist/install.sh                  installer the install command pipes to sh (short cache)
+//   host/dist/<version>/install.sh        immutable
+//   host/dist/<version>/douchat-host.mjs  immutable
+//   host/dist/<version>/manifest.json     { version, sha256, installSha256, minNode, builtAt }
+//
 //   node scripts/build-host.mjs [--publish <dir>]
-// --publish also copies the three files into <dir>, e.g. ../douchat-tanstack/public/host
-// so the service serves them at <service>/host/ (the default download address).
+//
+// --publish copies the tree into <dir>, e.g. ../douchat-tanstack/public/host
+// for local testing (served at http://localhost:3000/host).
 import { build } from 'esbuild'
 import { createHash } from 'node:crypto'
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const dist = join(root, 'host', 'dist')
-const version = /export const HOST_VERSION = '([^']+)'/.exec(readFileSync(join(root, 'host', 'src', 'cli.ts'), 'utf8'))?.[1]
-if (!version) throw new Error('HOST_VERSION not found in host/src/cli.ts')
+const args = process.argv.slice(2)
+const sha256 = (data) => createHash('sha256').update(data).digest('hex')
 
-mkdirSync(dist, { recursive: true })
+const version = /export const HOST_VERSION = '([^']+)'/.exec(readFileSync(join(root, 'host', 'src', 'cli.ts'), 'utf8'))?.[1]
+if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$/.test(version)) throw new Error('HOST_VERSION not found in host/src/cli.ts')
+
+rmSync(dist, { recursive: true, force: true })
+const out = join(dist, version)
+mkdirSync(out, { recursive: true })
 await build({
   entryPoints: [join(root, 'host', 'src', 'cli.ts')],
-  outfile: join(dist, 'douchat-host.mjs'),
+  outfile: join(out, 'douchat-host.mjs'),
   bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'warning'
 })
-copyFileSync(join(root, 'host', 'install.sh'), join(dist, 'install.sh'))
-chmodSync(join(dist, 'install.sh'), 0o755)
-const sha256 = createHash('sha256').update(readFileSync(join(dist, 'douchat-host.mjs'))).digest('hex')
-writeFileSync(join(dist, 'manifest.json'), JSON.stringify({ version, sha256, minNode: 20, builtAt: new Date().toISOString() }, null, 2) + '\n')
-console.log(`douchat-host ${version} → ${dist} (sha256 ${sha256.slice(0, 12)}…)`)
+for (const target of [join(out, 'install.sh'), join(dist, 'install.sh')]) {
+  copyFileSync(join(root, 'host', 'install.sh'), target)
+  chmodSync(target, 0o755)
+}
+writeFileSync(join(out, 'manifest.json'), JSON.stringify({
+  version,
+  sha256: sha256(readFileSync(join(out, 'douchat-host.mjs'))),
+  installSha256: sha256(readFileSync(join(out, 'install.sh'))),
+  minNode: 20,
+  builtAt: new Date().toISOString()
+}, null, 2) + '\n')
+writeFileSync(join(dist, 'latest.txt'), `${version}\n`)
+console.log(`douchat-host ${version} → ${dist}`)
 
-const at = process.argv.indexOf('--publish')
+const at = args.indexOf('--publish')
 if (at >= 0) {
-  const target = resolve(process.argv[at + 1] ?? '')
-  if (!process.argv[at + 1]) throw new Error('--publish needs a directory')
+  if (!args[at + 1]) throw new Error('--publish needs a directory')
+  const target = resolve(args[at + 1])
   mkdirSync(target, { recursive: true })
-  for (const file of ['douchat-host.mjs', 'install.sh', 'manifest.json']) copyFileSync(join(dist, file), join(target, file))
+  cpSync(dist, target, { recursive: true })
   console.log(`published to ${target}`)
 }
