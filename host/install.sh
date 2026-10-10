@@ -63,7 +63,7 @@ sha256() {
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
   else openssl dgst -sha256 -r "$1" | cut -d' ' -f1; fi
 }
-fetch() { curl -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1" || fail "Could not download $1"; }
+fetch() { curl --noproxy 'localhost,127.0.0.1,::1' -fsSL --retry 3 --connect-timeout 20 -o "$2" "$1" || fail "Could not download $1"; }
 
 case "$(uname -s)" in
   Linux) OS=linux ;;

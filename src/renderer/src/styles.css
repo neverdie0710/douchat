@@ -6561,7 +6561,7 @@ html.native-dialog-window, .native-dialog-window body { width: 100%; height: 100
   -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
   animation: none !important; transform: none !important;
 }
-.native-dialog-window .native-dialog-content > :is(section, form, .add-friend-modal) {
+.native-dialog-window .native-dialog-content > :is(section, form, .add-friend-modal, .local-agent-editor) {
   position: relative !important; inset: auto !important; box-sizing: border-box;
   width: 100% !important; max-width: none !important; min-width: 0 !important;
   height: 100% !important; max-height: none !important; min-height: 0 !important;
@@ -6575,7 +6575,7 @@ html.native-dialog-window, .native-dialog-window body { width: 100%; height: 100
 /* Blur the workspace itself; the native child has its own unfiltered surface. */
 html.has-native-dialog #root { filter: blur(3px); }
 .native-dialog-window .native-dialog-content { height: auto; max-height: var(--dialog-max-height, 760px); padding-top: 0 !important; box-sizing: border-box; }
-.native-dialog-window .native-dialog-content > :is(section, form, .add-friend-modal) { height: auto !important; }
+.native-dialog-window .native-dialog-content > :is(section, form, .add-friend-modal, .local-agent-editor) { height: auto !important; }
 .native-dialog-window .native-dialog-content > .settings-modal {
   grid-template-columns: 190px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);

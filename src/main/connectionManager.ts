@@ -30,7 +30,9 @@ export function connectionLabel(connection: RemoteConnection): string {
 
 /** A probe through a disabled or edited connection must never reach the server. */
 function baseSpec(connection: RemoteConnection) {
-  return connectionSpec(connection, { adapter: 'custom', executable: 'true', args: [] })
+  // Probe a real executable: `command -v true` can return the shell builtin
+  // name, which is not an absolute executable path.
+  return connectionSpec(connection, { adapter: 'custom', executable: '/bin/sh', args: [] })
 }
 /** Closes SSH multiplexing for an SSH connection; daemon connections have nothing to close. */
 async function closeSsh(connection: RemoteConnection): Promise<void> {

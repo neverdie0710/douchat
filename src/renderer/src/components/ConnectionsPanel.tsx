@@ -1,4 +1,4 @@
-import { Copy, MoreHorizontal, Plus, RefreshCw, ScanSearch, Server, X } from 'lucide-react'
+import { Check, Copy, MoreHorizontal, Plus, RefreshCw, ScanSearch, Server, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import type { ConnectionStatus, ConnectionTestReport, ConnectionView, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteConnectionInput } from '../../../shared/types'
 import { messageSendError } from '../messageQueue'
@@ -86,7 +86,7 @@ export function ConnectionsPanel({ onAgentsChange }: { onAgentsChange: (agents: 
             <button role="menuitem" disabled={!item.enabled} onClick={() => { setMenu(undefined); void run(() => window.douchat.setConnectionEnabled(item.id, false)) }}>{t('Disconnect')}</button>
             <button role="menuitem" disabled={item.kind === 'daemon' || !item.enabled} title={item.kind === 'daemon' ? t('douchat-host servers have no terminal here. Work on the server directly.') : undefined}
               onClick={() => { setMenu(undefined); void run(() => window.douchat.openConnectionTerminal(item.id)) }}>{t('Open in terminal')}</button>
-            {item.kind === 'daemon' && <button role="menuitem" onClick={() => { setMenu(undefined); void navigator.clipboard.writeText(UNINSTALL_COMMAND) }}>{t('Copy uninstall command')}</button>}
+            {item.kind === 'daemon' && <button role="menuitem" onClick={() => { setMenu(undefined); void run(() => window.douchat.copyText(UNINSTALL_COMMAND)) }}>{t('Copy uninstall command')}</button>}
             <button role="menuitem" className="danger" onClick={() => remove(item)}>{t('Delete')}</button>
           </div>}
         </div>
@@ -192,6 +192,9 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
   const [name, setName] = useState('')
   const [expired, setExpired] = useState(false)
   const [copied, setCopied] = useState('')
+  const [copyError, setCopyError] = useState('')
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -216,7 +219,12 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
     }
   }, [attempt])
   const copy = (value: string, key: string): void => {
-    void navigator.clipboard.writeText(value).then(() => { setCopied(key); setTimeout(() => setCopied(current => current === key ? '' : current), 2000) })
+    clearTimeout(copyTimer.current)
+    setCopied(''); setCopyError('')
+    void window.douchat.copyText(value).then(() => {
+      setCopied(key)
+      copyTimer.current = setTimeout(() => setCopied(''), 2500)
+    }).catch(() => setCopyError('Could not copy command. Try again.'))
   }
   const save = async (): Promise<void> => {
     if (!enrollment) return
@@ -230,14 +238,15 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
       {!enrollment && !error && <p className="settings-note"><RefreshCw size={13} className="spin" /> {t('Creating install command…')}</p>}
       {enrollment && !host && <>
         <p className="settings-note">{t('1. Run this on the server as the user agents should run as (not root). It installs douchat-host in ~/.douchat-host, downloads Node.js there if the server has no Node.js 20+, and keeps it running as a user service.')}</p>
-        <div className="daemon-command"><code>{enrollment.installCommand}</code><button type="button" className="secondary-button" aria-label={t('Copy install command')} onClick={() => copy(enrollment.installCommand, 'install')}><Copy size={14} />{t(copied === 'install' ? 'Copied' : 'Copy')}</button></div>
+        <div className="daemon-command"><code>{enrollment.installCommand}</code><button type="button" className="secondary-button" aria-label={t('Copy install command')} onClick={() => copy(enrollment.installCommand, 'install')}>{copied === 'install' ? <Check size={14} /> : <Copy size={14} />}<span aria-live="polite">{t(copied === 'install' ? 'Copied' : 'Copy')}</span></button></div>
         <p className="settings-note">{t('2. When the installer asks, confirm that it shows this fingerprint:')} <code>{enrollment.fingerprint}</code></p>
         <p className="settings-note">{t('The command contains a one-time ticket that expires in 15 minutes. Do not share it. Closing this window without saving cancels it.')}</p>
         {expired
           ? <p className="settings-error" role="alert">{t('The install command expired before the server connected.')} <button type="button" className="local-settings-link" onClick={() => setAttempt(value => value + 1)}>{t('Create a new one')}</button></p>
           : <p className="settings-note" role="status"><RefreshCw size={13} className="spin" /> {t('Waiting for the server to connect…')} {t('If it does not connect, run this on the server:')} <code>~/.douchat-host/bin/douchat-host doctor</code></p>}
-        <details><summary>{t('Uninstall')}</summary><div className="daemon-command"><code>{enrollment.uninstallCommand}</code><button type="button" className="secondary-button" onClick={() => copy(enrollment.uninstallCommand, 'uninstall')}><Copy size={14} />{t(copied === 'uninstall' ? 'Copied' : 'Copy')}</button></div></details>
+        <details><summary>{t('Uninstall')}</summary><div className="daemon-command"><code>{enrollment.uninstallCommand}</code><button type="button" className="secondary-button" onClick={() => copy(enrollment.uninstallCommand, 'uninstall')}>{copied === 'uninstall' ? <Check size={14} /> : <Copy size={14} />}<span aria-live="polite">{t(copied === 'uninstall' ? 'Copied' : 'Copy')}</span></button></div></details>
       </>}
+      {copyError && <p className="settings-error" role="alert">{t(copyError)}</p>}
       {host && <fieldset disabled={busy}>
         <p className="connection-step-ok" role="status">✓ {t('douchat-host is online')}{host.info.version ? ` · v${host.info.version}` : ''}{host.info.os ? ` · ${[host.info.os, host.info.arch].filter(Boolean).join('/')}` : ''}</p>
         <label>{t('Name')}<input autoFocus maxLength={80} value={name} placeholder="dev-box" onChange={event => setName(event.target.value)} /></label>

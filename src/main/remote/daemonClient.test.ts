@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { agentPermissions } from '../../shared/agentPermissions'
 import type { AgentConfig } from '../../shared/types'
-import { deviceFingerprint, enrollmentToken, hostAgentConfig, hostDownloadBase, installCommand } from './daemonClient'
+import { deviceFingerprint, enrollmentServiceUrl, enrollmentToken, hostAgentConfig, hostDownloadBase, installCommand } from './daemonClient'
 
 const publicKey = (generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as { x: string }).x
 
@@ -40,4 +40,13 @@ it('sends a host only enabled skills, without files, and derives sharing from pe
   expect(hostAgentConfig(closed, { adapter: 'codex', executable: 'codex', args: [] }).allowSharing).toBe(false)
   const agentsOnly = { ...agent, permissions: { ...agentPermissions(), groupHumans: 'deny', groupAgents: 'ask' } } as AgentConfig
   expect(hostAgentConfig(agentsOnly, { adapter: 'codex', executable: 'codex', args: [] }).allowSharing).toBe(true)
+})
+
+it('keeps local enrollment and downloads on the service that issued the ticket', () => {
+  const service = enrollmentServiceUrl('http://localhost:3004', 'https://douchat.ai')
+  expect(service).toBe('http://localhost:3004')
+  expect(hostDownloadBase(service, '')).toBe('http://localhost:3004/host')
+  expect(installCommand('dch1_test', hostDownloadBase(service, ''))).toContain("curl -fsSL --noproxy 'localhost,127.0.0.1,::1' 'http://localhost:3004/host/install.sh'")
+  expect(enrollmentServiceUrl('http://127.0.0.1:3004', 'https://douchat.ai')).toBe('http://127.0.0.1:3004')
+  expect(enrollmentServiceUrl('https://douchat.ai', 'https://douchat.ai')).toBe('https://douchat.ai')
 })

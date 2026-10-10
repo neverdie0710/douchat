@@ -72,10 +72,20 @@ export function deviceFingerprint(publicKey: string): string {
 }
 /** The install command. The token only contains base64url characters and the base is a validated URL, so single quotes are enough. */
 export function installCommand(token: string, downloadBase: string): string {
-  return `curl -fsSL '${downloadBase}/install.sh' | DOUCHAT_HOST_URL='${downloadBase}' DOUCHAT_ENROLL='${token}' sh`
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(downloadBase).hostname)
+  const direct = local ? " --noproxy 'localhost,127.0.0.1,::1'" : ''
+  return `curl -fsSL${direct} '${downloadBase}/install.sh' | DOUCHAT_HOST_URL='${downloadBase}' DOUCHAT_ENROLL='${token}' sh`
 }
 /** Production releases are on the CDN; other services (local testing) serve them at <service>/host. */
 export const PRODUCTION_HOST_DOWNLOAD = 'https://cdn.douchat.ai/host'
+/** A local service can advertise its production origin via VITE_APP_URL.
+ * Keep local enrollment on the service that actually issued the ticket. */
+export function enrollmentServiceUrl(configuredUrl: string, advertisedUrl?: string): string {
+  const configured = new URL(configuredUrl)
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(configured.hostname)
+  return local ? configured.origin : new URL(advertisedUrl || configuredUrl).origin
+}
+
 /** Where install.sh and the host bundle are served, unless overridden. */
 export function hostDownloadBase(serviceUrl: string, override = process.env.DOUCHAT_HOST_DOWNLOAD_URL): string {
   const fallback = new URL(serviceUrl).origin === 'https://douchat.ai' ? PRODUCTION_HOST_DOWNLOAD : `${serviceUrl.replace(/\/+$/, '')}/host`
@@ -178,7 +188,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     if (!deviceId || !devicePublicKey) throw new Error('请重新登录 Douchat 以启用设备身份。')
     const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number }>({ action: 'host-enroll-ticket' }, undefined, identity)
     if (!/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
-    const serviceUrl = new URL(ticket.serviceUrl || this.url).origin
+    const serviceUrl = enrollmentServiceUrl(this.url, ticket.serviceUrl)
     const token = enrollmentToken({ serviceUrl, ticket: ticket.ticket, hostId: ticket.hostId, devicePublicKey, deviceId, ownerId: identity.id, exp: ticket.expiresAt })
     const enrollment: DaemonEnrollment = { id: ticket.hostId, hostId: ticket.hostId, installCommand: installCommand(token, hostDownloadBase(serviceUrl)), uninstallCommand: UNINSTALL_COMMAND, fingerprint: deviceFingerprint(devicePublicKey), expiresAt: ticket.expiresAt }
     for (const [id, item] of this.enrollments) if (item.enrollment.expiresAt <= Date.now()) { item.abort.abort(); this.enrollments.delete(id) }

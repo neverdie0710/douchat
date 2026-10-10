@@ -10,7 +10,7 @@ import { installedService, installService, PID_FILE, removeService, restartServi
 import { ensureHome, HOST_HOME, loadState, loadTrust, purgeHome, saveState, saveTrust, SeenRequests, type HostState, type TrustState } from './state'
 import { acceptOwnerCommand, deviceFingerprint, generateHostKey, nextTrust, signAsHost, VerifyError } from './verify'
 
-export const HOST_VERSION = '0.1.1'
+export const HOST_VERSION = '0.1.2'
 const ENROLLMENT_PREFIX = 'dch1_'
 const TRUST_REFRESH_MS = 5 * 60 * 1000
 const ROTATE_BEFORE_MS = 30 * 24 * 60 * 60 * 1000

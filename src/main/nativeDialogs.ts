@@ -8,7 +8,7 @@ export function resizeNativeDialog(sender: Electron.WebContents, name: string, h
   const parent = entry.owner.getBounds()
   const area = screen.getDisplayMatching(parent).workArea
   const chrome = entry.child.getBounds().height - entry.child.getContentBounds().height
-  const h = Math.max(240, Math.min(Math.ceil(height) + chrome, area.height - 40))
+  const h = Math.max(120, Math.min(Math.ceil(height) + chrome, area.height - 40))
   const w = Math.max(320, Math.min(Math.ceil(width), area.width - 40))
   entry.child.setBounds({ width: w, height: h, x: Math.round(Math.max(area.x, Math.min(parent.x + (parent.width - w) / 2, area.x + area.width - w))), y: Math.round(Math.max(area.y, Math.min(parent.y + (parent.height - h) / 2, area.y + area.height - h))) })
   if (!entry.child.isVisible()) entry.child.show()
@@ -22,7 +22,7 @@ export function configureNativeDialogWindows(window: BrowserWindow): void {
       return { action: 'allow', overrideBrowserWindowOptions: {
         title: '', parent: window, frame: false, show: false,
         autoHideMenuBar: true, backgroundColor: '#f8f9fb',
-        minWidth: 360, minHeight: 300, resizable: false,
+        minWidth: 360, minHeight: 120, resizable: false,
         minimizable: false, maximizable: false, fullscreenable: false,
         webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
       } }

@@ -19,7 +19,9 @@ beforeEach(() => {
     testConnection: vi.fn(async () => ({ ok: false, durationMs: 10, steps: [{ name: 'ssh', passed: true }, { name: 'shell', passed: false, message: 'base64 is missing on the server' }] })),
     removeConnection: vi.fn(async () => []), detectLocalAgents: vi.fn(async () => []), openConnectionTerminal: vi.fn(async () => {}),
     discoverRemoteAgents: vi.fn(async () => [{ adapter: 'codex', executable: '/usr/bin/codex', version: '1.0' }, { adapter: 'claude', executable: '/usr/bin/claude' }]),
-    addDiscoveredAgents: vi.fn(async () => [])
+    addDiscoveredAgents: vi.fn(async () => []), copyText: vi.fn(async () => {}),
+    createDaemonEnrollment: vi.fn(async () => ({ id: 'enroll-test', installCommand: 'curl https://example.com/install.sh | sh', uninstallCommand: 'douchat-host uninstall', fingerprint: 'test-fingerprint' })),
+    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {})
   }
   Object.defineProperty(window, 'douchat', { configurable: true, value: api })
 })
@@ -71,4 +73,22 @@ it('scans the server and adds only the chosen agents', async () => {
   await act(async () => button('Add selected').click())
   expect(api.addDiscoveredAgents).toHaveBeenCalledWith(view().id, [{ adapter: 'codex', executable: '/usr/bin/codex', name: 'Codex · Box' }])
   expect(changed).toHaveBeenCalled()
+})
+
+it('copies enrollment commands through the desktop bridge and reports success and failure', async () => {
+  await render()
+  await act(async () => button('douchat-host').click())
+  await act(async () => button('Add').click())
+  await act(async () => button('Copy install command').click())
+  expect(api.copyText).toHaveBeenCalledWith('curl https://example.com/install.sh | sh')
+  expect(button('Copy install command').textContent).toBe('Copied')
+  api.copyText.mockRejectedValueOnce(new Error('Clipboard unavailable'))
+  await act(async () => button('Copy install command').click())
+  expect(container.querySelector('[role=alert]')?.textContent).toBe('Could not copy command. Try again.')
+  expect(button('Copy install command').textContent).toBe('Copy')
+  const uninstall = container.querySelector<HTMLButtonElement>('details .daemon-command button')!
+  await act(async () => uninstall.click())
+  expect(api.copyText).toHaveBeenLastCalledWith('douchat-host uninstall')
+  expect(uninstall.textContent).toBe('Copied')
+  expect(container.querySelector('[role=alert]')).toBeNull()
 })
