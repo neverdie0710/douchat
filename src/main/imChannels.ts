@@ -3,21 +3,31 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import * as lark from '@larksuiteoapi/node-sdk'
-import { downloadMedia, decryptWechatMedia, IMMediaError, MAX_IM_FILE_BYTES, type IMMedia, type IMReplyPart } from './imMedia'
+import { downloadMedia, decryptWechatMedia, decryptWecomMedia, dispositionName, IMMediaError, MAX_IM_FILE_BYTES, type IMMedia, type IMReplyPart } from './imMedia'
 import { startIMTyping } from './imTyping'
 import { formatIMMessages, type IMFormattedMessage } from './imFormatting'
-import type { IMChannel, IMConnectInput, IMLogin, IMLoginStatus, IMProvider } from '../shared/imChannels'
+import { openWecom, validateWecom, wecomPlatform, wecomQR, wecomReqId, WecomAuthError, WecomSupersededError, type WecomConnection, type WecomFrame, type WecomSocketFactory } from './wecom'
+import type { IMChannel, IMConnectInput, IMLogin, IMLoginStatus, IMProvider, IMQRProvider } from '../shared/imChannels'
 
 interface RecordData {
   id: string; owner: string; agentId: string; provider: IMProvider; label: string
   token: string; remoteId?: string; appId?: string; baseURL?: string; peer?: string; pairingCode: string
+  /** The account that scanned to create the bot; its first private message pairs without /pair. */
+  pairUser?: string
   cursor?: string; seen: string[]
   inbox?: { id: string; raw: any; state: 'queued' | 'running'; receiptId?: string; receivedAt?: number }[]
 }
 interface Codec { encrypt(value: string): string; decrypt(value: string): string }
-interface Worker { abort: AbortController; close?: () => void; status: IMChannel['status']; error?: string; active: number; pending: (() => Promise<void>)[]; accepted: Set<string>; delivery: Promise<void>; typingCount: number; typingStop?: ReturnType<typeof startIMTyping>; typingBarrier?: Promise<void> }
-interface Inbound { id: string; peer: string; text: string; context?: string; media?: () => Promise<IMMedia[]> }
+interface Worker { abort: AbortController; close?: () => void; status: IMChannel['status']; error?: string; active: number; pending: (() => Promise<void>)[]; accepted: Set<string>; delivery: Promise<void>; typingCount: number; typingStop?: ReturnType<typeof startIMTyping>; typingBarrier?: Promise<void>; wecom?: WecomConnection }
+interface Inbound { id: string; peer: string; sender?: string; text: string; context?: string; media?: () => Promise<IMMedia[]>; settle?: () => Promise<unknown> }
 const WECHAT = 'https://ilinkai.weixin.qq.com'
+const FEISHU_REGISTRATION = 'https://accounts.feishu.cn/oauth/v1/app/registration'
+/** WeCom closes a reply stream after ~6 minutes; later output is pushed instead. */
+const WECOM_STREAM_AGE = 5 * 60_000 + 30_000
+/** WeCom renders Markdown, but desktop-local links mean nothing there. */
+export function wecomMarkdown(text: string): string {
+  return text.replace(/!?\[([^\]]*)\]\(<?(?:douchat-file|file):[^)>]*>?\)/gi, (_match, name: string) => `📄 \`${name || '文件'}\``)
+}
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, trace() {} }
 export function splitIMText(text: string, limit = 3500): string[] {
   const chars = Array.from(text)
@@ -35,7 +45,7 @@ export function wechatBaseURL(value?: string): string {
 export class IMChannelManager {
   private records: RecordData[] = []
   private workers = new Map<string, Worker>()
-  private logins = new Map<string, { owner: string; agent: string; qr: string; expires: number }>()
+  private logins = new Map<string, { owner: string; agent: string; provider: IMQRProvider; qr: string; expires: number }>()
   private owner = ''
   private storageError = false
   private generation = 0
@@ -45,7 +55,8 @@ export class IMChannelManager {
     private reply: (agentId: string, thread: string, text: string, signal: AbortSignal, provider?: IMProvider, media?: IMMedia[], receiptId?: string) => Promise<IMReplyPart[]>,
     private request: typeof fetch = fetch,
     private received?: (agentId: string, thread: string, text: string, provider: IMProvider, messageId: string) => string,
-    private diagnostic?: (event: string, detail: string) => void) {}
+    private diagnostic?: (event: string, detail: string) => void,
+    private socket: WecomSocketFactory = url => new WebSocket(url)) {}
   private file(): string { return join(this.directory, createHash('sha256').update(this.owner).digest('hex') + '.json') }
   private save(): void {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 })
@@ -102,17 +113,18 @@ export class IMChannelManager {
   }
   async connect(agent: string, input: IMConnectInput): Promise<void> {
     this.assert(agent)
-    if (!input || !['telegram', 'feishu'].includes(input.provider)) throw new Error('请选择支持的渠道')
+    if (!input || !['telegram', 'feishu', 'wecom'].includes(input.provider)) throw new Error('请选择支持的渠道')
     const lock = `${this.owner}:${agent}:${input.provider}`
     if (this.connecting.has(lock)) throw new Error('正在连接，请稍候')
     this.connecting.add(lock)
     const generation = this.generation
     try {
-      const secret = input.provider === 'telegram' ? input.token : input.appSecret
+      const secret = input.provider === 'telegram' ? input.token : input.provider === 'wecom' ? input.secret : input.appSecret
       const token = typeof secret === 'string' ? secret.trim() : ''
       if (!token || token.length > 500) throw new Error('请输入有效的机器人凭证')
+      const appId = input.provider === 'wecom' ? input.botId : input.appId
       const record: RecordData = { id: randomUUID(), owner: this.owner, agentId: agent, provider: input.provider, token,
-        appId: typeof input.appId === 'string' ? input.appId.trim() : undefined, label: '', pairingCode: randomBytes(8).toString('hex'), seen: [] }
+        appId: typeof appId === 'string' ? appId.trim() : undefined, label: '', pairingCode: randomBytes(8).toString('hex'), seen: [] }
       if (record.provider === 'telegram') {
         if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) throw new Error('Bot Token 格式不正确')
         const me = await this.telegram(record, 'getMe', {})
@@ -121,6 +133,14 @@ export class IMChannelManager {
         record.label = '@' + me.username
         const hook = await this.telegram(record, 'getWebhookInfo', {})
         if (hook.url) throw new Error('该机器人已配置 Webhook，请先在原服务中解除后再连接')
+      } else if (record.provider === 'wecom') {
+        if (!record.appId || !/^[\w-]{1,128}$/.test(record.appId)) throw new Error('请输入有效的 Bot ID')
+        // Only safe before commit: a successful subscribe takes over any live connection for this bot.
+        if (this.records.some(r => r.provider === 'wecom' && r.appId === record.appId)) throw new Error('这个机器人已经绑定了联系人，请先断开原连接')
+        await validateWecom(this.socket, record.appId, token).catch(error => {
+          throw error instanceof WecomAuthError ? error : new Error('无法连接企业微信，请检查网络后重试')
+        })
+        record.label = record.appId
       } else {
         if (!record.appId || !/^cli_[0-9a-fA-F]{16}$/.test(record.appId)) throw new Error('请输入有效的 App ID')
         await this.json('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', { app_id: record.appId, app_secret: token })
@@ -130,17 +150,34 @@ export class IMChannelManager {
       this.commit(record)
     } finally { this.connecting.delete(lock) }
   }
-  async login(agent: string): Promise<IMLogin> {
+  async login(agent: string, provider: IMQRProvider = 'wechat'): Promise<IMLogin> {
     this.assert(agent)
+    if (!['wechat', 'feishu', 'wecom'].includes(provider)) throw new Error('请选择支持的渠道')
     const generation = this.generation
-    const data = await this.json(WECHAT + '/ilink/bot/get_bot_qrcode?bot_type=3')
+    let code: string, qr: string, ttl: number
+    if (provider === 'feishu') {
+      // Device-code flow that creates a "PersonalAgent" app on the scanner's tenant, as @larksuite/openclaw-lark does.
+      const data = await this.form(FEISHU_REGISTRATION, { action: 'begin', archetype: 'PersonalAgent', auth_method: 'client_secret', request_user_info: 'open_id' })
+      if (!data.device_code || !data.verification_uri_complete) throw new Error('获取飞书二维码失败')
+      const url = new URL(data.verification_uri_complete)
+      if (url.protocol !== 'https:') throw new Error('获取飞书二维码失败')
+      url.searchParams.set('from', 'onboard')
+      code = data.device_code; qr = url.href; ttl = Math.min(Number(data.expires_in) || 600, 900) * 1000
+    } else if (provider === 'wecom') {
+      const data = await wecomQR(this.request, `/generate?source=wecom-cli&plat=${wecomPlatform()}`)
+      if (!data.scode || !data.auth_url) throw new Error('获取企业微信二维码失败')
+      code = data.scode; qr = data.auth_url; ttl = 300_000
+    } else {
+      const data = await this.json(WECHAT + '/ilink/bot/get_bot_qrcode?bot_type=3')
+      if (!data.qrcode || !data.qrcode_img_content) throw new Error('获取微信二维码失败')
+      code = data.qrcode; qr = data.qrcode_img_content; ttl = 240_000
+    }
     this.assert(agent)
     if (generation !== this.generation) throw new Error('账号已切换')
-    if (!data.qrcode || !data.qrcode_img_content) throw new Error('获取微信二维码失败')
     for (const [id, login] of this.logins) if (login.agent === agent || login.expires < Date.now()) this.logins.delete(id)
     const sessionId = randomUUID()
-    this.logins.set(sessionId, { owner: this.owner, agent, qr: data.qrcode, expires: Date.now() + 240_000 })
-    return { sessionId, qr: data.qrcode_img_content }
+    this.logins.set(sessionId, { owner: this.owner, agent, provider, qr: code, expires: Date.now() + ttl })
+    return { sessionId, qr }
   }
   cancelLogin(agent: string, sessionId: string): void {
     const login = this.logins.get(sessionId)
@@ -150,16 +187,48 @@ export class IMChannelManager {
     this.assert(agent)
     const login = this.logins.get(sessionId)
     if (!login || login.owner !== this.owner || login.agent !== agent || login.expires < Date.now()) return { status: 'expired' }
+    const base = { id: randomUUID(), owner: this.owner, agentId: agent, pairingCode: randomBytes(8).toString('hex'), seen: [] }
+    // A confirmed scan is single-use: drop the session first so a failed commit cannot be retried with it.
+    const install = (record: RecordData) => { this.logins.delete(sessionId); this.commit(record); return { status: 'confirmed' as const } }
+    if (login.provider === 'feishu') {
+      const data = await this.form(FEISHU_REGISTRATION, { action: 'poll', device_code: login.qr })
+      this.assert(agent)
+      if (this.logins.get(sessionId) !== login) return { status: 'expired' }
+      if (data.client_id && data.client_secret) {
+        if (data.user_info?.tenant_brand === 'lark') { this.logins.delete(sessionId); throw new Error('暂不支持 Lark 国际版，请使用飞书账号扫码') }
+        return install({ ...base, provider: 'feishu', label: data.client_id, appId: data.client_id, token: data.client_secret,
+          ...(typeof data.user_info?.open_id === 'string' ? { pairUser: data.user_info.open_id } : {}) })
+      }
+      if (!data.error || data.error === 'authorization_pending' || data.error === 'slow_down') return { status: 'wait' }
+      this.logins.delete(sessionId)
+      if (data.error === 'access_denied') return { status: 'denied' }
+      if (data.error === 'expired_token' || data.error === 'invalid_grant') return { status: 'expired' }
+      throw new Error('飞书授权失败，请刷新二维码后重试')
+    }
+    if (login.provider === 'wecom') {
+      const data = await wecomQR(this.request, '/query_result?scode=' + encodeURIComponent(login.qr))
+      this.assert(agent)
+      if (this.logins.get(sessionId) !== login) return { status: 'expired' }
+      // "init" until scanned; like the official CLI, every other state means keep waiting.
+      if (data.status !== 'success') return { status: 'wait' }
+      const botId = data.bot_info?.botid, secret = data.bot_info?.secret
+      if (!botId || !secret) { this.logins.delete(sessionId); throw new Error('企业微信未返回机器人凭证，请重新扫码') }
+      return install({ ...base, provider: 'wecom', label: botId, appId: botId, token: secret })
+    }
     const data = await this.json(WECHAT + '/ilink/bot/get_qrcode_status?qrcode=' + encodeURIComponent(login.qr))
     this.assert(agent)
     if (this.logins.get(sessionId) !== login) return { status: 'expired' }
     if (data.status === 'confirmed') {
       if (!data.bot_token || !data.ilink_bot_id) throw new Error('微信未返回有效凭证，请重新扫码')
-      this.commit({ id: randomUUID(), owner: this.owner, agentId: agent, provider: 'wechat', label: data.ilink_bot_id,
-        token: data.bot_token, baseURL: wechatBaseURL(data.baseurl), pairingCode: randomBytes(8).toString('hex'), seen: [] })
-      this.logins.delete(sessionId)
+      return install({ ...base, provider: 'wechat', label: data.ilink_bot_id, token: data.bot_token, baseURL: wechatBaseURL(data.baseurl) })
     } else if (data.status === 'expired') this.logins.delete(sessionId)
     return { status: ['confirmed', 'expired', 'scaned'].includes(data.status) ? data.status : 'wait' }
+  }
+  /** OAuth-style form call; pending and denied polls arrive as HTTP 400 with an error body. */
+  private async form(url: string, body: Record<string, string>): Promise<any> {
+    const response = await this.request(url, { method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(), signal: AbortSignal.timeout(15000) })
+    try { return await response.json() } catch { throw new Error(`飞书请求失败（HTTP ${response.status}），请检查网络后重试`) }
   }
   private async json(url: string, body?: unknown, headers?: Record<string, string>, signal?: AbortSignal): Promise<any> {
     const response = await this.request(url, { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
@@ -198,6 +267,10 @@ export class IMChannelManager {
           this.acceptFeishu(r, worker, client, data)
         }
       }) }).then(() => { if (!this.live(r, worker)) ws.close({ force: true }) }).catch(() => { worker.status = 'error'; worker.error = '飞书连接失败，请检查网络和长连接订阅配置' })
+    } else if (r.provider === 'wecom') {
+      worker.close = () => worker.wecom?.close()
+      for (const entry of r.inbox ?? []) this.acceptWecom(r, worker, entry.raw)
+      void this.runWecom(r, worker)
     } else {
       for (const entry of r.inbox ?? []) {
         if (r.provider === 'telegram') this.acceptTelegram(r, worker, entry.raw)
@@ -212,7 +285,7 @@ export class IMChannelManager {
     let content: { text?: string; image_key?: string; file_key?: string; file_name?: string } = {}
     try { content = JSON.parse(m.content) } catch { return }
     let reactionId: string | undefined
-    this.enqueue(r, worker, { id: m.message_id, peer: m.chat_id, text: m.message_type === 'text' ? content.text ?? '' : '',
+    this.enqueue(r, worker, { id: m.message_id, peer: m.chat_id, sender: data.sender.sender_id?.open_id, text: m.message_type === 'text' ? content.text ?? '' : '',
       ...(['image', 'file'].includes(m.message_type) ? { media: async () => {
         // Fetch through our bounded, cancellable downloader rather than an unbounded SDK buffer.
         const signal = AbortSignal.any([worker.abort.signal, AbortSignal.timeout(45000)])
@@ -272,6 +345,90 @@ export class IMChannelManager {
       text => this.wechat(r, 'sendmessage', { msg: { from_user_id: r.label, to_user_id: m.from_user_id, client_id: randomUUID(), message_type: 2, message_state: 2,
         context_token: m.context_token, item_list: [{ type: 1, text_item: { text } }] } }, signal), undefined, m)
   }
+  private async runWecom(r: RecordData, worker: Worker): Promise<void> {
+    let failures = 0
+    while (this.live(r, worker)) {
+      let lost: Error
+      try {
+        let closed!: (error: Error) => void
+        const done = new Promise<Error>(resolve => { closed = resolve })
+        const connection = await openWecom(this.socket, r.appId!, r.token, frame => {
+          if (frame.cmd === 'aibot_msg_callback' && this.live(r, worker)) this.acceptWecom(r, worker, frame)
+        }, error => closed(error), worker.abort.signal)
+        if (!this.live(r, worker)) { connection.close(); return }
+        worker.wecom = connection; worker.status = 'connected'; worker.error = undefined; failures = 0
+        lost = await done
+        if (worker.wecom === connection) worker.wecom = undefined
+      } catch (error) { lost = error instanceof Error ? error : new Error(String(error)) }
+      if (!this.live(r, worker)) return
+      // Reconnecting would just kick the other client back, so a superseded bot stays idle.
+      if (lost instanceof WecomSupersededError) { worker.status = 'error'; worker.error = lost.message; return }
+      const auth = lost instanceof WecomAuthError
+      worker.status = auth ? 'error' : 'connecting'
+      worker.error = auth ? '企业微信凭证无效，请断开后重新连接' : '企业微信连接中断，正在自动重连'
+      try { await delay(auth ? 60_000 : Math.min(30_000, 1000 * 2 ** Math.min(failures++, 5)), undefined, { signal: worker.abort.signal }) } catch { return }
+    }
+  }
+  private async wecomLink(r: RecordData, worker: Worker): Promise<WecomConnection> {
+    // Replayed inbox entries can finish before the long connection is back.
+    for (let i = 0; i < 120 && !worker.wecom && this.live(r, worker); i++) await delay(250, undefined, { signal: worker.abort.signal })
+    if (!worker.wecom || !this.live(r, worker)) throw new Error('企业微信未连接')
+    return worker.wecom
+  }
+  private acceptWecom(r: RecordData, worker: Worker, frame: WecomFrame): void {
+    const m = frame.body ?? {}
+    if (m.chattype === 'group' || typeof m.from?.userid !== 'string') return
+    const signal = worker.abort.signal
+    const texts: string[] = []
+    const files: { kind: 'image' | 'file'; src: { url?: string; aeskey?: string } }[] = []
+    if (m.msgtype === 'text') texts.push(m.text?.content)
+    else if (m.msgtype === 'voice') texts.push(m.voice?.content)
+    else if (m.msgtype === 'image') files.push({ kind: 'image', src: m.image })
+    else if (m.msgtype === 'file' || m.msgtype === 'video') files.push({ kind: 'file', src: m[m.msgtype] })
+    else if (m.msgtype === 'mixed') for (const item of m.mixed?.msg_item ?? []) {
+      if (item.msgtype === 'text') texts.push(item.text?.content)
+      else if (item.msgtype === 'image') files.push({ kind: 'image', src: item.image })
+    }
+    let text = texts.filter(part => typeof part === 'string').join('\n').trim()
+    const quoted = String(m.quote?.text?.content || m.quote?.voice?.content || '').trim()
+    if (quoted && text) text = '> ' + quoted.replaceAll('\n', '\n> ') + '\n\n' + text
+    // Each inbound req_id carries one reply stream: opened as "thinking" while working, finished by the first bubble.
+    const reqId: string | undefined = frame.headers?.req_id
+    const reply = { stream: undefined as string | undefined, tried: false, answered: !reqId, at: Date.now() }
+    const finish = async (content: string): Promise<boolean> => {
+      if (reply.answered || Date.now() - reply.at > WECOM_STREAM_AGE) return false
+      reply.answered = true
+      try { await (await this.wecomLink(r, worker)).respondStream(reqId!, reply.stream ?? wecomReqId('stream'), content, true); return true }
+      catch { return false }
+    }
+    this.enqueue(r, worker, { id: String(m.msgid ?? ''), peer: m.from.userid, sender: m.from.userid, text,
+      // An open stream spins until finished with visible text, e.g. after an image-only reply.
+      settle: async () => { if (reply.stream) await finish('✅') },
+      ...(files.length ? { media: async () => {
+        if (files.length > 4) throw new IMMediaError('一次最多发送 4 个附件，请分批发送。')
+        const result: IMMedia[] = []
+        for (const { kind, src } of files) {
+          let url: URL
+          try { url = new URL(src?.url ?? '') } catch { throw new IMMediaError('附件信息不完整，请重新发送。') }
+          if (url.protocol !== 'https:' || url.username || url.password) throw new IMMediaError('企业微信附件地址无效，请重新发送。')
+          let name: string | undefined
+          const data = await downloadMedia(this.request, url.href, AbortSignal.any([signal, AbortSignal.timeout(45000)]), undefined,
+            response => { name = dispositionName(response.headers.get('content-disposition')) })
+          result.push({ name: name || kind, image: kind === 'image', data: src.aeskey ? decryptWecomMedia(data, src.aeskey) : data })
+        }
+        return result
+      } } : {}) },
+      async text => { if (!(await finish(text))) await (await this.wecomLink(r, worker)).sendMarkdown(m.from.userid, text) },
+      () => startIMTyping(signal, async () => {
+        if (reply.answered || !this.live(r, worker)) return
+        if (reply.stream && Date.now() - reply.at > WECOM_STREAM_AGE - 30_000) { await finish('⏳ 仍在处理，完成后会继续发送结果。'); return }
+        if (reply.tried) return
+        reply.tried = true
+        reply.stream = wecomReqId('stream')
+        // WeCom renders an empty think block as its native "thinking" state.
+        await (await this.wecomLink(r, worker)).respondStream(reqId!, reply.stream, '<think></think>', false)
+      }, undefined, 30_000), frame)
+  }
   private drain(r: RecordData, worker: Worker): void {
     while (this.live(r, worker) && worker.active < 4 && worker.pending.length) {
       const task = worker.pending.shift()!
@@ -310,8 +467,8 @@ export class IMChannelManager {
     if (!saved) {
       r.seen = [...r.seen.slice(-499), message.id]
       if (!r.peer) {
-        const paired = message.text.trim() === `/pair ${r.pairingCode}`
-        if (paired) { r.peer = message.peer; r.pairingCode = '' }
+        const paired = message.text.trim() === `/pair ${r.pairingCode}` || Boolean(r.pairUser && message.sender === r.pairUser)
+        if (paired) { r.peer = message.peer; r.pairingCode = ''; r.pairUser = undefined }
         this.save()
         void send(paired ? '配对成功，可以开始给这个联系人发消息了。' :
           (/^\/pair(?:\s|$)/.test(message.text.trim()) ? '配对指令无效。' : '还未配对，暂时无法聊天。') + '请在 Douchat 中打开对应联系人的「消息渠道」，复制配对指令并发送到当前私信，完成绑定后即可聊天。').catch(() => {})
@@ -368,6 +525,9 @@ export class IMChannelManager {
                 worker.error = '图片发送失败，已保留桌面会话中的图片'; worker.status = 'error'
                 return
               }
+            } else if (r.provider === 'wecom') for (const part of splitIMText(wecomMarkdown(bubble).trim(), 6000)) {
+              if (!this.live(r, worker)) return
+              await send(part)
             } else for (const part of formatIMMessages(bubble, 3500, r.provider === 'wechat')) {
               if (!this.live(r, worker)) return
               await send(part.text, part)
@@ -382,6 +542,7 @@ export class IMChannelManager {
         // Feishu reactions belong to this message; late cleanup cannot affect the next one.
         void stopTyping?.()
         if (this.live(r, worker)) {
+          void message.settle?.()
           this.diagnostic?.('im.finished', JSON.stringify({ provider: r.provider, channel: r.id, message: message.id, elapsedMs: Date.now() - (entry.receivedAt ?? Date.now()) }))
           worker.accepted.delete(message.id)
           r.inbox = (r.inbox ?? []).filter(item => item !== entry)
@@ -412,6 +573,13 @@ export class IMChannelManager {
       const photo = image.mimeType === 'image/png' || image.mimeType === 'image/jpeg'
       form.set(photo ? 'photo' : 'document', new Blob([new Uint8Array(image.data)], { type: image.mimeType }), image.name || 'image.png')
       await multipart(`https://api.telegram.org/bot${r.token}/${photo ? 'sendPhoto' : 'sendDocument'}`, form)
+    } else if (r.provider === 'wecom') {
+      // WeCom image messages take PNG/JPEG; anything else goes out as a file.
+      const kind = image.mimeType === 'image/png' || image.mimeType === 'image/jpeg' ? 'image' : 'file'
+      const link = await this.wecomLink(r, worker)
+      assertLive()
+      await Promise.race([link.sendMedia(message.peer, kind, image.name || 'image.png', image.data),
+        new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))])
     } else if (r.provider === 'feishu') {
       const auth = await this.json('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', { app_id: r.appId, app_secret: r.token }, undefined, signal)
       const form = new FormData(); form.set('image_type', 'message')

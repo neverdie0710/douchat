@@ -148,6 +148,36 @@ describe('chat details rail', () => {
     expect(tiles.sort((a, b) => Number((a as HTMLElement).style.order) - Number((b as HTMLElement).style.order)).map((tile) => tile.textContent)).toEqual(['Dobi', 'Alpha', 'Friend'])
   })
 
+  it('reveals mixed members in pages, collapses, and searches hidden people', async () => {
+    const people = Array.from({ length: 40 }, (_, index) => ({ id: `person-${index}`, name: `Person ${index}`, email: '', order: index + 2 }))
+    const shared: Conversation = { ...group, ownerId: 'self', socialRoom: {
+      id: 'large', kind: 'group', name: 'Large', agents: [], createdAt: '',
+      members: [{ id: 'self', name: 'Dobi', email: '' }, ...people]
+    } }
+    await renderRail(shared)
+    const tiles = () => container.querySelectorAll('.member-grid > .member-tile:not(.add)').length
+    const click = async (label: string) => act(async () => {
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === label)!.click()
+    })
+    expect(tiles()).toBe(14)
+    await click('Show More')
+    expect(tiles()).toBe(30)
+    await click('Show More')
+    expect(tiles()).toBe(42)
+    expect(container.querySelector('.member-pagination')?.textContent).toBe('Show Less')
+    await click('Show Less')
+    expect(tiles()).toBe(14)
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Search group members"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Person 39')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(container.querySelector('.group-member-results')?.textContent).toBe('Person 39')
+    await renderRail({ ...shared, id: 'another-group' })
+    expect(tiles()).toBe(14)
+    expect(input.value).toBe('')
+  })
+
   it.each(['Enter', 'blur'])('renames a group inline on %s', async (trigger) => {
     await renderRail()
     const edit = container.querySelector<HTMLButtonElement>('[aria-label="Edit group chat name: Team room"]')!

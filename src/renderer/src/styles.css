@@ -6885,6 +6885,11 @@ html.native-dialog-window,
 .im-setup form { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--canvas); }
 .im-setup form > .settings-note { margin: 16px 0; font-size: 12px; line-height: 1.6; }
 .im-setup form > .im-connect { display: flex; width: auto; min-width: 88px; margin-left: auto; }
+.im-form-actions { display: flex; align-items: center; gap: 12px; }
+.im-form-actions > .im-connect { display: flex; width: auto; min-width: 88px; margin-left: auto; }
+.im-switch { background: transparent; border: 0; padding: 4px 2px; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.im-switch:hover:not(:disabled) { color: var(--ink); }
+.im-qr > .im-switch { margin-top: 12px; }
 .im-back { background: transparent; border: 0; border-radius: 8px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; margin-left: -10px; font-size: 12px; }
 .im-back:hover:not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
 .im-help { margin: 0 0 20px; padding-left: 20px; font-size: 12px; line-height: 1.75; color: var(--muted); overflow-wrap: anywhere; }
@@ -7053,3 +7058,7 @@ html.native-dialog-window,
 /* Plain muted text like .local-agent-version next to it. */
 .local-agent-remote-badge { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .agent-select-host { margin-left: 6px; color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
+
+.member-pagination { display: flex; justify-content: center; gap: 16px; margin: 0 0 16px; }
+.member-pagination button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.member-pagination button:hover { color: var(--ink); }

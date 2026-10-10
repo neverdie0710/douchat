@@ -174,6 +174,24 @@ describe('persistent local agent connections', () => {
     expect(() => process.kill(first.pid, 0)).toThrow()
     expect(() => process.kill(other.pid, 0)).toThrow()
   })
+  it('keeps one FastClaw session per chat and sends only the new turn after the first', async () => {
+    configureLocalWorkspaces(join(directory, 'fastclaw-profile'))
+    const fake = join(directory, 'fake-fastclaw.cjs')
+    await writeFile(fake, '#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)))\n', { mode: 0o755 })
+    vi.mocked(validateLocalAgent).mockImplementationOnce(async () => ({ id: 'fastclaw', name: 'FastClaw', path: fake, command: fake, installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked' }))
+      .mockImplementationOnce(async () => ({ id: 'fastclaw', name: 'FastClaw', path: fake, command: fake, installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked' }))
+      .mockImplementationOnce(async () => ({ id: 'fastclaw', name: 'FastClaw', path: fake, command: fake, installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked' }))
+    const fastclaw = { ...config, localAgentId: 'fastclaw' }
+    const turn = async (prompt: string) => JSON.parse((await runLocalAgent(fastclaw, prompt, undefined, [], { sessionKey: 'direct:fc:topic', continuationPrompt: `new: ${prompt}` })).text) as string[]
+    const first = await turn('history + instructions')
+    expect(first).toEqual(['chat', '--resume', expect.stringMatching(/^douchat-[0-9a-f-]{36}$/), '--query', 'history + instructions'])
+    const second = await turn('history again')
+    expect(second).toEqual(['chat', '--resume', first[2], '--query', 'new: history again'])
+    resetLocalAgentConversation('fc', 'topic', [], config.ownerId)
+    const cleared = await turn('fresh start')
+    expect(cleared[2]).not.toBe(first[2])
+    expect(cleared[4]).toBe('fresh start')
+  })
   it('says connecting only when a session starts, not on every turn', async () => {
     const phases = (calls: unknown[][]) => calls.map(([event]) => (event as { phase: string }).phase)
     const first = vi.fn(), second = vi.fn()

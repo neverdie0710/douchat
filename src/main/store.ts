@@ -1877,7 +1877,7 @@ export class DouchatStore {
         const active = target.topics.find(topic => topic.id === target!.activeTopicId) ?? target.topics[0]
         this.putConversation(target)
         const provider = source.name.split(' · ').at(-1)?.toLowerCase()
-        if (provider && ['wechat', 'feishu', 'telegram'].includes(provider)) {
+        if (provider && ['wechat', 'feishu', 'wecom', 'telegram'].includes(provider)) {
           this.write("UPDATE messages SET data = json_set(data, '$.sourceChannel', ?) WHERE conversationId = ? AND json_extract(data, '$.authorId') = 'user' AND json_extract(data, '$.sourceChannel') IS NULL", provider, source.id)
         }
         // Keep archived topics (and their reset boundaries); merge the current transcript.

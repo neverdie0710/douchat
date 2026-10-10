@@ -6,11 +6,14 @@ import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
 import type { SocialPerson } from '../../../shared/social'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { t } from '../preferences'
-import { CalendarClock, ChevronRight, Minus, Pause, Pencil, Play, Plus, Search, Trash2, X } from 'lucide-react'
+import { CalendarClock, ChevronDown, ChevronUp, ChevronRight, Minus, Pause, Pencil, Play, Plus, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import type { AgentConfig, AppSnapshot, ChatMessage, Conversation, Routine, RoutineSchedule, TaskRun } from '../../../shared/types'
 import { AgentAvatar, UserAvatar, agentDisplayName, agentDisplayRole } from './common'
+
+const INITIAL_MEMBER_COUNT = 14
+const MEMBER_PAGE_SIZE = 16
 
 export function InspectorRail({
   snapshot,
@@ -44,6 +47,7 @@ export function InspectorRail({
   onRunRoutineNow?: (routineId: string) => Promise<void>
 }): ReactElement {
   const [memberQuery, setMemberQuery] = useState('')
+  const [visibleMemberCount, setVisibleMemberCount] = useState(INITIAL_MEMBER_COUNT)
   const [confirmLeave, setConfirmLeave] = useState(false)
   const canLeave = conversation?.type === 'group' && Boolean(conversation.remoteRoomId)
     && Boolean(conversation.socialRoom?.members[0]?.id) && Boolean(conversation.ownerId)
@@ -59,7 +63,7 @@ export function InspectorRail({
   const [editingName, setEditingName] = useState(false)
   const [nameDraft, setNameDraft] = useState(conversation?.name ?? '')
   useEffect(() => {
-    setMemberQuery(''); setRecordsDialog(null); setQuery(''); setResults([]); setConfirmClear(false); setConfirmReset(false); setError('')
+    setMemberQuery(''); setVisibleMemberCount(INITIAL_MEMBER_COUNT); setRecordsDialog(null); setQuery(''); setResults([]); setConfirmClear(false); setConfirmReset(false); setError('')
     setEditingName(false); setNameDraft(conversation?.name ?? '')
   }, [conversation?.id])
   useEffect(() => { if (!editingName) setNameDraft(conversation?.name ?? '') }, [conversation?.name, editingName])
@@ -112,6 +116,16 @@ export function InspectorRail({
   const normalizedMemberQuery = memberQuery.trim().toLocaleLowerCase()
   const matchingMembers = orderedMembers.filter((member) => `${member.name} ${agentDisplayName(member)}`.toLocaleLowerCase().includes(normalizedMemberQuery))
   const currentUserMatches = currentUserName.toLocaleLowerCase().includes(normalizedMemberQuery)
+  const people = conversation?.socialRoom?.members.filter((person) => person.id !== conversation.ownerId) ?? []
+  const matchingPeople = people.filter((person) => person.name.toLocaleLowerCase().includes(normalizedMemberQuery))
+  const roster = [
+    ...orderedMembers.map((member, index) => ({ key: `agent:${member.id}`, order: conversation?.socialRoom?.agents.find((agent) => agent.id === member.id)?.order ?? index + 1 })),
+    ...people.map((person) => ({ key: `person:${person.id}`, order: conversation?.socialRoom?.members[0]?.id === person.id ? 0 : person.order ?? members.length + 1 })),
+    { key: 'self', order: !conversation?.socialRoom || conversation.socialRoom.members[0]?.id === conversation.ownerId ? 0 : conversation.socialRoom.members.find((person) => person.id === conversation.ownerId)?.order ?? members.length + 2 }
+  ].sort((left, right) => left.order - right.order)
+  const visibleKeys = new Set(roster.slice(0, visibleMemberCount).map((entry) => entry.key))
+  const visibleMembers = conversation?.type === 'group' ? orderedMembers.filter((member) => visibleKeys.has(`agent:${member.id}`)) : orderedMembers
+  const visiblePeople = people.filter((person) => visibleKeys.has(`person:${person.id}`))
   return <>
     <aside className="inspector-rail" aria-label={t('Chat details')}>
       <div className="inspector-scroll">
@@ -121,10 +135,11 @@ export function InspectorRail({
             {conversation.type === 'group' && memberQuery.trim() ? <div className="group-member-results">
               {matchingMembers.map((member) => <button key={member.id} className={member.id === agent?.id ? 'active' : ''} aria-pressed={member.id === agent?.id} onClick={(event) => onSelectAgent(member.id, (event.currentTarget.querySelector('.agent-avatar') ?? event.currentTarget).getBoundingClientRect())}><div className="member-avatar-wrap"><AgentAvatar agent={member} size={40} />{availabilityDot(member.id)}</div><span><strong>{highlight(agentDisplayName(member))}</strong></span></button>)}
               {currentUserMatches && <button type="button" onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`}><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><span><strong>{highlight(currentUserName)}</strong></span></button>}
-              {!matchingMembers.length && !currentUserMatches && <p>{t('No matching agents')}</p>}
+              {matchingPeople.map((person) => <button key={person.id} type="button" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect(), person.id)}><UserAvatar src={person.image || ''} name={person.name} size={40} /><span><strong>{highlight(person.name)}</strong></span></button>)}
+              {!matchingMembers.length && !matchingPeople.length && !currentUserMatches && <p>{t('No matching agents')}</p>}
             </div> : <div className="member-grid">
               {person && <button type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect())} title={person.name}><div className="member-avatar-wrap"><UserAvatar src={person.image || ''} name={person.name} size={40} /><ContactKindBadge human /></div><span className="member-name-label"><span className="member-name-text">{person.name}</span></span></button>}
-              {orderedMembers.map((member) => (
+              {visibleMembers.map((member) => (
                 <button
                   key={member.id}
                   style={{ order: conversation.socialRoom?.agents.find((agent) => agent.id === member.id)?.order ?? members.indexOf(member) + 1 }}
@@ -137,8 +152,8 @@ export function InspectorRail({
                   <span className={`member-state ${snapshot.agentStatuses[member.id] ?? 'idle'}`} />
                 </button>
               ))}
-              {conversation.socialRoom?.members.filter((person) => person.id !== conversation.ownerId).map((person) => <button key={person.id} style={{ order: conversation.socialRoom?.members[0]?.id === person.id ? 0 : person.order ?? members.length + 1 }} type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect(), person.id)} title={person.name}><div className="member-avatar-wrap"><UserAvatar src={person.image || ''} name={person.name} size={40} /><ContactKindBadge human /></div><span className="member-name-label"><span className="member-name-text">{person.name}</span></span></button>)}
-              {conversation.type === 'group' && <button type="button" className="member-tile" style={{ order: !conversation.socialRoom || conversation.socialRoom.members[0]?.id === conversation.ownerId ? 0 : conversation.socialRoom.members.find((person) => person.id === conversation.ownerId)?.order ?? members.length + 2 }} onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`} title={`${currentUserName} · ${t('You')}`}>
+              {visiblePeople.map((person) => <button key={person.id} style={{ order: conversation.socialRoom?.members[0]?.id === person.id ? 0 : person.order ?? members.length + 1 }} type="button" className="member-tile" onClick={(event) => onSelectPerson?.(event.currentTarget.getBoundingClientRect(), person.id)} title={person.name}><div className="member-avatar-wrap"><UserAvatar src={person.image || ''} name={person.name} size={40} /><ContactKindBadge human /></div><span className="member-name-label"><span className="member-name-text">{person.name}</span></span></button>)}
+              {conversation.type === 'group' && visibleKeys.has('self') && <button type="button" className="member-tile" style={{ order: !conversation.socialRoom || conversation.socialRoom.members[0]?.id === conversation.ownerId ? 0 : conversation.socialRoom.members.find((person) => person.id === conversation.ownerId)?.order ?? members.length + 2 }} onClick={(event) => onSelectUser(event.currentTarget.getBoundingClientRect())} aria-label={`${currentUserName} · ${t('You')}`} title={`${currentUserName} · ${t('You')}`}>
                 <div className="member-avatar-wrap"><UserAvatar src={snapshot.userAvatar} name={currentUserName} size={40} /><ContactKindBadge human /></div>
                 <span className="member-name-label"><span className="member-name-text">{currentUserName}</span></span>
               </button>}
@@ -149,6 +164,10 @@ export function InspectorRail({
                 <span>{t('Add')}</span>
               </button>}
               {conversation.type === 'group' && <button className="member-tile add" style={{ order: 10000 }} onClick={onRemoveMembers} aria-label={t('Remove group members')}><span className="member-add"><Minus size={26} strokeWidth={1.5} /></span><span>{t('Remove')}</span></button>}
+            </div>}
+            {conversation.type === 'group' && !memberQuery.trim() && roster.length > INITIAL_MEMBER_COUNT && <div className="member-pagination">
+              {visibleMemberCount < roster.length && <button type="button" onClick={() => setVisibleMemberCount((count) => count + MEMBER_PAGE_SIZE)}>{t('Show More')}<ChevronDown size={16} /></button>}
+              {visibleMemberCount > INITIAL_MEMBER_COUNT && <button type="button" onClick={() => setVisibleMemberCount(INITIAL_MEMBER_COUNT)}>{t('Show Less')}<ChevronUp size={16} /></button>}
             </div>}
             {conversation.type === 'group' && !memberQuery.trim() && <div className="group-conversation-details">
               <section className="group-name-setting">

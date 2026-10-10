@@ -3,6 +3,32 @@ import { randomBytes } from 'node:crypto'
 import { validateToolArguments } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 
+const DESCRIBE_TOOL = 'describe_tool'
+
+type Schema = { type?: unknown; properties?: Record<string, Schema>; required?: unknown; anyOf?: Schema[]; enum?: unknown[]; const?: unknown; items?: Schema }
+function schemaType(schema: Schema | undefined): string {
+  if (!schema) return 'any'
+  const values = schema.enum ?? (schema.anyOf?.every(option => 'const' in option) ? schema.anyOf.map(option => option.const) : undefined)
+  if (values) return values.map(value => JSON.stringify(value).replace(/^"|"$/g, '')).join('|')
+  if (schema.type === 'array') return `${schemaType(schema.items)}[]`
+  return typeof schema.type === 'string' ? schema.type : schema.anyOf ? schema.anyOf.map(schemaType).join('|') : 'any'
+}
+
+/** One line per tool, `name(arg: type, optional?: type): purpose`, instead of the
+ * full JSON schemas: with many connectors those were tens of KB in every turn's
+ * prompt. The exact schema stays one request away, and every call is validated. */
+export function bridgeToolList(tools: AgentTool[]): string {
+  return [
+    `Tools, as name(arguments): purpose. Arguments marked ? are optional. For a tool's exact JSON schema, POST {"tool":"${DESCRIBE_TOOL}","arguments":{"name":"tool_name"}}.`,
+    ...tools.map(tool => {
+      const schema = tool.parameters as Schema
+      const required = Array.isArray(schema.required) ? schema.required : []
+      const args = Object.entries(schema.properties ?? {}).map(([name, property]) => `${name}${required.includes(name) ? '' : '?'}: ${schemaType(property)}`)
+      return `- ${tool.name}(${args.join(', ')}): ${tool.description}`
+    })
+  ].join('\n')
+}
+
 /** Per-turn localhost capability: no public listener, no general IPC, no persistent token. */
 export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSignal) {
   const token = randomBytes(32).toString('hex')
@@ -24,6 +50,12 @@ export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSign
         chunks.push(Buffer.from(part))
       }
       const call = JSON.parse(Buffer.concat(chunks).toString())
+      if (call.tool === DESCRIBE_TOOL) {
+        const described = tools.find(tool => tool.name === call.arguments?.name)
+        if (!described) throw new Error('Unknown skill tool')
+        send(200, { name: described.name, description: described.description, parameters: described.parameters })
+        return
+      }
       const tool = tools.find(tool => tool.name === call.tool)
       if (!tool) throw new Error('Unknown skill tool')
       const args = validateToolArguments(tool, { type: 'toolCall', id: 'local-skill', name: tool.name, arguments: call.arguments ?? {} })
@@ -41,7 +73,7 @@ export async function openLocalSkillBridge(tools: AgentTool[], signal: AbortSign
   signal.addEventListener('abort', close, { once: true })
   if (signal.aborted) { close(); signal.throwIfAborted() }
   const endpoint = `http://127.0.0.1:${address.port}/tools`
-  const tools_ = JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })))
+  const tools_ = bridgeToolList(tools)
   // port, token and tools let a remote agent's bridge forward to this one.
   return { close, port: address.port, token, tools: tools_, isBridgeCommand: (command: unknown) => !active.aborted && isBridgeCurl(command, endpoint, token), prompt: [
     'Douchat skill tools for THIS TURN ONLY: use your native shell/HTTP tool to POST JSON {"tool":"tool_name","arguments":{...}} to the loopback endpoint below. This is the supported way to install skills into Douchat, including another owned agent. Do not write its database. Keep this private token out of replies and files; discard older endpoints from history. Wait for the response (owner approval can take several minutes). If your native shell needs permission, request it normally.',

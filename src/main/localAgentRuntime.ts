@@ -35,7 +35,17 @@ export async function localAgentExecutable(id: string, installedPath: string, pl
   } catch { return installedPath }
 }
 
-export function localAgentArgs(id: string, prompt: string, output: string, appOwnedWorkspace = false): string[] {
+/** FastClaw keeps the conversation itself. Bind one FastClaw session to each
+ * Douchat chat (stored like a native thread) so later turns send only the new
+ * message; without --resume every turn opened a new session that repeated the
+ * whole history and instructions. Clear chat drops the binding. */
+export function fastclawTurn(workspace: ReturnType<typeof localWorkspace>, prompt: string, continuation?: string): { session?: string; prompt: string } {
+  if (!workspace) return { prompt }
+  const resumed = workspace.thread && /^douchat-[0-9a-f-]{36}$/.test(workspace.thread) ? workspace.thread : undefined
+  return { session: resumed ?? `douchat-${randomUUID()}`, prompt: resumed ? continuation ?? prompt : prompt }
+}
+
+export function localAgentArgs(id: string, prompt: string, output: string, appOwnedWorkspace = false, session?: string): string[] {
   switch (id) {
     case 'codex': return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'workspace-write', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'web_search="live"', '--output-last-message', output, '-']
     case 'claude': return ['-p', '--output-format', 'json', '--allowedTools', 'WebSearch,WebFetch', '--', prompt]
@@ -56,7 +66,7 @@ export function localAgentArgs(id: string, prompt: string, output: string, appOw
     case 'opencode': return ['run', '--format', 'json', '--', prompt]
     case 'kimi': return ['--prompt', prompt, '--output-format', 'stream-json']
     case 'openclaw': return ['agent', 'exec', '--message-file', '-', '--json', '--code-mode', 'direct']
-    case 'fastclaw': return ['chat', '--query', prompt]
+    case 'fastclaw': return ['chat', ...(session ? ['--resume', session] : []), '--query', prompt]
     case 'hermes': return ['--oneshot', prompt]
     case 'omp': return ['--print', '--mode', 'text', '--no-session', '--no-tools', prompt]
     default: throw new Error('This local agent has no chat adapter yet')
@@ -383,6 +393,8 @@ async function executeLocalAgent(
       await writeFile(path, image.data)
       return path
     }))
+    const fastclaw = agent.id === 'fastclaw' && !agent.custom ? fastclawTurn(workspace, prompt, options.continuationPrompt) : undefined
+    if (fastclaw) prompt = fastclaw.prompt
     const effectivePrompt = imagePaths.length
       ? `${prompt}\n\nThe human attached ${imagePaths.length === 1 ? 'this image' : 'these images'}. Inspect the image file${imagePaths.length === 1 ? '' : 's'} before answering:\n${imagePaths.join('\n')}`
       : prompt
@@ -396,7 +408,7 @@ async function executeLocalAgent(
     let grokStream: GrokStream | undefined
     let geminiStream: GeminiStream | undefined
     const run = (childEnvironment: NodeJS.ProcessEnv): Promise<string> => new Promise<string>((resolve, reject) => {
-      const child = spawnOwnedProcess(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, withLocalThinking(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true), config.thinkingLevel), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
+      const child = spawnOwnedProcess(command.file, [...command.prefix, ...(agent.custom ? customLocalAgentArguments(agent.args, effectivePrompt) : appendLocalAgentArguments(withLocalModel(agent.id, withLocalThinking(agent.id, localAgentArgs(agent.id, effectivePrompt, output, true, fastclaw?.session), config.thinkingLevel), config.model), agent.args)), ...(geminiPolicyFile ? ['--policy', geminiPolicyFile] : [])], {
         cwd: directory, env: childEnvironment, windowsHide: true
       })
       let stdout = ''
@@ -471,6 +483,7 @@ async function executeLocalAgent(
       stdout = await run(localAgentEnvironment(agent.id, env, true))
       text = await replyText()
     }
+    if (fastclaw?.session) workspace?.remember(fastclaw.session)
     return localAgentReply(agent.name, text, images)
   } finally {
     await rm(output, { force: true })
@@ -509,7 +522,8 @@ async function executeRemoteAgent(
     await run.prepare(signal)
     const imagePaths = await run.uploadImages(inputImages, signal)
     const channel: PromptChannel = custom || !STDIN_ADAPTERS.has(adapter) ? 'argv' : 'stdin'
-    const effectivePrompt = remotePrompt(`${remoteImagePrompt(prompt, imagePaths)}\n\n${outboxPrompt(run)}`)
+    const fastclaw = adapter === 'fastclaw' ? fastclawTurn(workspace, prompt, options.continuationPrompt) : undefined
+    const effectivePrompt = remotePrompt(`${remoteImagePrompt(fastclaw?.prompt ?? prompt, imagePaths)}\n\n${outboxPrompt(run)}`)
     if (channel === 'argv') assertArgvPrompt(effectivePrompt)
     let policy: string | undefined
     if (adapter === 'gemini') policy = await run.upload('policy.toml', Buffer.from(geminiImagePolicy(options.imageToolsAllowed !== false)), signal)
@@ -519,7 +533,7 @@ async function executeRemoteAgent(
     const output = `${run.directory}/reply.txt`
     const args: RemoteArg[] = custom
       ? customRemoteArguments(spec.args)
-      : [...markPromptArguments(appendLocalAgentArguments(withLocalModel(adapter, withLocalThinking(adapter, localAgentArgs(adapter, placeholder, output, true), config.thinkingLevel), config.model), spec.args), placeholder),
+      : [...markPromptArguments(appendLocalAgentArguments(withLocalModel(adapter, withLocalThinking(adapter, localAgentArgs(adapter, placeholder, output, true, fastclaw?.session), config.thinkingLevel), config.model), spec.args), placeholder),
           ...(policy ? ['--policy', policy] : [])]
     if (args.some(arg => typeof arg === 'string' && arg.includes(placeholder))) throw new Error('Invalid remote agent arguments')
     if (channel === 'stdin' && args.includes(PROMPT_ARG)) throw new Error('Invalid remote agent arguments')
@@ -601,6 +615,7 @@ async function executeRemoteAgent(
       stdout = await execute(true)
       text = await replyText()
     }
+    if (fastclaw?.session) workspace?.remember(fastclaw.session)
     const files = await run.outboxFiles(signal)
     const reply = files.length && !text && !images.length ? { text: '', images } : localAgentReply(agent.name, text, images)
     return files.length ? { ...reply, files: files.map(file => ({ name: file.name, data: file.data })) } : reply

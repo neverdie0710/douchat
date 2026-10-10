@@ -650,7 +650,7 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:im-list', (_event, agent) => imChannels!.list(agent))
   ipcMain.handle('douchat:im-connect', (_event, agent, input) => imChannels!.connect(agent, input))
   ipcMain.handle('douchat:im-disconnect', (_event, agent, provider) => imChannels!.disconnect(agent, provider))
-  ipcMain.handle('douchat:im-login', (_event, agent) => imChannels!.login(agent))
+  ipcMain.handle('douchat:im-login', (_event, agent, provider) => imChannels!.login(agent, provider))
   ipcMain.handle('douchat:im-cancel-login', (_event, agent, session) => imChannels!.cancelLogin(agent, session))
   ipcMain.handle('douchat:im-status', (_event, agent, session) => imChannels!.loginStatus(agent, session))
   runtime.setInterfaceLanguage(app.getLocale())
@@ -1049,7 +1049,7 @@ app.whenReady().then(() => {
       throw new Error('The system administrator cannot be deleted')
     }
     runtime.disposeAgent(agentId)
-    for (const provider of ['wechat', 'feishu', 'telegram'] as const) imChannels?.disconnect(agentId, provider)
+    for (const provider of ['wechat', 'feishu', 'wecom', 'telegram'] as const) imChannels?.disconnect(agentId, provider)
     store.deleteAgent(agentId)
     return push()
   })

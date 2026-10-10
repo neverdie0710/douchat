@@ -2392,6 +2392,8 @@ export class DouchatRuntime {
       }
       let memoryPrompt = ''
       let retrievedMemory = ''
+      // An agent on a server must not receive transcripts of the user's other chats.
+      const remoteTarget = config.localAgentId ? await remoteAgentSpec(config.localAgentId) : undefined
       const conversation = this.store.conversation(conversationId)
       const internal = !this.sharedCallers.has(sessionKey) && isInternalConversation(this.store, conversation, config.ownerId ?? '')
         && conversation!.agentIds.includes(config.id)
@@ -2408,7 +2410,7 @@ export class DouchatRuntime {
         memoryPrompt = groupMemoryPrompt(document, speaker, !toolsDisabled, Boolean(internal && groupId === conversationId && speaker.id === config.ownerId))
         if (!toolsDisabled) this.memoryTurns.set(sessionKey, { userId: config.ownerId, agentId: config.id, humanText: text, signal, groupId, speaker })
       }
-      if (internal && memoryPrompt && (context === 'direct' || context === 'group' && groupMemoryRequest?.groupId === conversationId && groupMemoryRequest.speaker.id === config.ownerId)) {
+      if (internal && memoryPrompt && !remoteTarget && (context === 'direct' || context === 'group' && groupMemoryRequest?.groupId === conversationId && groupMemoryRequest.speaker.id === config.ownerId)) {
         memoryPrompt += '\n\n' + INTERNAL_MEMORY_POLICY + '\n' + JSON.stringify(internalMemorySnapshot(this.store, config.ownerId!, (memoryRequest ?? groupMemoryRequest?.text ?? '').slice(0, 500), conversationId))
         if (config.localAgentId) memoryPrompt += '\nThe internal context above was retrieved by Douchat. search_internal_memory is a hosted tool, not a native CLI tool. Use the supplied context; do not read memory files directly or claim an exhaustive search.'
       }
@@ -2416,7 +2418,7 @@ export class DouchatRuntime {
       const identityGuidance = identityWritable ? identityEditingPrompt : ''
       if (config.localAgentId) {
         let skillBridge: { close: () => void; prompt: string; isBridgeCommand?: (command: unknown) => boolean } | undefined
-        const remote = await remoteAgentSpec(config.localAgentId)
+        const remote = remoteTarget
         const remoteLabel = remote ? remoteHostLabel(remote) : ''
         const localRoutineAllowed = Boolean(routineRequest)
           && !toolsDisabled

@@ -84,6 +84,8 @@ describe('local agent output', () => {
       '--allow', 'Read', 'Grep', 'WebFetch', 'WebSearch', 'image_gen', 'image_edit'
     ]))
     expect(localAgentArgs('grok', 'Research', '/tmp/output')).not.toContain('--always-approve')
+    expect(localAgentArgs('fastclaw', 'hi', '/tmp/output')).toEqual(['chat', '--query', 'hi'])
+    expect(localAgentArgs('fastclaw', 'hi', '/tmp/output', true, 'douchat-1')).toEqual(['chat', '--resume', 'douchat-1', '--query', 'hi'])
     // Grok ends the whole turn as `cancelled` when a dontAsk call is denied, so it
     // must only see the tools it may run (no terminal, writes or MCP meta tools).
     const grok = localAgentArgs('grok', 'Research', '/tmp/output')

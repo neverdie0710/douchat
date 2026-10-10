@@ -645,7 +645,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   listIMChannels(agentId: string): Promise<import('./imChannels').IMChannel[]>
   connectIMChannel(agentId: string, input: import('./imChannels').IMConnectInput): Promise<void>
   disconnectIMChannel(agentId: string, provider: import('./imChannels').IMProvider): Promise<void>
-  startIMLogin(agentId: string): Promise<import('./imChannels').IMLogin>
+  startIMLogin(agentId: string, provider?: import('./imChannels').IMQRProvider): Promise<import('./imChannels').IMLogin>
   cancelIMLogin(agentId: string, sessionId: string): Promise<void>
   pollIMLogin(agentId: string, sessionId: string): Promise<import('./imChannels').IMLoginStatus>
 

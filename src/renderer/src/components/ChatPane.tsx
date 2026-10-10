@@ -982,6 +982,7 @@ export const MessageRow = memo(function MessageRow({
     const channel = message.sourceChannel && {
       wechat: { name: t('WeChat'), icon: 'wechat.svg' },
       feishu: { name: t('Feishu'), icon: 'feishu.png' },
+      wecom: { name: t('WeCom'), icon: 'wecom.png' },
       telegram: { name: 'Telegram', icon: 'telegram.svg' }
     }[message.sourceChannel]
     return (
