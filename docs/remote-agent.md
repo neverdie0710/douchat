@@ -64,7 +64,7 @@ export interface RemoteAgentSpec {
   remoteCwd: string            // 远端工作目录，绝对 POSIX 路径
   remotePath?: string          // 探测得到的远端登录 PATH
   remoteHome?: string          // 探测得到的远端 $HOME，技能桥转发使用
-  allowSharing: boolean        // 默认 false
+  allowSharing: boolean        // 默认 false（已取消，见 remote-connections.md 3.1，改由智能体权限控制）
 }
 export interface LocalAgent { /* 现有字段 */ remote?: RemoteAgentSpec }
 export interface CustomLocalAgentInput { /* 现有字段 */ remote?: RemoteAgentSpec }

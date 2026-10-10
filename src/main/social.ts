@@ -4,7 +4,7 @@ import { agentPermissions } from '../shared/agentPermissions'
 import { addressesEveryone, resolveMentionedMembers } from '../shared/bot/mentions'
 import { socialFollowUpTarget } from '../shared/socialFollowUp'
 import type { AgentConfig, MessageAttachment, MessageImageInput, MessageFileInput } from '../shared/types'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { DesktopAuth } from './desktopAuth'
 import type { DouchatStore } from './store'
 import type { DouchatRuntime } from './runtime'
@@ -54,6 +54,16 @@ function sharedAgentProfile(agent: AgentConfig) {
     systemRole: agent.systemRole ?? '' }
 }
 
+/** The room-scoped id the service gives an owner's agent in its private agent room. */
+export function agentRoomAgentId(ownerId: string, localId: string): string {
+  return createHash('sha256').update(JSON.stringify(['agent', ownerId, localId])).digest('hex')
+}
+
+/** Agent rooms are a transport for daemon agents, not chats the social UI lists. */
+export function rendererSocialSnapshot(snapshot: SocialSnapshot): SocialSnapshot {
+  return snapshot.rooms.some(room => room.kind === 'agent') ? { ...snapshot, rooms: snapshot.rooms.filter(room => room.kind !== 'agent') } : snapshot
+}
+
 function checkHumanAgentTargets(ids: string[], agents: SocialAgent[], requesterId: string): void {
   for (const id of ids) {
     const agent = agents.find(member => member.id === id)
@@ -74,7 +84,14 @@ export class SocialClient {
   private syncing?: Promise<SocialSnapshot>
   private roomSync = new Map<string, { revision?: string; cursor: { time: string; id: string }; pending: Set<string>; checkedAt: number; auditedAt: number }>()
   private pendingSends = new Map<string, { content: string; signature: string; id: string; agentIds: string[] }>()
+  private daemonAgents: () => Set<string> = () => new Set()
   constructor(private url: string, private auth: DesktopAuth, private store: DouchatStore, private runtime: DouchatRuntime, private onInboxChanged: () => void = () => {}) {}
+  /** Agents a douchat-host claims tasks for: this computer never advertises or claims them. */
+  setDaemonAgents(daemonAgents: () => Set<string>): void { this.daemonAgents = daemonAgents }
+  private runnableLocalIds(ownerId: string): string[] {
+    const daemon = this.daemonAgents()
+    return this.store.agents.filter((agent) => agent.ownerId === ownerId && !daemon.has(agent.id)).map((agent) => agent.id)
+  }
   private identity() {
     const state = this.auth.getState()
     const token = this.auth.getAccessToken()
@@ -95,7 +112,25 @@ export class SocialClient {
     if (!response.ok || payload?.data === undefined) throw new Error(payload?.message || "The chat service connection failed. Try again later.")
     return payload.data as T
   }
-  async snapshot(): Promise<SocialSnapshot> { return privacySafeSocialSnapshot(await this.request()) }
+  async snapshot(): Promise<SocialSnapshot> { return rendererSocialSnapshot(privacySafeSocialSnapshot(await this.request())) }
+
+  /**
+   * Links a daemon agent's direct chat to its private agent room so messages
+   * become tasks the douchat-host claims. Idempotent on the service.
+   */
+  async ensureAgentRoom(conversationId: string): Promise<string> {
+    const identity = this.identity()
+    const conversation = this.store.accountConversations.find(item => item.id === conversationId)
+    if (!conversation || conversation.type !== 'direct' || conversation.ownerId !== identity.id || conversation.id.startsWith('im-')) throw new Error('Chat not found')
+    if (conversation.remoteRoomId) return conversation.remoteRoomId
+    const agent = this.store.claimSocialAgent(conversation.agentIds[0], identity.id)
+    const result = await this.request<SocialResult>({ action: 'create-room', kind: 'agent', localId: agent.id, ...sharedAgentProfile(agent) }, identity)
+    if (!result.roomId) throw new Error('Chat could not be created')
+    if (this.identity().id !== identity.id) throw new Error('Chat account mismatch')
+    this.store.linkAgentRoom(conversation.id, result.roomId)
+    await this.refreshRoom(result.roomId)
+    return result.roomId
+  }
   async resetConversationContext(conversationId: string): Promise<void> {
     const identity = this.identity()
     const conversation = this.store.accountConversations.find(item => item.id === conversationId)
@@ -131,7 +166,8 @@ export class SocialClient {
       const identity = this.identity()
       const snapshot = privacySafeSocialSnapshot(delivery?.snapshot ?? await this.request<SocialSnapshot>(undefined, identity, signal))
       if (snapshot.userId !== identity.id) throw new Error('Chat account mismatch')
-      const queue = [...snapshot.rooms]
+      // Agent rooms for agents that live on another computer have no chat here.
+      const queue = snapshot.rooms.filter(room => room.kind !== 'agent' || this.store.agentRoomConversation(identity.id, room))
       const syncRoom = async (room: SocialSnapshot['rooms'][number]) => {
         const stateKey = `${identity.id}:${room.id}`
         const previous = snapshot.syncVersion === 1 ? this.roomSync.get(stateKey) : undefined
@@ -251,7 +287,10 @@ export class SocialClient {
     const decodedFiles = decodeSocialFiles(files, images)
     if (files.length && (await this.request<SocialSnapshot>(undefined, identity)).filesVersion !== 1) throw new Error('服务器尚未支持文件传输，请更新服务端后重试。')
     const room = conversation.socialRoom
-    const explicitIds = room?.kind !== 'group' && addressesEveryone(content) ? []
+    // A daemon agent's chat always addresses its one agent; it has no roster to check.
+    const agentRoom = conversation.type === 'direct' && !conversation.person && conversation.agentIds.length === 1
+    const explicitIds = agentRoom ? [agentRoomAgentId(identity.id, conversation.agentIds[0])]
+      : room?.kind !== 'group' && addressesEveryone(content) ? []
       : sharedGroupReplyTargets(mentionContent, room?.agents ?? [], room?.members ?? [], identity.id, mentions)
     const followUp = explicitIds.length ? undefined : socialFollowUpTarget(conversation, this.store.messagePage(conversationId, conversation.activeTopicId).messages, content)
     const signature = JSON.stringify([content, images, files, mentions])
@@ -260,7 +299,7 @@ export class SocialClient {
     // A lost receipt must retry the same task even after optimistic insertion
     // or a new group message changes the current follow-up context.
     const agentIds = pending?.signature === signature ? pending.agentIds : explicitIds.length ? explicitIds : followUp ? [followUp.id] : []
-    checkHumanAgentTargets(agentIds, room?.agents ?? [], identity.id)
+    if (!agentRoom) checkHumanAgentTargets(agentIds, room?.agents ?? [], identity.id)
     const agentId = agentIds[0]
     if (pending?.signature !== signature) {
       pending = { content, signature, id: randomUUID(), agentIds }
@@ -394,6 +433,13 @@ export class SocialClient {
       const agent = this.store.claimSocialAgent(input.localId, this.identity().id)
       return this.request({ ...input, ...sharedAgentProfile(agent) })
     }
+    if (input.action === 'create-room' && input.kind === 'agent') {
+      // Agent rooms are created by ensureAgentRoom with the trusted local profile.
+      const conversation = this.store.accountConversations.find(item => item.type === 'direct' && !item.id.startsWith('im-') && item.agentIds[0] === input.localId)
+      if (!conversation) throw new Error('Chat not found')
+      const roomId = await this.ensureAgentRoom(conversation.id)
+      return { roomId, conversationId: conversation.id }
+    }
     if (input.action === 'create-room') {
       const identity = this.identity()
       const { agentIds = [], ...request } = input
@@ -431,8 +477,9 @@ export class SocialClient {
       try {
         const identity = this.identity()
         const requests = this.runtime.snapshot().permissionRequests ?? []
-        const approvals = [...this.activeTasks.values()].filter(active => requests.some(request => request.agentId === active.localId))
-        await this.request({ action: 'heartbeat', localIds: this.store.agents.filter((agent) => agent.ownerId === identity.id).map((agent) => agent.id), approvals }, identity, signal)
+        // Approvals raised by a douchat-host are not this computer's to report.
+        const approvals = [...this.activeTasks.values()].filter(active => requests.some(request => request.agentId === active.localId && !request.id.startsWith('remote:')))
+        await this.request({ action: 'heartbeat', localIds: this.runnableLocalIds(identity.id), approvals }, identity, signal)
       } catch { /* Older services and offline devices do not advertise presence. */ }
       finally { if (!signal.aborted && generation === this.generation) this.heartbeatTimer = setTimeout(() => void heartbeat(), 10000) }
     }
@@ -467,12 +514,14 @@ export class SocialClient {
           await this.request({ action: 'complete', ...result }, identity)
           this.store.removeSocialTaskResult(result.id, identity.id)
         }
-        const { tasks } = await this.request<{ tasks: (SocialTask & { localId?: string })[] }>({ action: 'tasks', localIds: this.store.agents.filter((agent) => agent.ownerId === identity.id).map((agent) => agent.id) }, identity)
+        const { tasks } = await this.request<{ tasks: (SocialTask & { localId?: string })[] }>({ action: 'tasks', localIds: this.runnableLocalIds(identity.id) }, identity)
         for (const pending of tasks) {
           if (signal.aborted || this.activeTasks.size >= 8) break
           if (this.activeTasks.has(pending.id)) continue
           // Tasks for an agent on another computer remain queued there.
           if (pending.localId && this.store.agent(pending.localId)?.ownerId !== identity.id) continue
+          // A douchat-host claims these; never run them here, even as a fallback.
+          if (pending.localId && this.daemonAgents().has(pending.localId)) continue
           const { task } = await this.request<{ task: SocialTask | null }>({ action: 'claim', id: pending.id }, identity)
           if (!task) continue
           this.store.saveSocialTaskResult({ id: task.id, ownerId: identity.id, claim: task.claim, failed: true, reply: '设备在执行期间中断，任务未自动重试。请确认执行结果后再派发新任务。' })

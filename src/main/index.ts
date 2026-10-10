@@ -46,25 +46,40 @@ import type {
   UpdateAgentInput,
   UpdateConversationInput,
   UpdateDesktopProfileInput,
-  UpdateState
+  UpdateState,
+  AgentWorkspaceBinding,
+  Conversation,
+  ConversationWorkspaceView,
+  MemberWorkspaceView
 } from '../shared/types'
 import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, remoteAgentSpec, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, agentsOnConnection, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { ConnectionManager } from './connectionManager'
+import { migrateConnections, skippedMigrationAgents } from './connectionStore'
+import { migrateWorkspaceTargets } from './workspaceMigration'
+import { migrateSharingToPermissions } from './sharingMigration'
 import { closeRemoteConnections, configureRemoteTransport } from './remoteTransport'
 import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
+import { DeviceIdentity } from './deviceIdentity'
+import { DaemonClient } from './remote/daemonClient'
+import { rendererSocialSnapshot } from './social'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl, parseDesktopConnectorsUrl, DEVELOPMENT_APP_SCHEME } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
 import { EmailConnectorManager } from './emailConnector'
 import { applicationName, userDataDirectoryName } from './userData'
-import { configureLocalWorkspaces, validateWorkspaceFolder, resolveSavedWorkspace, localWorkspace, openableWorkspace } from './localWorkspaces'
-import { canAssignConversationWorkspace } from '../shared/conversationWorkspace'
+import { configureLocalWorkspaces, validateWorkspaceFolder, resolveSavedWorkspace, localWorkspace, openableWorkspace, localExecutionTarget } from './localWorkspaces'
+import { listRemoteDirectories, remoteTerminalArgs, resolveRemoteWorkspace } from './remoteWorkspace'
+import { remoteHostLabel } from './remoteValidate'
+import { probeRemoteAgent } from './remoteTransport'
+import { configureDaemonRelay } from './remote/daemonRelay'
+import { canAssignAgentWorkspace, canAssignConversationWorkspace, memberWorkspace, ownMemberAgentIds } from '../shared/conversationWorkspace'
 import { prepareNpmMaintenance, resolveMaintenancePlan } from './localAgentMaintenance'
-import { openMaintenanceTerminal, openLocalAgentTerminal } from './terminalLauncher'
+import { openMaintenanceTerminal, openLocalAgentTerminal, openSshTerminal } from './terminalLauncher'
 
 // Use the software compositor on Windows: modal layers can blank the entire
 // window on affected GPU/driver combinations. Must run before app readiness.
@@ -91,6 +106,7 @@ const webAppUrl = normalizeWebAppUrl(
  */
 app.setPath('userData', join(app.getPath('appData'), userDataDirectoryName(development)))
 configureLocalAgentRegistry(app.getPath('userData'))
+const connections = new ConnectionManager(connectionRegistry(), agentsOnConnection)
 configureRemoteTransport(app.getPath('userData'))
 configureManagedNode(app.getPath('userData'))
 configureLocalWorkspaces(app.getPath('userData'))
@@ -224,10 +240,12 @@ let cloudSessionActive = false
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
+/** No window, and so no turn or agent edit, before connections are migrated. */
+let startupReady = false
 function focusMainWindow(): void {
   if (quitting) return
   if (!mainWindow || mainWindow.isDestroyed()) {
-    if (app.isReady() && runtime) createWindow()
+    if (app.isReady() && runtime && startupReady) createWindow()
     return
   }
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -280,7 +298,8 @@ function receiveAppUrl(url: string): void {
   }
   if (!isDesktopAuthUrl(url, authScheme)) return
   focusMainWindow()
-  if (!auth) {
+  // Signing in starts account sync and shared tasks; wait until startup (and migration) is done.
+  if (!auth || !startupReady) {
     pendingAuthUrl = url
     return
   }
@@ -336,6 +355,7 @@ function scheduleBroadcast(): void {
 }
 
 let social: SocialClient | undefined
+let daemon: DaemonClient | undefined
 let socialAccountId = ''
 
 function broadcastAuth(state: DesktopAuthState): void {
@@ -361,8 +381,8 @@ function broadcastAuth(state: DesktopAuthState): void {
   }
   if (nextSocialAccount !== socialAccountId) {
     socialAccountId = nextSocialAccount
-    if (nextSocialAccount) social?.start()
-    else social?.stop()
+    if (nextSocialAccount) { social?.start(); daemon?.start() }
+    else { social?.stop(); daemon?.stop() }
   }
   let welcomeConversationId: string | undefined
   let builtInRefresh: Promise<string | undefined> = Promise.resolve(undefined)
@@ -574,7 +594,7 @@ function configureMediaPermissions(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   // Electron creates a default File/Edit/View/Window menu on Windows when no
   // application menu is provided. Douchat exposes its actions in the app UI,
@@ -684,10 +704,16 @@ app.whenReady().then(() => {
     // Douchat forward only for an explicit login callback, never for session
     // restoration, profile refreshes or profile edits in the background.
     if (state.status === 'signed-in' && reason === 'login-completed') { focusMainWindow(); void openPendingGroup() }
-  })
+  }, new DeviceIdentity(join(app.getPath('userData'), 'device.json'), safeStorage))
 
   social = new SocialClient(webAppUrl, auth, store, runtime, scheduleBroadcast)
   runtime.setHumanSender((id, text, images, files, mentions) => social!.sendMessage(id, text, images, files, mentions))
+  // douchat-host connections: enrollment and status here; agents on them run from this
+  // computer like SSH agents, with the relay carrying their scripts (remote/daemonRelay.ts).
+  daemon = new DaemonClient(webAppUrl, auth, store, connections, () => runtime.remoteChanged())
+  connections.setDaemonBackend(daemon)
+  configureDaemonRelay(daemon.relayBackend())
+  if (socialAccountId) daemon.start()
   ipcMain.handle('douchat:social-snapshot', (event) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     return social!.snapshot()
@@ -695,7 +721,7 @@ app.whenReady().then(() => {
   ipcMain.handle('douchat:social-action', async (event, input: SocialAction) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     const result = await social!.action(input)
-    return result
+    return result.snapshot ? { ...result, snapshot: rendererSocialSnapshot(result.snapshot) } : result
   })
   ipcMain.handle('douchat:get-auth-state', () => auth.getState())
   ipcMain.handle('douchat:user-memory', (event, agentId?: string) => {
@@ -788,13 +814,12 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('douchat:update-local-agent', async (event, id: string, input: CustomLocalAgentInput) => {
     if (!isDouchatRenderer(event.sender) || typeof id !== 'string') throw new Error('Invalid local agent request')
-    const previous = await remoteAgentSpec(id)
+    const previous = await remoteAgentPlacement(id).catch(() => undefined)
     await updateLocalAgent(id, input)
-    if (previous) {
-      for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
-      void closeRemoteConnections(previous)
-    }
+    // Its running sessions belong to the old settings; the connection itself stays open for other agents.
+    if (previous || input.remoteAgent) for (const agent of store.agents) if (agent.localAgentId === id) runtime?.disposeAgent(agent.id)
     cancelLocalModelQueries()
+    daemon?.scheduleSync()
     resetShellPath()
     return checkLocalAgentUpdates(await detectLocalAgents())
   })
@@ -823,10 +848,106 @@ app.whenReady().then(() => {
     if (store.agents.some((agent) => agent.localAgentId === id)) {
       throw new Error('Remove contacts using this local agent before deleting it.')
     }
-    const previous = await remoteAgentSpec(id)
     await removeCustomLocalAgent(id)
-    if (previous) void closeRemoteConnections(previous)
     return checkLocalAgentUpdates(await detectLocalAgents())
+  })
+  // ─── Server connections ────────────────────────────────────────────────────
+  // Every handler validates in main; renderer checks are only hints.
+  const connectionChanged = (): void => notifyWindows(BrowserWindow.getAllWindows(), 'douchat:connections-changed')
+  connections.onStatus(connectionChanged)
+  const connectionRequest = (event: Electron.IpcMainInvokeEvent, id?: unknown): string => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connection request')
+    if (id !== undefined && (typeof id !== 'string' || !/^conn_[0-9a-f]{32}$/.test(id))) throw new Error('Invalid connection')
+    return id as string
+  }
+  /** Stop every turn and process of agents on a connection; they must not continue elsewhere. */
+  const stopAgentsOn = async (connectionId: string): Promise<void> => {
+    const ids = new Set(await agentsOnConnection(connectionId))
+    for (const agent of store.agents) if (agent.localAgentId && ids.has(agent.localAgentId)) runtime?.disposeAgent(agent.id)
+  }
+  ipcMain.handle('douchat:list-connections', (event) => { connectionRequest(event); return connections.list() })
+  ipcMain.handle('douchat:save-connection', async (event, input: unknown) => {
+    connectionRequest(event)
+    const id = input && typeof input === 'object' ? (input as { id?: unknown }).id : undefined
+    const previous = typeof id === 'string' ? await connectionRegistry().get(id) : undefined
+    const saved = await connections.save(input)
+    // A new target: work started under the old settings must not continue.
+    if (previous && previous.targetRevision !== saved.targetRevision) await stopAgentsOn(saved.id)
+    cancelLocalModelQueries()
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  ipcMain.handle('douchat:set-connection-enabled', async (event, id: unknown, enabled: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (typeof enabled !== 'boolean') throw new Error('Invalid connection request')
+    // Saved first so no new turn can start on it, then running turns stop.
+    // Nothing falls back to this computer.
+    await connections.setEnabled(connectionId, enabled)
+    if (!enabled) { await stopAgentsOn(connectionId); cancelLocalModelQueries() }
+    daemon?.scheduleSync()
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  ipcMain.handle('douchat:remove-connection', async (event, id: unknown, mode: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (mode !== 'disable-agents' && mode !== 'delete-agents') throw new Error('Invalid connection request')
+    // Turned off first so no new turn starts, then running turns stop.
+    await connections.setEnabled(connectionId, false)
+    await stopAgentsOn(connectionId)
+    cancelLocalModelQueries()
+    // Agents still used by contacts are kept (and cannot run) even with delete-agents.
+    const inUse = (localId: string) => store.agents.some(agent => agent.localAgentId === localId)
+    await removeAgentsOnConnection(connectionId, mode, inUse)
+    await connections.remove(connectionId)
+    daemon?.scheduleSync()
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  const connectionTests = new Map<number, AbortController>()
+  ipcMain.handle('douchat:test-connection', async (event, id: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    connectionTests.get(event.sender.id)?.abort()
+    const abort = new AbortController()
+    connectionTests.set(event.sender.id, abort)
+    try { return await connections.test(connectionId, AbortSignal.any([abort.signal, AbortSignal.timeout(120_000)])) }
+    finally { if (connectionTests.get(event.sender.id) === abort) connectionTests.delete(event.sender.id); connectionChanged() }
+  })
+  ipcMain.handle('douchat:discover-remote-agents', (event, id: unknown) => connections.discover(connectionRequest(event, id), AbortSignal.timeout(120_000)))
+  ipcMain.handle('douchat:add-discovered-agents', async (event, id: unknown, chosen: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (!Array.isArray(chosen) || !chosen.length || chosen.length > 11) throw new Error('Choose agents to add.')
+    // Only what discovery found on this server can be added this way.
+    const found = await connections.discover(connectionId, AbortSignal.timeout(120_000))
+    for (const item of chosen as Array<{ adapter?: unknown; executable?: unknown; name?: unknown }>) {
+      const match = found.find(agent => agent.adapter === item?.adapter && agent.executable === item?.executable)
+      if (!match) throw new Error('This agent was not found on the server. Scan again.')
+      await addCustomLocalAgent({ name: typeof item.name === 'string' && item.name.trim() ? item.name : match.adapter, command: match.executable,
+        remoteAgent: { connectionId, adapter: match.adapter, executable: match.executable, args: [] } })
+    }
+    connectionChanged()
+    return checkLocalAgentUpdates(await detectLocalAgents())
+  })
+  ipcMain.handle('douchat:open-connection-terminal', async (event, id: unknown) => {
+    const connection = await connectionRegistry().get(connectionRequest(event, id))
+    if (!connection) throw new Error('Connection not found')
+    if (!connection.enabled) throw new Error('This connection is turned off.')
+    if (connection.kind !== 'ssh' || !connection.ssh) throw new Error('douchat-host 连接不提供终端。请在服务器上直接操作。')
+    await openSshTerminal(remoteTerminalArgs({ transport: 'ssh', ...connection.ssh, adapter: 'custom', executable: 'true', args: [] }))
+  })
+  // ─── douchat-host enrollment ───────────────────────────────────────────────
+  const enrollmentId = (id: unknown): string => {
+    if (typeof id !== 'string' || !/^hst_[0-9a-f-]{36}$/.test(id)) throw new Error('Invalid install request')
+    return id
+  }
+  ipcMain.handle('douchat:create-daemon-enrollment', (event) => { connectionRequest(event); return daemon!.createEnrollment() })
+  ipcMain.handle('douchat:wait-daemon-enrollment', (event, id: unknown) => { connectionRequest(event); return daemon!.waitEnrollment(enrollmentId(id)) })
+  ipcMain.handle('douchat:cancel-daemon-enrollment', (event, id: unknown) => { connectionRequest(event); daemon!.cancelEnrollment(enrollmentId(id)) })
+  ipcMain.handle('douchat:complete-daemon-enrollment', async (event, id: unknown, input: unknown) => {
+    connectionRequest(event)
+    const value = input && typeof input === 'object' ? input as { name?: unknown } : {}
+    await daemon!.completeEnrollment(enrollmentId(id), { name: typeof value.name === 'string' ? value.name : '' })
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
   })
   ipcMain.handle('douchat:search-messages', (event, id: string, query: string) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unknown window')
@@ -959,7 +1080,7 @@ app.whenReady().then(() => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Unauthorized')
     if ((input.customModel || input.cloudModel) && input.localAgentId) throw new Error("Select one execution mode.")
     if (input.customModel && input.cloudModel) throw new Error("Select one model source.")
-    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
     const binding = input.localAgentId
@@ -980,10 +1101,12 @@ app.whenReady().then(() => {
     )
     // A new bot opens with its own proactive greeting, like a new topic does.
     if (direct) void runtime.greet(direct.id)
+    if (localAgent?.daemon) daemon?.scheduleSync()
     return push()
   })
-  ipcMain.handle('douchat:resolve-agent-permission', (_event, id: string, allow: import('../shared/agentPermissions').PermissionApproval) => {
-    runtime.resolveAgentPermission(id, allow)
+  ipcMain.handle('douchat:resolve-agent-permission', async (_event, id: string, allow: import('../shared/agentPermissions').PermissionApproval) => {
+    if (typeof id !== 'string') throw new Error('Unknown approval')
+    await runtime.resolveAgentPermission(id, allow)
     return push()
   })
   ipcMain.handle('douchat:export-agent-archive', async (event, agentId: string) => {
@@ -1032,7 +1155,7 @@ app.whenReady().then(() => {
       if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
       input = { ...input, model: model ?? 'default' }
     }
-    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId) : undefined
+    const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined
     const { localAgentName: _ignoredLocalAgentName, ...safeInput } = input
     store.updateAgent(agentId, {
       ...safeInput,
@@ -1040,6 +1163,8 @@ app.whenReady().then(() => {
     }, selectedBinding ? { binding: selectedBinding, followDefault: cloudModel?.model === 'douchat-default' } : undefined)
     // Identity and model edits take effect on the next turn, not mid-session.
     runtime.disposeAgent(agentId)
+    // Configuration and permissions reach a douchat-host only as a signed sync.
+    daemon?.scheduleSync()
     return push()
   })
   ipcMain.handle('douchat:delete-agent', (_event, agentId: string) => {
@@ -1051,6 +1176,7 @@ app.whenReady().then(() => {
     runtime.disposeAgent(agentId)
     for (const provider of ['wechat', 'feishu', 'wecom', 'telegram'] as const) imChannels?.disconnect(agentId, provider)
     store.deleteAgent(agentId)
+    daemon?.scheduleSync()
     return push()
   })
   ipcMain.handle('douchat:start-direct-chat', (_event, agentId: string) => {
@@ -1078,52 +1204,135 @@ app.whenReady().then(() => {
     if (input.agentIds || input.leadAgentId) runtime.resetConversation(conversationId)
     return push()
   })
-  ipcMain.handle('douchat:open-conversation-workspace', async (event, conversationId: unknown) => {
-    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
+  // Folders are set per member. Main looks up where each agent runs; the
+  // renderer only names the chat and the agent, never a server or a target.
+  const workspaceChat = (conversationId: unknown): Conversation => {
+    if (typeof conversationId !== 'string') throw new Error('Invalid workspace request')
     const conversation = store.accountConversations.find(item => item.id === conversationId)
     if (!conversation) throw new Error('Chat not found')
-    let directory: string | undefined
-    if (conversation.workspacePath) directory = resolveSavedWorkspace(conversation.workspacePath)
+    return conversation
+  }
+  const workspaceMember = async (conversationId: unknown, agentId: unknown) => {
+    const conversation = workspaceChat(conversationId)
+    const agent = typeof agentId === 'string' ? store.accountAgents.find(item => item.id === agentId) : undefined
+    if (!agent || !canAssignAgentWorkspace(conversation, agent, store.currentAccountId)) throw new Error('Only the owner can choose a folder for this agent in this chat.')
+    const placement = await remoteAgentPlacement(agent.localAgentId)
+    const target = placement ? { ...placement.target, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
+    return { conversation, agent, placement, target }
+  }
+  const workspaceView = async (conversationId: unknown): Promise<ConversationWorkspaceView> => {
+    const conversation = workspaceChat(conversationId)
+    const members = await Promise.all(ownMemberAgentIds(conversation, store.currentAccountId).map(async (agentId): Promise<MemberWorkspaceView | undefined> => {
+      const agent = store.accountAgents.find(item => item.id === agentId)
+      if (!agent) return undefined
+      // A member whose connection is off or removed has no folder to set right now.
+      const placement = await remoteAgentPlacement(agent.localAgentId).catch(() => null)
+      if (placement === null) return undefined
+      const target = placement ? { ...placement.target, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
+      const resolved = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
+      return {
+        agentId, location: target.location, ...(placement ? { host: remoteHostLabel(placement.spec) } : {}), ...(placement && placement.spec.transport !== 'ssh' ? { noTerminal: true } : {}),
+        ...(resolved.binding ? { path: resolved.binding.path, source: 'custom' as const } : resolved.legacyPath ? { path: resolved.legacyPath, source: 'legacy' as const } : { source: 'default' as const }),
+        ...(resolved.stale ? { stale: true } : {})
+      }
+    }))
+    const visible = members.filter((item): item is MemberWorkspaceView => Boolean(item))
+    return {
+      eligible: visible.length > 0, members: visible,
+      ...(conversation.workspacePath ? { legacyPath: conversation.workspacePath, legacyUnused: !visible.some(item => item.source === 'legacy') } : {})
+    }
+  }
+  const saveMemberWorkspace = (conversation: Conversation, agentId: string, binding: AgentWorkspaceBinding | undefined): void => {
+    store.setAgentWorkspace(conversation.id, agentId, binding)
+    runtime.workspaceChanged(conversation.id)
+    scheduleBroadcast()
+  }
+  ipcMain.handle('douchat:conversation-workspaces', (event, conversationId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    return workspaceView(conversationId)
+  })
+  ipcMain.handle('douchat:choose-agent-workspace', async (event, conversationId: unknown, agentId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const { conversation, agent, target } = await workspaceMember(conversationId, agentId)
+    // A folder picker on this computer can only produce a path on this computer.
+    if (target.location !== 'local') throw new Error('This agent runs on a server. Choose a folder on that server instead.')
+    const current = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
+    const defaultPath = current.binding?.path ?? current.legacyPath
+    const options: Electron.OpenDialogOptions = { title: ui('Choose a workspace folder', '选择工作区文件夹'), buttonLabel: ui('Use this folder', '使用此文件夹'), properties: ['openDirectory', 'createDirectory'], ...(defaultPath ? { defaultPath } : {}) }
+    if (process.platform === 'darwin') app.focus({ steal: true })
+    BrowserWindow.fromWebContents(event.sender)?.focus()
+    const result = await dialog.showOpenDialog(options)
+    if (result.canceled || !result.filePaths[0]) return workspaceView(conversation.id)
+    const folder = validateWorkspaceFolder(result.filePaths[0])
+    const latest = await workspaceMember(conversation.id, agent.id)
+    if (latest.target.location !== 'local' || latest.target.executionTargetId !== target.executionTargetId) throw new Error('The agent changed. Try again.')
+    saveMemberWorkspace(latest.conversation, agent.id, { path: folder, executionTargetId: target.executionTargetId, targetRevision: target.targetRevision })
+    return workspaceView(conversation.id)
+  })
+  ipcMain.handle('douchat:list-remote-agent-directories', async (event, conversationId: unknown, agentId: unknown, parent: unknown, name: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const { placement } = await workspaceMember(conversationId, agentId)
+    if (!placement) throw new Error('This agent runs on this computer.')
+    if (parent !== undefined && typeof parent !== 'string') throw new Error('Invalid folder')
+    if (name !== undefined && typeof name !== 'string') throw new Error('Invalid folder')
+    const spec = await probeRemoteAgent(placement.spec)
+    return listRemoteDirectories(spec, parent, name)
+  })
+  ipcMain.handle('douchat:choose-remote-agent-workspace', async (event, conversationId: unknown, agentId: unknown, parent: unknown, name: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const { conversation, agent, placement } = await workspaceMember(conversationId, agentId)
+    if (!placement) throw new Error('This agent runs on this computer. Choose a local folder instead.')
+    const spec = await probeRemoteAgent(placement.spec)
+    // The renderer names a listed folder and optionally one child; main joins and resolves.
+    const resolved = await resolveRemoteWorkspace(spec, parent, name === undefined || name === null ? undefined : name)
+    // The server may have been edited while the folder was resolving.
+    const latest = await workspaceMember(conversation.id, agent.id)
+    if (!latest.placement || latest.placement.target.executionTargetId !== placement.target.executionTargetId || latest.placement.target.targetRevision !== placement.target.targetRevision) throw new Error('The agent\'s server changed. Try again.')
+    saveMemberWorkspace(latest.conversation, agent.id, { path: resolved, ...placement.target })
+    return workspaceView(conversation.id)
+  })
+  ipcMain.handle('douchat:clear-agent-workspace', async (event, conversationId: unknown, agentId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const conversation = workspaceChat(conversationId)
+    const agent = typeof agentId === 'string' ? store.accountAgents.find(item => item.id === agentId) : undefined
+    if (!agent || agent.ownerId !== store.currentAccountId) throw new Error('Only the owner can change this agent\'s folder.')
+    if (conversation.agentWorkspaces?.[agent.id]) saveMemberWorkspace(conversation, agent.id, undefined)
+    return workspaceView(conversation.id)
+  })
+  ipcMain.handle('douchat:clear-conversation-workspace', (event, conversationId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const conversation = workspaceChat(conversationId)
+    if (conversation.workspacePath) {
+      store.setConversationWorkspace(conversation.id, undefined)
+      runtime.workspaceChanged(conversation.id)
+      scheduleBroadcast()
+    }
+    return workspaceView(conversation.id)
+  })
+  ipcMain.handle('douchat:open-agent-workspace', async (event, conversationId: unknown, agentId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const { conversation, agent, target } = await workspaceMember(conversationId, agentId)
+    if (target.location !== 'local') throw new Error('This folder is on a server. Copy its path or open it in a terminal.')
+    const resolved = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
+    let directory = resolved.binding?.path ?? resolved.legacyPath
+    if (directory) directory = resolveSavedWorkspace(directory)
     else {
-      if (!canAssignConversationWorkspace(conversation, store.accountAgents, store.currentAccountId)) throw new Error('Workspace unavailable')
-      const topicId = store.activeTopicId(conversationId)
-      const members = conversation.agentIds.map(id => store.accountAgents.find(agent => agent.id === id)!).filter(Boolean)
-      const key = (id: string) => conversation.type === 'direct' ? `direct:${conversationId}:${topicId}` : groupMemberSessionId(conversationId, id, topicId)
-      const existing = members.flatMap(agent => { const result = openableWorkspace(agent, key(agent.id), conversation.type === 'group'); return result ? [result] : [] }).sort((a, b) => b.modified - a.modified)
-      directory = existing[0]?.directory ?? localWorkspace(members[0], key(members[0].id))?.directory
+      const topicId = store.activeTopicId(conversation.id)
+      const key = conversation.type === 'direct' ? `direct:${conversation.id}:${topicId}` : groupMemberSessionId(conversation.id, agent.id, topicId)
+      directory = openableWorkspace(agent, key, conversation.type === 'group')?.directory ?? localWorkspace(agent, key)?.directory
     }
     if (!directory) throw new Error('Workspace unavailable')
     const error = await shell.openPath(directory)
     if (error) throw new Error(error)
   })
-  ipcMain.handle('douchat:choose-conversation-workspace', async (event, conversationId: unknown) => {
-    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
-    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
-    if (!target) throw new Error('Chat not found')
-    if (!canAssignConversationWorkspace(target, store.accountAgents, store.currentAccountId)) throw new Error('Only chats whose members are all your own agents can use a custom workspace.')
-    const options: Electron.OpenDialogOptions = { title: ui('Choose a workspace folder', '选择工作区文件夹'), buttonLabel: ui('Use this folder', '使用此文件夹'), properties: ['openDirectory', 'createDirectory'], ...(target.workspacePath ? { defaultPath: target.workspacePath } : {}) }
-    if (process.platform === 'darwin') app.focus({ steal: true })
-    BrowserWindow.fromWebContents(event.sender)?.focus()
-    const result = await dialog.showOpenDialog(options)
-    if (result.canceled || !result.filePaths[0]) return runtime.snapshot()
-    const folder = validateWorkspaceFolder(result.filePaths[0])
-    const current = store.accountConversations.find((conversation) => conversation.id === conversationId)
-    if (!current || !canAssignConversationWorkspace(current, store.accountAgents, store.currentAccountId)) throw new Error('Chat members changed. Try again.')
-    if (current.workspacePath !== folder) {
-      store.setConversationWorkspace(conversationId, folder)
-      runtime.workspaceChanged(conversationId)
-    }
-    return push()
-  })
-  ipcMain.handle('douchat:clear-conversation-workspace', (event, conversationId: unknown) => {
-    if (!isDouchatRenderer(event.sender) || typeof conversationId !== 'string') throw new Error('Invalid workspace request')
-    const target = store.accountConversations.find((conversation) => conversation.id === conversationId)
-    if (!target) throw new Error('Chat not found')
-    if (target.workspacePath) {
-      store.setConversationWorkspace(conversationId, undefined)
-      runtime.workspaceChanged(conversationId)
-    }
-    return push()
+  ipcMain.handle('douchat:open-remote-agent-workspace-terminal', async (event, conversationId: unknown, agentId: unknown) => {
+    if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
+    const { conversation, agent, placement, target } = await workspaceMember(conversationId, agentId)
+    if (!placement) throw new Error('This agent runs on this computer.')
+    const binding = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId).binding
+    if (!binding) throw new Error('No folder has been chosen on the server for this agent.')
+    if (placement.spec.transport !== 'ssh') throw new Error('douchat-host 连接不提供终端。请在服务器上直接操作。')
+    await openSshTerminal(remoteTerminalArgs(placement.spec, binding.path))
   })
   ipcMain.handle('douchat:open-conversation-window', (_event, conversationId: string) => {
     if (!store.accountConversations.some((conversation) => conversation.id === conversationId)) throw new Error('Chat not found')
@@ -1311,6 +1520,26 @@ app.whenReady().then(() => {
     await computer.show(agentId)
   })
 
+  // Agents are not started until connections are migrated (docs/remote-connections.md §3).
+  try {
+    // Before migrateConnections: it no longer carries the old sharing switch over.
+    const narrowed = await migrateSharingToPermissions(app.getPath('userData'), store)
+    if (narrowed) diagnostics.write('connections.sharing-migrated', String(narrowed))
+    const migrated = await migrateConnections(app.getPath('userData'), connectionRegistry())
+    migrateWorkspaceTargets(store, migrated)
+  } catch (error) {
+    diagnostics.write('connections.migration-failed', String(error))
+    void dialog.showMessageBox({ type: 'warning', message: ui('Server agents could not be set up', '无法完成服务器智能体的迁移'), detail: `${error instanceof Error ? error.message : String(error)}\n\n${ui('Agents on servers are unavailable until this is fixed. Agents on this computer work normally.', '修复前服务器上的智能体不可用，本机智能体不受影响。')}` })
+  }
+  const skipped = await skippedMigrationAgents(app.getPath('userData'))
+  if (skipped.length) {
+    diagnostics.write('connections.migration-skipped', JSON.stringify(skipped))
+    void dialog.showMessageBox({ type: 'warning', message: ui('Some server agents were not moved to connections', '部分服务器智能体未能迁移到连接'),
+      detail: `${skipped.join(', ')}\n\n${ui('Their saved SSH settings are invalid. They are kept unchanged in local-agents.json; add them again in Settings → Connections.', '它们保存的 SSH 设置无效，已原样保留在 local-agents.json 中。请在「设置 → 连接」中重新添加。')}` })
+  }
+  void connections.start()
+  app.on('browser-window-focus', () => connections.retryFailed())
+  startupReady = true
   createWindow()
   void auth.initialize().then(() => {
     if (!pendingAuthUrl) return
@@ -1343,6 +1572,7 @@ app.on('before-quit', () => {
   disposeAllLocalAgentSessions()
   scheduler?.dispose()
   computer?.dispose()
+  connections.stop()
   void closeRemoteConnections()
 })
 

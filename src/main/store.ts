@@ -28,6 +28,7 @@ import type {
   BuiltInAgentManifest,
   BuiltInAgentUserOverrides,
   ChatMessage,
+  AgentWorkspaceBinding,
   Conversation,
   CreateGroupInput,
   CreateRoutineInput,
@@ -1487,21 +1488,51 @@ export class DouchatStore {
     this.putConversation(conversation)
   }
 
+  /**
+   * The local direct chat an agent room (kind 'agent') belongs to. Its replies
+   * come from a douchat-host, but the chat stays the ordinary agent chat.
+   */
+  agentRoomConversation(ownerId: string, room: SocialRoom): Conversation | undefined {
+    const remote = room.kind === 'agent' && room.agents.length === 1 ? room.agents[0] : undefined
+    if (!remote || remote.ownerId !== ownerId) return undefined
+    const linked = this.accountConversations.find((item) => item.remoteRoomId === room.id)
+    if (linked) return linked.type === 'direct' && linked.agentIds[0] === remote.localId ? linked : undefined
+    const agent = this.agent(remote.localId)
+    if (!agent || (agent.ownerId ?? ownerId) !== ownerId) return undefined
+    return this.accountConversations.find((item) => item.type === 'direct' && !item.id.startsWith('im-') && item.agentIds[0] === remote.localId && !item.remoteRoomId)
+  }
+
+  linkAgentRoom(conversationId: string, roomId: string): void {
+    const conversation = this.accountConversations.find((item) => item.id === conversationId)
+    if (!conversation || conversation.type !== 'direct' || conversation.id.startsWith('im-')) throw new Error('Chat not found')
+    if (conversation.remoteRoomId && conversation.remoteRoomId !== roomId) throw new Error('Chat already linked')
+    conversation.remoteRoomId = roomId
+    this.putConversation(conversation)
+  }
+
   syncFriendConversation(ownerId: string, room: SocialRoom, incoming: SocialMessage[], attachments = new Map<string, MessageAttachment[]>(), fileLinks = new Map<string, string[]>()): Conversation {
     if (ownerId !== this.currentAccountId || !room.members.some((member) => member.id === ownerId)) throw new Error('Chat account mismatch')
     const person = room.members.find((member) => member.id !== ownerId)
     if (room.kind === 'direct' && !person) throw new Error('Contact not found')
-    const id = this.accountConversations.find((item) => item.remoteRoomId === room.id)?.id ?? `${room.kind === 'direct' ? 'friend' : 'shared'}:${ownerId}:${room.id}`
+    const agentChat = room.kind === 'agent' ? this.agentRoomConversation(ownerId, room) : undefined
+    if (room.kind === 'agent' && !agentChat) throw new Error('Contact not found')
+    // Agent rooms report the room-scoped agent id; the local chat knows the agent by its local id.
+    const authorOf = (agentId: string) => room.kind === 'agent' ? room.agents.find((agent) => agent.id === agentId)?.localId ?? agentId : agentId
+    const id = agentChat?.id ?? this.accountConversations.find((item) => item.remoteRoomId === room.id)?.id ?? `${room.kind === 'direct' ? 'friend' : 'shared'}:${ownerId}:${room.id}`
     return this.tx(() => {
       const previous = this.conversation(id)
       const createdAt = Date.parse(room.createdAt)
       const conversation: Conversation = previous ?? {
-        id, ownerId, type: room.kind, name: room.kind === 'direct' ? person!.name : room.name, agentIds: [], remoteRoomId: room.id,
+        id, ownerId, type: room.kind === 'agent' ? 'direct' : room.kind, name: room.kind === 'direct' ? person!.name : room.name, agentIds: [], remoteRoomId: room.id,
         topics: [{ id: DEFAULT_TOPIC_ID, title: '', createdAt, updatedAt: createdAt }], activeTopicId: DEFAULT_TOPIC_ID,
         unread: 0, readAt: 0, createdAt, updatedAt: createdAt
       }
-      conversation.person = room.kind === 'direct' ? person : undefined
-      conversation.name = room.kind === 'direct' ? person!.name : room.name
+      if (room.kind === 'agent') {
+        conversation.remoteRoomId = room.id
+      } else {
+        conversation.person = room.kind === 'direct' ? person : undefined
+        conversation.name = room.kind === 'direct' ? person!.name : room.name
+      }
       if (room.kind === 'group') {
         conversation.socialRoom = room
         conversation.agentIds = room.agents.map((agent) => agent.id)
@@ -1530,7 +1561,7 @@ export class DouchatStore {
           const parentId = `${id}:${message.parentMessageId || message.id}`
           const parent = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', parentId)
           if (parent) {
-            parent.socialTasks = [...(parent.socialTasks ?? []).filter((task) => task.id !== message.id), { id: message.id, agentId: message.agentId, agentName: message.agentName || '', status: message.status }]
+            parent.socialTasks = [...(parent.socialTasks ?? []).filter((task) => task.id !== message.id), { id: message.id, agentId: authorOf(message.agentId), agentName: message.agentName || '', status: message.status }]
             this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(parent), parentId)
           }
         }
@@ -1539,7 +1570,7 @@ export class DouchatStore {
           if (!cleared.has(replyId)) {
             const existingReply = this.one<ChatMessage>('SELECT data FROM messages WHERE id = ?', replyId)
             const reply: ChatMessage = { id: replyId, conversationId: id, topicId: conversation.activeTopicId,
-              authorId: message.agentId || 'system', authorName: message.agentName || '', text: fileLinks.has(`${message.id}:reply`) ? [message.reply, ...fileLinks.get(`${message.id}:reply`)!].filter(Boolean).join('\n\n') : message.replyFiles?.length && existingReply ? existingReply.text : message.reply ?? '',
+              authorId: message.agentId ? authorOf(message.agentId) : 'system', authorName: message.agentName || '', text: fileLinks.has(`${message.id}:reply`) ? [message.reply, ...fileLinks.get(`${message.id}:reply`)!].filter(Boolean).join('\n\n') : message.replyFiles?.length && existingReply ? existingReply.text : message.reply ?? '',
               attachments: attachments.get(`${message.id}:reply`) ?? existingReply?.attachments,
               kind: 'message', createdAt: Date.parse(message.createdAt), ...(message.status === 'failed' ? { error: message.reply } : {}) }
             if (existingReply) this.write('UPDATE messages SET data = ? WHERE id = ?', JSON.stringify(reply), replyId)
@@ -1801,7 +1832,12 @@ export class DouchatStore {
           this.write('DELETE FROM conversations WHERE id = ?', conversation.id)
           continue
         }
-        if (!conversation.agentIds.includes(agentId)) continue
+        const hadWorkspace = Boolean(conversation.agentWorkspaces?.[agentId])
+        if (hadWorkspace) {
+          delete conversation.agentWorkspaces![agentId]
+          if (!Object.keys(conversation.agentWorkspaces!).length) delete conversation.agentWorkspaces
+        }
+        if (!conversation.agentIds.includes(agentId)) { if (hadWorkspace) this.putConversation(conversation); continue }
         conversation.agentIds = conversation.agentIds.filter((id) => id !== agentId)
         if (conversation.leadAgentId === agentId) conversation.leadAgentId = conversation.agentIds[0]
         conversation.name = this.groupName(conversation)
@@ -1950,6 +1986,19 @@ export class DouchatStore {
     this.putConversation(conversation)
   }
 
+  /** Callers must validate the folder on its target and check the agent's owner first. */
+  setAgentWorkspace(conversationId: string, agentId: string, binding: AgentWorkspaceBinding | undefined): Conversation | undefined {
+    const conversation = this.conversation(conversationId)
+    if (!conversation) return undefined
+    const workspaces = { ...conversation.agentWorkspaces }
+    if (binding) workspaces[agentId] = { path: binding.path, executionTargetId: binding.executionTargetId, targetRevision: binding.targetRevision }
+    else delete workspaces[agentId]
+    if (Object.keys(workspaces).length) conversation.agentWorkspaces = workspaces
+    else delete conversation.agentWorkspaces
+    this.putConversation(conversation)
+    return conversation
+  }
+
   setConversationWorkspace(conversationId: string, workspacePath: string | undefined): Conversation | undefined {
     const conversation = this.conversation(conversationId)
     if (!conversation) return undefined
@@ -1991,6 +2040,10 @@ export class DouchatStore {
     if (input.agentIds && conversation.type === 'group') {
       const known = new Set(this.accountAgents.map((agent) => agent.id))
       conversation.agentIds = [...new Set(input.agentIds)].filter((agentId) => known.has(agentId))
+      if (conversation.agentWorkspaces) {
+        for (const agentId of Object.keys(conversation.agentWorkspaces)) if (!conversation.agentIds.includes(agentId)) delete conversation.agentWorkspaces[agentId]
+        if (!Object.keys(conversation.agentWorkspaces).length) delete conversation.agentWorkspaces
+      }
       if (!conversation.agentIds.includes(conversation.leadAgentId ?? '')) {
         conversation.leadAgentId = conversation.agentIds[0]
       }

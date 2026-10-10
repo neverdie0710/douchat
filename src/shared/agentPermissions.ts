@@ -42,4 +42,7 @@ export interface PermissionRequest {
   connect?: { connector: string; title: string; reconnect: boolean; access?: boolean }
   details: string
   createdAt: number
+  /** A request from an agent running on a daemon connection: the connection's name. */
+  executorLabel?: string
+  expiresAt?: number
 }

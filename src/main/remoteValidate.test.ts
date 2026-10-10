@@ -35,8 +35,8 @@ describe('shQuote', () => {
 
 describe('normalizeRemoteSpec', () => {
   it('accepts a normal configuration', () => {
-    const spec = normalizeRemoteSpec({ ...base, port: '2222', user: 'deploy', args: ['--model', 'x'], allowSharing: false })
-    expect(spec).toMatchObject({ host: 'example.com', port: 2222, user: 'deploy', args: ['--model', 'x'], allowSharing: false })
+    const spec = normalizeRemoteSpec({ ...base, port: '2222', user: 'deploy', args: ['--model', 'x'] })
+    expect(spec).toMatchObject({ host: 'example.com', port: 2222, user: 'deploy', args: ['--model', 'x'] })
     expect(remoteHostLabel(spec)).toBe('deploy@example.com:2222')
     expect(normalizeRemoteSpec({ ...base, host: '[::1]' }).host).toBe('[::1]')
   })

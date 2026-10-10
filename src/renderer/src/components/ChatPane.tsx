@@ -382,6 +382,8 @@ export function ChatActivity({
             <span className="typing-activity-text" key={detail}>{detail}</span>
             <span className="reply-status-dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span>
           </span>
+          {/* Streamed by a douchat-host; the final reply replaces it. */}
+          {activity.remoteText && <span className="typing-remote-text">{activity.remoteText.length > 4000 ? `…${activity.remoteText.slice(-4000)}` : activity.remoteText}</span>}
         </span>
       </div>
     </div>

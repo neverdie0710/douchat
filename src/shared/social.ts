@@ -3,7 +3,7 @@ export interface SocialImage { name: string; mimeType: 'image/png' | 'image/jpeg
 export interface SocialPerson { order?: number; id: string; name: string; email: string; image?: string }
 export interface SocialAgentAppearance { interactionHumans?: 'allow' | 'ask' | 'deny'; interactionAgents?: 'allow' | 'ask' | 'deny'; avatar?: string; avatarEmoji?: string; avatarSeed?: string; color?: string; localAgentId?: string; systemRole?: 'admin' }
 export interface SocialAgent extends SocialAgentAppearance { onlineUntil?: number; approvalTaskId?: string; order?: number; id: string; localId: string; ownerId: string; name: string }
-export interface SocialRoom { revision?: string; id: string; name: string; kind: 'direct' | 'group'; members: SocialPerson[]; agents: SocialAgent[]; createdAt: string }
+export interface SocialRoom { revision?: string; id: string; name: string; kind: 'direct' | 'group' | 'agent'; members: SocialPerson[]; agents: SocialAgent[]; createdAt: string }
 export interface SocialFriendship { id: string; senderId: string; recipientId: string; status: 'pending' | 'accepted' | 'declined'; person: SocialPerson }
 export interface SocialSnapshot { filesVersion?: number; permissionsVersion?: number; syncVersion?: number; userId: string; friendships: SocialFriendship[]; rooms: SocialRoom[] }
 export interface SocialMessage { parentMessageId?: string; id: string; roomId: string; authorId: string; authorName: string; content: string; images?: SocialImage[]; files?: SocialFile[]; agentId?: string; agentName?: string; status: 'sent' | 'pending' | 'running' | 'succeeded' | 'failed'; reply?: string; replyImages?: SocialImage[]; replyFiles?: SocialFile[]; createdAt: string }
@@ -19,6 +19,7 @@ export type SocialAction =
   | { action: 'request'; email: string }
   | { action: 'respond'; id: string; accept: boolean }
   | { action: 'create-room'; kind: 'direct' | 'group'; name?: string; friendIds: string[]; memberOrder?: string[]; agentIds?: string[] }
+  | { action: 'create-room'; kind: 'agent'; localId: string; name: string } & SocialAgentAppearance
   | { action: 'add-agent' | 'remove-agent'; roomId: string; localId: string; order?: number }
   | { action: 'messages'; roomId: string; before?: string }
   | { action: 'send'; roomId: string; id: string; content: string; images?: SocialImage[]; files?: SocialFile[]; agentId?: string }

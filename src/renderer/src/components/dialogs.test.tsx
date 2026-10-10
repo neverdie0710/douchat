@@ -277,7 +277,7 @@ describe('create agent terminology', () => {
   it('creates a runtime agent with its own startup arguments', async () => {
     const onCreate = vi.fn(async () => undefined)
     const fastclaw = { id: 'custom:mini', name: 'mini-local-fastclaw', command: 'fastclaw', custom: true, installed: true, discovered: true, chatSupported: true, status: 'ready' as const, authentication: 'unchecked' as const, args: [],
-      remote: { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: [], allowSharing: false } }
+      remote: { transport: 'ssh' as const, host: 'mini-local', adapter: 'fastclaw' as const, executable: 'fastclaw', args: [] } }
     await act(async () => root.render(<BotModal localAgents={[fastclaw]} initialLocalAgentId="custom:mini" onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
     const toggle = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Startup arguments (optional)')!
     await act(async () => toggle.click())

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addCustomLocalAgent, configureLocalAgentRegistry, detectLocalAgents, findDesktopApp, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { resolveExecutable } from './shellPath'
 vi.mock('./shellPath', () => ({ resolveExecutable: vi.fn() }))
 let registryDirectory = ''
@@ -115,4 +115,43 @@ it('bounds an entire scan when executable discovery never settles', async () => 
     await vi.advanceTimersByTimeAsync(15001)
     await assertion
   } finally { vi.useRealTimers() }
+})
+
+describe('agents on connections', () => {
+  const connections = () => connectionRegistry()
+  const binding = (connectionId: string) => ({ connectionId, adapter: 'codex' as const, executable: 'codex', args: [] as string[] })
+  it('refuses inline SSH settings and unknown connections', async () => {
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remote: { transport: 'ssh', host: 'box', adapter: 'codex', executable: 'codex', args: [] } })).rejects.toThrow(/connection first/)
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(`conn_${'0'.repeat(32)}`) })).rejects.toThrow(/connection/)
+  })
+  it('runs on the connection and is identified by it, changing identity only when the server changes', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box', user: 'me' } })
+    const id = await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
+    const placement = await remoteAgentPlacement(id)
+    expect(placement?.spec).toMatchObject({ host: 'box', user: 'me', adapter: 'codex', executable: 'codex' })
+    expect(placement?.target).toEqual({ executionTargetId: `ssh:${connection.id}`, targetRevision: 0 })
+    // Renaming the connection is not a new target; editing the user is.
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'me' } })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(0)
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'root' } })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(1)
+    await connections().save({ id: connection.id, name: 'Renamed', ssh: { host: 'box', user: 'me' } })
+    expect((await remoteAgentPlacement(id))?.target.targetRevision).toBe(2)
+    expect(await remoteAgentPlacement('codex')).toBeUndefined()
+  })
+  it('never runs while its connection is off or removed, and shows why', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box' } })
+    const id = await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
+    await connections().setEnabled(connection.id, false)
+    await expect(remoteAgentPlacement(id)).rejects.toThrow(/turned off/)
+    await expect(validateLocalAgent(id)).rejects.toThrow()
+    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)).toMatchObject({ unavailable: 'disabled', installed: false, remoteAgent: binding(connection.id) })
+    await connections().remove(connection.id)
+    await expect(remoteAgentPlacement(id)).rejects.toThrow(/removed/)
+    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)?.unavailable).toBe('missing')
+  })
+  it('still rejects arguments that disable the sandbox', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box' } })
+    await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: { ...binding(connection.id), args: ['--yolo'] } })).rejects.toThrow(/safety boundary/)
+  })
 })

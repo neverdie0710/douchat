@@ -18,10 +18,13 @@ import {
   DOUCHAT_PRODUCTION_ORIGIN,
   parseDesktopAuthCallback
 } from './authProtocol'
+import type { DeviceIdentity } from './deviceIdentity'
 
 interface StoredCredential {
   version: 1
   encryptedAccessToken: string
+  /** Device the session was issued to; absent for sessions from older builds. */
+  deviceId?: string
 }
 
 interface PendingFlow {
@@ -178,6 +181,7 @@ export class DesktopAuth {
   private readonly pendingPath: string
   private state: DesktopAuthState = { status: 'checking' }
   private accessToken = ''
+  private deviceId = ''
   private callbackServer: Server | null = null
 
   constructor(
@@ -185,7 +189,8 @@ export class DesktopAuth {
     private readonly scheme: string,
     private readonly useLoopbackCallback: boolean,
     userDataPath: string,
-    private readonly onChange: (state: DesktopAuthState, reason?: 'login-completed') => void
+    private readonly onChange: (state: DesktopAuthState, reason?: 'login-completed') => void,
+    private readonly device?: DeviceIdentity
   ) {
     this.credentialPath = join(userDataPath, 'auth.json')
     this.pendingPath = join(userDataPath, 'auth-flow.json')
@@ -201,6 +206,24 @@ export class DesktopAuth {
     return this.state.status === 'signed-in' && this.accessToken ? this.accessToken : undefined
   }
 
+  /** The owner device this session is bound to, when its key is available here.
+   * Sessions from older builds have none and must sign in again to use daemons. */
+  getDeviceId(): string | undefined {
+    if (this.state.status !== 'signed-in' || !this.deviceId || this.device?.id !== this.deviceId) return undefined
+    return this.deviceId
+  }
+
+  /** Public half of the device key, for host enrollment trust anchors. */
+  getDevicePublicKey(): string | undefined {
+    return this.getDeviceId() ? this.device?.publicKey : undefined
+  }
+
+  /** Signs owner commands with this session's device key (main process only). */
+  signAsDevice(message: string): string {
+    if (!this.getDeviceId()) throw new Error('请重新登录 Douchat 以启用设备身份。')
+    return this.device!.sign(message)
+  }
+
   async initialize(): Promise<DesktopAuthState> {
     this.setState({ status: 'checking' })
     const stored = await this.readCredential()
@@ -214,6 +237,8 @@ export class DesktopAuth {
     }
 
     this.accessToken = stored.accessToken
+    this.deviceId = stored.deviceId ?? ''
+    if (this.deviceId) await this.device?.load().catch(() => undefined)
     try {
       const user = await this.fetchUser(this.accessToken)
       return this.setState({ status: 'signed-in', user })
@@ -464,8 +489,9 @@ export class DesktopAuth {
       const { code } = parseDesktopAuthCallback(input, flow.redirectUri, flow.state)
       const exchanged = await this.exchangeCode(code, flow.codeVerifier)
       this.accessToken = exchanged.accessToken
+      this.deviceId = exchanged.deviceId ?? ''
       try {
-        await this.saveCredential(exchanged.accessToken)
+        await this.saveCredential(exchanged.accessToken, exchanged.deviceId)
       } catch (error) {
         // Keychain access is optional for the current process. If the user
         // declines it, keep the authenticated session in memory and leave no
@@ -574,13 +600,15 @@ export class DesktopAuth {
     return this.requireUser(payload.data?.user)
   }
 
-  private async exchangeCode(code: string, codeVerifier: string): Promise<{ accessToken: string; user: DesktopAuthUser }> {
+  private async exchangeCode(code: string, codeVerifier: string): Promise<{ accessToken: string; user: DesktopAuthUser; deviceId?: string }> {
+    // Without secure storage the session simply has no device identity.
+    const device = await this.device?.loginProof(code).catch(() => undefined)
     let response: Response
     try {
       response = await fetch(new URL('/api/desktop-auth/token', this.webAppUrl), {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID }),
+        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID, ...(device ? { device } : {}) }),
         signal: AbortSignal.timeout(30_000)
       })
     } catch {
@@ -589,6 +617,7 @@ export class DesktopAuth {
 
     const payload = await response.json().catch(() => null) as ApiEnvelope<{
       accessToken?: string
+      deviceId?: string
       user?: Partial<DesktopAuthUser>
     }> | null
     if (!response.ok || !payload?.data) {
@@ -598,7 +627,9 @@ export class DesktopAuth {
     }
     const accessToken = payload.data.accessToken || ''
     if (!accessToken.startsWith('dch_')) throw new Error('Login service returned an invalid session.')
-    return { accessToken, user: this.requireUser(payload.data.user) }
+    // Only the device this computer proved can be adopted.
+    const deviceId = device && payload.data.deviceId === device.id ? device.id : undefined
+    return { accessToken, user: this.requireUser(payload.data.user), ...(deviceId ? { deviceId } : {}) }
   }
 
   private requireUser(user: Partial<DesktopAuthUser> | null | undefined): DesktopAuthUser {
@@ -681,18 +712,19 @@ export class DesktopAuth {
     catch { return undefined }
   }
 
-  private async saveCredential(accessToken: string): Promise<void> {
+  private async saveCredential(accessToken: string, deviceId?: string): Promise<void> {
     if (!safeStorage.isEncryptionAvailable()) {
       throw new Error('Secure credential storage is unavailable on this computer.')
     }
     const stored: StoredCredential = {
       version: 1,
-      encryptedAccessToken: safeStorage.encryptString(accessToken).toString('base64')
+      encryptedAccessToken: safeStorage.encryptString(accessToken).toString('base64'),
+      ...(deviceId ? { deviceId } : {})
     }
     await this.writeJson(this.credentialPath, stored)
   }
 
-  private async readCredential(): Promise<{ accessToken: string } | null> {
+  private async readCredential(): Promise<{ accessToken: string; deviceId?: string } | null> {
     try {
       const stored = JSON.parse(await readFile(this.credentialPath, 'utf8')) as StoredCredential
       if (stored.version !== 1 || !safeStorage.isEncryptionAvailable()) {
@@ -704,7 +736,7 @@ export class DesktopAuth {
         await this.removeFile(this.credentialPath)
         return null
       }
-      return { accessToken }
+      return { accessToken, ...(typeof stored.deviceId === 'string' && /^dev_[0-9a-f-]{36}$/.test(stored.deviceId) ? { deviceId: stored.deviceId } : {}) }
     } catch {
       await this.removeFile(this.credentialPath)
       return null
@@ -741,6 +773,7 @@ export class DesktopAuth {
 
   private async clearCredential(): Promise<void> {
     this.accessToken = ''
+    this.deviceId = ''
     await this.removeFile(this.credentialPath)
   }
 

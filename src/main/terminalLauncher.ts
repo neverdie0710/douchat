@@ -233,3 +233,42 @@ export async function openMaintenanceTerminal(command: string, dependencies: Ter
   }
   throw new Error('No terminal application was found.')
 }
+
+/** Open an interactive ssh session in a terminal. `args` come from
+ * remoteTerminalArgs: validated ssh options and a base64 payload only. */
+export async function openSshTerminal(args: string[], dependencies: TerminalLauncherDependencies = {}): Promise<void> {
+  const platform = dependencies.platform ?? process.platform
+  const execute = dependencies.execute ?? defaultExecute
+  const launch = dependencies.spawnDetached ?? defaultSpawnDetached
+  const command = ['/usr/bin/ssh', ...args].map(shellQuote).join(' ')
+  if (platform === 'darwin') {
+    const directory = await mkdtemp(join(tmpdir(), 'douchat-ssh-'))
+    const script = join(directory, 'Douchat-Server-Folder.command')
+    try {
+      await writeFile(script, `#!/bin/sh\ntrap ${shellQuote(`/bin/rm -rf -- ${shellQuote(directory)}`)} EXIT\n${command}\n`, { mode: 0o700 })
+      await execute('/usr/bin/open', ['-a', 'Terminal', script])
+    } catch {
+      await rm(directory, { recursive: true, force: true }).catch(() => {})
+      throw new Error('Could not open the system terminal.')
+    }
+    return
+  }
+  if (platform === 'win32') {
+    // Start ssh.exe in its own console with its arguments passed directly; a
+    // PowerShell command line would drop the quotes inside the bootstrap.
+    const ssh = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ssh, args, { detached: true, stdio: 'ignore', windowsHide: false, windowsVerbatimArguments: false })
+      child.once('error', reject)
+      child.once('spawn', () => { child.unref(); resolve() })
+    })
+    return
+  }
+  for (const name of ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm']) {
+    const executable = await (dependencies.resolveCommand ?? resolveExecutable)(name)
+    if (!executable) continue
+    await launch(executable, [name === 'gnome-terminal' ? '--' : '-e', '/usr/bin/ssh', ...args])
+    return
+  }
+  throw new Error('No terminal application was found.')
+}

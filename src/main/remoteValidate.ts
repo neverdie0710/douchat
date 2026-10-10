@@ -61,6 +61,7 @@ export function dangerousRemoteArgument(adapter: RemoteAgentAdapter, args: strin
 export function normalizeRemoteSpec(input: unknown): RemoteAgentSpec {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid remote agent settings.')
   const value = input as Record<string, unknown>
+  if (value.transport === 'daemon') return normalizeDaemonSpec(value)
   if (value.transport !== 'ssh') throw new Error('Only SSH remote agents are supported.')
   const host = String(value.host ?? '').trim()
   if (!HOST.test(host)) throw new Error('Enter a valid server host name or [IPv6] address.')
@@ -79,6 +80,33 @@ export function normalizeRemoteSpec(input: unknown): RemoteAgentSpec {
     identityFile = String(value.identityFile)
     if (!isAbsolute(identityFile) || identityFile.length > 1024 || CONTROL.test(identityFile)) throw new Error('Identity file must be an absolute path on this computer.')
   }
+  const agent = normalizeAgentFields(value)
+  return {
+    transport: 'ssh', host, ...(port ? { port } : {}), ...(user ? { user } : {}), ...(identityFile ? { identityFile } : {}),
+    ...agent
+  }
+}
+
+const HOST_ID = /^hst_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const OWNER_ID = /^[A-Za-z0-9_-]{1,100}$/
+
+/** A douchat-host connection: the same agent fields; the relay replaces ssh. */
+function normalizeDaemonSpec(value: Record<string, unknown>): RemoteAgentSpec {
+  const host = String(value.host ?? '').trim()
+  if (!host || host.length > 100 || CONTROL.test(host)) throw new Error('Invalid connection name.')
+  const daemon = value.daemon as Record<string, unknown> | undefined
+  if (!daemon || typeof daemon !== 'object' || typeof daemon.hostId !== 'string' || !HOST_ID.test(daemon.hostId) || typeof daemon.ownerId !== 'string' || !OWNER_ID.test(daemon.ownerId))
+    throw new Error('Invalid douchat-host connection.')
+  let serviceUrl: string
+  try {
+    const url = new URL(String(daemon.serviceUrl))
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) throw new Error('insecure')
+    serviceUrl = url.origin
+  } catch { throw new Error('Invalid douchat-host connection.') }
+  return { transport: 'daemon', host, daemon: { hostId: daemon.hostId, serviceUrl, ownerId: daemon.ownerId }, ...normalizeAgentFields(value) }
+}
+
+function normalizeAgentFields(value: Record<string, unknown>): Pick<RemoteAgentSpec, 'adapter' | 'executable' | 'args' | 'remotePath' | 'remoteHome'> {
   const adapter = String(value.adapter ?? '') as RemoteAgentAdapter
   if (!REMOTE_AGENT_ADAPTERS.includes(adapter)) throw new Error('Choose a supported remote agent type.')
   const executable = String(value.executable ?? '').trim()
@@ -96,12 +124,9 @@ export function normalizeRemoteSpec(input: unknown): RemoteAgentSpec {
   // remoteCwd from earlier builds is ignored: Douchat assigns the server folder.
   const remotePath = value.remotePath === undefined || value.remotePath === '' ? undefined : validRemotePath(String(value.remotePath))
   const remoteHome = value.remoteHome === undefined || value.remoteHome === '' ? undefined : validRemoteHome(String(value.remoteHome))
-  if (typeof value.allowSharing !== 'boolean' && value.allowSharing !== undefined) throw new Error('Invalid sharing setting.')
   return {
-    transport: 'ssh', host, ...(port ? { port } : {}), ...(user ? { user } : {}), ...(identityFile ? { identityFile } : {}),
     adapter, executable, args: [...args as string[]],
-    ...(remotePath ? { remotePath } : {}), ...(remoteHome ? { remoteHome } : {}),
-    allowSharing: value.allowSharing === true
+    ...(remotePath ? { remotePath } : {}), ...(remoteHome ? { remoteHome } : {})
   }
 }
 
@@ -144,6 +169,7 @@ export function parseRemoteProbe(output: string): { executable: string; remotePa
 }
 
 /** Short, stable host label for approvals and UI badges. */
-export function remoteHostLabel(spec: Pick<RemoteAgentSpec, 'host' | 'user' | 'port'>): string {
+export function remoteHostLabel(spec: Pick<RemoteAgentSpec, 'host' | 'user' | 'port'> & { transport?: RemoteAgentSpec['transport'] }): string {
+  if (spec.transport === 'daemon') return spec.host
   return `${spec.user ? `${spec.user}@` : ''}${spec.host}${spec.port && spec.port !== 22 ? `:${spec.port}` : ''}`
 }
