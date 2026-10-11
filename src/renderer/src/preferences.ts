@@ -536,7 +536,7 @@ const translations: Record<string, string> = {
   'Compacting conversation context': '正在整理对话上下文',
   'Working on the task': '正在处理任务',
   'Connecting to local agent': '正在连接本地智能体',
-  'Connecting to remote agent on {host}': '正在通过 SSH 连接 {host} 上的远程智能体',
+  'Connecting to remote agent on {host}': '正在连接 {host} 上的远程智能体',
   'Remote agent is running': '远程智能体运行中',
   'Waiting for new progress from remote agent': '正在等待远程智能体的新进展',
   'Task received; getting started': '任务已提交，准备开始',
