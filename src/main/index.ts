@@ -21,7 +21,7 @@ import { configureManagedNode, ensureManagedNode } from './managedNode'
 import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
 import { mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { configureTimingLog, DiagnosticLog } from './diagnostics'
+import { DiagnosticLog } from './diagnostics'
 import { release as osRelease } from 'node:os'
 import { notifyWindows } from './windowNotifications'
 import { SocialClient } from './social'
@@ -124,7 +124,6 @@ function reloadCustomModels(): void {
   } else runtime.configureCustomModels([])
 }
 const diagnostics = new DiagnosticLog(join(app.getPath('userData'), 'logs'))
-configureTimingLog(diagnostics)
 try {
   const crashDirectory = join(diagnostics.directory, 'crashes')
   mkdirSync(crashDirectory, { recursive: true })

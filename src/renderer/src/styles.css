@@ -6937,10 +6937,6 @@ html.native-dialog-window,
 .local-agent-location > span { font-weight: 500; }
 .local-agent-editor .local-agent-location label, .local-agent-editor .local-agent-checkbox { display: flex; align-items: center; gap: 8px; font-weight: 400; }
 .local-agent-editor .local-agent-location input, .local-agent-editor .local-agent-checkbox input { width: auto; }
-.local-agent-editor .discovered-agent { gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
-.local-agent-editor .discovered-agent .local-agent-icon { width: 36px; height: 36px; border-radius: 8px; }
-.discovered-agent-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.discovered-agent-version { max-width: 35%; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .local-agent-remote-grid { display: grid; grid-template-columns: 2fr 1fr 1.4fr; gap: 10px; }
 .local-agent-remote-badge { padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); white-space: nowrap; }
 .local-agent-editor footer .primary-button { padding: 9px 16px; }

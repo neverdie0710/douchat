@@ -185,7 +185,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     const identity = this.identity()
     const deviceId = this.auth.getDeviceId()
     const devicePublicKey = this.auth.getDevicePublicKey()
-    if (!deviceId || !devicePublicKey) throw new Error('Your current session needs to be verified again before you can add a remote server.')
+    if (!deviceId || !devicePublicKey) throw new Error('请重新登录 Douchat 以启用设备身份。')
     const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number }>({ action: 'host-enroll-ticket' }, undefined, identity)
     if (!/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
     const serviceUrl = enrollmentServiceUrl(this.url, ticket.serviceUrl)

@@ -21,8 +21,7 @@ beforeEach(() => {
     discoverRemoteAgents: vi.fn(async () => [{ adapter: 'codex', executable: '/usr/bin/codex', version: '1.0' }, { adapter: 'claude', executable: '/usr/bin/claude' }]),
     addDiscoveredAgents: vi.fn(async () => []), copyText: vi.fn(async () => {}),
     createDaemonEnrollment: vi.fn(async () => ({ id: 'enroll-test', installCommand: 'curl https://example.com/install.sh | sh', uninstallCommand: 'douchat-host uninstall', fingerprint: 'test-fingerprint' })),
-    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {}),
-    onAuthState: vi.fn(() => () => {}), startLogin: vi.fn(async () => ({ status: 'waiting' }))
+    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {})
   }
   Object.defineProperty(window, 'douchat', { configurable: true, value: api })
 })
@@ -65,38 +64,15 @@ it('asks before deleting a connection that agents use, and can keep them', async
   expect(changed).toHaveBeenCalled()
 })
 
-it.each(['ssh', 'daemon'] as const)('scans a %s server with agent icons and names and adds only the chosen agents', async kind => {
-  api.listConnections.mockResolvedValue([view({ kind })])
+it('scans the server and adds only the chosen agents', async () => {
   const changed = await render()
-  if (kind === 'daemon') await act(async () => button('douchat-host').click())
   await act(async () => button('Scan for agents on this server Box').click())
   const boxes = [...container.querySelectorAll<HTMLInputElement>('.local-agent-checkbox input')]
   expect(boxes).toHaveLength(2)
-  const rows = [...container.querySelectorAll('.discovered-agent')]
-  expect(rows.map(row => row.querySelector('.discovered-agent-name')?.textContent)).toEqual(['Codex', 'Claude Code'])
-  expect(rows.every(row => row.querySelector('.local-agent-icon img'))).toBe(true)
-  expect(rows[0].querySelector('.discovered-agent-version')?.textContent).toBe('1.0')
-  expect(container.textContent).not.toContain('/usr/bin/')
   await act(async () => boxes[1].click())
   await act(async () => button('Add selected').click())
   expect(api.addDiscoveredAgents).toHaveBeenCalledWith(view().id, [{ adapter: 'codex', executable: '/usr/bin/codex', name: 'Codex · Box' }])
   expect(changed).toHaveBeenCalled()
-})
-
-it('offers device verification and resumes enrollment after login completes', async () => {
-  api.createDaemonEnrollment.mockRejectedValueOnce(new Error('Your current session needs to be verified again before you can add a remote server.'))
-  await render()
-  await act(async () => button('douchat-host').click())
-  await act(async () => button('Add').click())
-  expect(container.querySelector('[role=alert]')?.textContent).toContain('Your current session needs to be verified again')
-  await act(async () => button('Verify again').click())
-  expect(api.startLogin).toHaveBeenCalledOnce()
-  expect(button('Waiting for verification…').disabled).toBe(true)
-  const listener = api.onAuthState.mock.calls[0][0]
-  await act(async () => listener({ status: 'signed-in', user: { id: 'u1' } }))
-  expect(api.createDaemonEnrollment).toHaveBeenCalledTimes(2)
-  expect(container.textContent).toContain('curl https://example.com/install.sh | sh')
-  expect(container.querySelector('[role=alert]')).toBeNull()
 })
 
 it('copies enrollment commands through the desktop bridge and reports success and failure', async () => {

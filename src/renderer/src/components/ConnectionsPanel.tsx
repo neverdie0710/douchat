@@ -1,13 +1,11 @@
-import { Bot, Check, Copy, MoreHorizontal, Plus, RefreshCw, ScanSearch, Server, X } from 'lucide-react'
+import { Check, Copy, MoreHorizontal, Plus, RefreshCw, ScanSearch, Server, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import type { ConnectionStatus, ConnectionTestReport, ConnectionView, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteConnectionInput } from '../../../shared/types'
 import { messageSendError } from '../messageQueue'
 import { t } from '../preferences'
-import { agentIcons } from '../agentIcons'
 import { NativeDialog } from './NativeDialog'
 
 const MANUAL_HOST = '\u0000manual'
-const DEVICE_VERIFICATION_REQUIRED = 'Your current session needs to be verified again before you can add a remote server.'
 const ADAPTER_NAMES: Record<string, string> = {
   codex: 'Codex', claude: 'Claude Code', gemini: 'Gemini', grok: 'Grok Build', cursor: 'Cursor', opencode: 'OpenCode',
   kimi: 'Kimi', openclaw: 'OpenClaw', fastclaw: 'FastClaw', hermes: 'Hermes', omp: 'OMP'
@@ -174,11 +172,9 @@ function DiscoverDialog({ connection, onClose, onAdded }: { connection: Connecti
       <header><h2 id="discover-title">{t('Agents on')} {connection.name}</h2><button type="button" className="icon-button" aria-label={t('Close')} onClick={onClose}><X size={18} /></button></header>
       {!found && busy && <p className="settings-note"><RefreshCw size={13} className="spin" /> {t('Scanning the server…')}</p>}
       {found && !found.length && <p className="settings-note">{t('No supported agents were found in the login PATH on this server.')}</p>}
-      {found?.map(item => <label key={item.adapter} className="local-agent-checkbox discovered-agent">
+      {found?.map(item => <label key={item.adapter} className="local-agent-checkbox">
         <input type="checkbox" checked={chosen.has(item.adapter)} onChange={event => setChosen(current => { const next = new Set(current); if (event.target.checked) next.add(item.adapter); else next.delete(item.adapter); return next })} />
-        <span className="local-agent-icon" data-agent={item.adapter}>{agentIcons[item.adapter] ? <img src={agentIcons[item.adapter]} alt="" /> : <Bot size={22} />}</span>
-        <span className="discovered-agent-name">{ADAPTER_NAMES[item.adapter] ?? item.adapter}</span>
-        {item.version && <span className="discovered-agent-version">{item.version}</span>}
+        <span>{ADAPTER_NAMES[item.adapter] ?? item.adapter} <code>{item.executable}</code>{item.version ? ` · ${item.version}` : ''}</span>
       </label>)}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}
       <footer><span /><button type="button" className="secondary-button" onClick={onClose}>{t('Cancel')}</button><button type="button" className="primary-button" disabled={busy || !chosen.size} onClick={() => void add()}>{t('Add selected')}</button></footer>
@@ -202,36 +198,6 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
-  const [verifying, setVerifying] = useState(false)
-  const awaitingVerification = useRef(false)
-  useEffect(() => window.douchat.onAuthState(state => {
-    if (!awaitingVerification.current) return
-    if (state.status === 'signed-in') {
-      awaitingVerification.current = false
-      setVerifying(false)
-      setAttempt(value => value + 1)
-    } else if (state.status === 'error' || state.status === 'signed-out') {
-      awaitingVerification.current = false
-      setVerifying(false)
-      if (state.status === 'error') setError(state.error)
-    }
-  }), [])
-  const verify = async (): Promise<void> => {
-    awaitingVerification.current = true
-    setVerifying(true)
-    try {
-      const state = await window.douchat.startLogin()
-      if (state.status === 'error') {
-        awaitingVerification.current = false
-        setVerifying(false)
-        setError(state.error)
-      }
-    } catch (cause) {
-      awaitingVerification.current = false
-      setVerifying(false)
-      setError(messageSendError(cause))
-    }
-  }
   const done = useRef(false)
   useEffect(() => {
     let active = true
@@ -287,7 +253,6 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
         <p className="settings-note">{t('Next, scan the server for agents and add them. They run on the server, driven by Douchat on this computer, just like agents on an SSH connection.')}</p>
       </fieldset>}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}
-      {!enrollment && (error === DEVICE_VERIFICATION_REQUIRED || verifying) && <button type="button" className="secondary-button" disabled={verifying} onClick={() => void verify()}><RefreshCw size={14} className={verifying ? 'spin' : undefined} />{t(verifying ? 'Waiting for verification…' : 'Verify again')}</button>}
       <footer><span /><button type="button" className="secondary-button" onClick={onClose}>{t('Cancel')}</button>{host && <button type="submit" className="primary-button" disabled={busy}>{t(busy ? 'Saving…' : 'Save')}</button>}</footer>
     </form>
   </NativeDialog>

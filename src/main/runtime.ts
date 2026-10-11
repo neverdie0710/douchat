@@ -2483,15 +2483,6 @@ export class DouchatRuntime {
           const workspace = context === 'controller' || toolsDisabled ? {} : this.memberWorkspace(conversationId, sessionKey, config, remote?.target)
           const workspaceDirectory = workspace.local
           const remoteWorkspace = workspace.remote
-          if (remote && context !== 'controller' && !toolsDisabled
-            && !sessionKey.startsWith('social-task:') && !sessionKey.startsWith('handoff-summary:')) {
-            // Protocol startup does not need the bridge token; only the eventual prompt does.
-            void this.localExecutor.prepare?.(config, {
-              sessionKey, workspaceDirectory, remoteWorkspace,
-              onApproval: remote.adapter === 'codex' || remote.adapter === 'claude'
-                ? async () => { throw new Error('No turn is running') } : undefined
-            }).catch(() => { /* The actual turn reports startup failures. */ })
-          }
           let bridgeUnavailable = false
           let connectorTools: AgentTool[] = []
           if (context !== 'controller' && !toolsDisabled && this.connectors.createLocalTools) {

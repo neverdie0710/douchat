@@ -4,7 +4,6 @@ import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import type { RemoteAgentSpec } from '../../shared/types'
 import type { SignedCommand } from './ownerSigning'
-import { recordTiming, timedRemote } from '../diagnostics'
 
 /**
  * Desktop half of the douchat-host relay (douchat-tanstack relay.ts). A relay
@@ -53,14 +52,12 @@ export class RelayStream extends EventEmitter {
   private sendSeq = 0
   private queue: { type: string; data?: Buffer }[] = []
   private sending = false
-  private pumpScheduled = false
   private batch?: { seq: number; type: string; data?: Buffer }[]
   /** The kill still goes out after the stream ended here. */
   private flushAfterEnd = false
   readonly openedAt = Date.now()
   offlineSince?: number
   closedRounds = 0
-  private firstOutput = false
 
   constructor(private readonly hub: RelayHub, readonly id: string, readonly hostLabel: string) { super() }
 
@@ -69,13 +66,7 @@ export class RelayStream extends EventEmitter {
     const last = this.queue[this.queue.length - 1]
     if (type === 'in' && data && last?.type === 'in' && last.data && last.data.length + data.length <= MAX_FRAME_BYTES) last.data = Buffer.concat([last.data, data])
     else this.queue.push({ type, data })
-    if (!this.pumpScheduled) {
-      this.pumpScheduled = true
-      queueMicrotask(() => {
-        this.pumpScheduled = false
-        void this.pump()
-      })
-    }
+    void this.pump()
   }
 
   /** Ends the stream here; the host is told to stop unless it already finished. */
@@ -90,13 +81,6 @@ export class RelayStream extends EventEmitter {
   /** Delivers one frame from the host; the terminal ones end the stream. */
   deliver(frame: RelayFrame): void {
     if (this.ended) return
-    if (!this.firstOutput && (frame.type === 'out' || frame.type === 'err')) {
-      this.firstOutput = true
-      recordTiming('relay.first-output', this.openedAt, { streamId: this.id })
-    }
-    if (frame.type === 'exit' || frame.type === 'error') recordTiming('relay.stream-complete', this.openedAt, {
-      streamId: this.id, outcome: frame.type, code: frame.extra?.code, signal: frame.extra?.signal
-    })
     this.emit('frame', frame)
     if (frame.type === 'exit' || frame.type === 'error') this.finish()
   }
@@ -149,7 +133,6 @@ export class RelayStream extends EventEmitter {
         } catch (error) {
           // A slow host makes the service refuse more frames for a moment; anything else ends the stream.
           if (/对端处理较慢|fetch failed|timed out|aborted|ECONN|could not be reached/i.test(errorText(error)) && failures < 40) {
-            recordTiming('relay.send-retry', Date.now(), { streamId: this.id, retry: failures + 1, backoffMs: BACKOFF[Math.min(failures, BACKOFF.length - 1)] })
             await sleep(BACKOFF[Math.min(failures++, BACKOFF.length - 1)])
             continue
           }
@@ -174,8 +157,7 @@ class RelayHub {
 
   call<T>(body: object, signal?: AbortSignal): Promise<T> {
     if (!backend) throw new Error('Sign in to Douchat to use douchat-host connections.')
-    const request = body as { action?: string; streamId?: string; streams?: Record<string, number> }
-    return timedRemote(`relay.${request.action}`, { streamId: request.streamId, streamIds: request.streams ? Object.keys(request.streams) : undefined }, () => backend!.request<T>(body, signal))
+    return backend.request<T>(body, signal)
   }
 
   async open(spec: RemoteAgentSpec, payload: { kind: 'exec'; script: string } | { kind: 'listen'; socketPath: string }, signal?: AbortSignal): Promise<RelayStream> {
@@ -186,7 +168,7 @@ class RelayHub {
     signal?.throwIfAborted()
     const streamId = randomUUID()
     const signed = backend.sign(daemon.hostId, 'relay.open', { streamId, ...payload }, daemon.serviceUrl)
-    await timedRemote('relay.open', { streamId, kind: payload.kind }, () => this.call({ action: 'relay-open', hostId: daemon.hostId, signed }, signal))
+    await this.call({ action: 'relay-open', hostId: daemon.hostId, signed }, signal)
     const stream = new RelayStream(this, streamId, spec.host)
     this.streams.set(streamId, stream)
     this.kick()
@@ -231,7 +213,6 @@ class RelayHub {
           failingSince = undefined
         } catch (error) {
           if (poll.signal.aborted) continue
-          recordTiming('relay.recv-retry', Date.now(), { retry: failures + 1, backoffMs: BACKOFF[Math.min(failures, BACKOFF.length - 1)] })
           failingSince ??= Date.now()
           if (Date.now() - failingSince > SERVICE_TIMEOUT_MS || !backend) {
             this.failAll(new Error(`Lost the connection to the Douchat service: ${errorText(error)}`))
@@ -326,7 +307,6 @@ export class RelayProcess extends EventEmitter {
       else if (frame.type === 'exit') {
         const code = typeof frame.extra?.code === 'number' ? frame.extra.code : null
         const signal = typeof frame.extra?.signal === 'string' ? frame.extra.signal as NodeJS.Signals : null
-        if (signal) this.stderr.write(`Remote process was terminated by ${signal}.\n`)
         // A remote process killed by a signal looks like ssh's exit status 255.
         this.end(code ?? (signal ? 255 : null), null)
       } else if (frame.type === 'error') {
