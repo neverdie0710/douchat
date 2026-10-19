@@ -894,6 +894,8 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   stopConversation: (conversationId: string) => Promise<void>
   clearConversation: (conversationId: string) => Promise<AppSnapshot>
   resetConversationContext: (conversationId: string) => Promise<AppSnapshot>
+  /** Web app only: whether a desktop on this account is online to act on its computer. */
+  desktopAvailability?: () => 'online' | 'offline'
   supportShares: (conversationId: string) => Promise<import('./cloudSync').SupportShare[]>
   createSupportShare: (conversationId: string, hours: number, note: string) => Promise<import('./cloudSync').SupportShare>
   revokeSupportShare: (shareId: string) => Promise<void>

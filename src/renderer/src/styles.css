@@ -7274,3 +7274,53 @@ html.native-dialog-window,
 .messenger.app-shell.compact .settings-modal .settings-tabs button { flex: 0 0 auto; width: auto; padding: 0 12px; }
 .messenger.app-shell.compact .settings-modal .settings-tabs button span { display: inline; }
 .messenger.app-shell.compact .settings-modal .settings-modal-title { display: none; }
+
+/* ─────────────────────────────── Discover ─────────────────────────────── */
+
+.messenger .discover-sidebar { position: relative; overflow: visible; background: #e9e9eb; }
+.messenger .discover-sidebar .sidebar-titlebar { height: 64px; flex: 0 0 64px; justify-content: flex-start; padding: 0 22px; }
+.messenger .discover-sidebar .wordmark { position: static; transform: none; color: var(--ink); font-size: calc(17px * var(--font-scale, 0.92)); font-weight: 600; letter-spacing: -0.01em; }
+.discover-list { display: flex; flex-direction: column; padding: 0 0 12px; }
+.discover-item { display: flex; width: 100%; height: 48px; align-items: center; gap: 14px; padding: 0 22px; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.discover-item:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+/* The open page takes the chat list's selection: a light band, legible foreground. */
+.discover-item.active, .discover-item.active:hover { background: var(--bubble-user); color: var(--ink); }
+.discover-item-icon { flex: 0 0 auto; }
+.discover-item-icon.automation { color: #f59e42; }
+.discover-item-icon.connectors { color: var(--accent-500); }
+.discover-item-label { flex: 1; min-width: 0; font-size: calc(15px * var(--font-scale, 0.92)); }
+.messenger .discover-workspace { background: #fff; }
+.discover-content { flex: 1; min-height: 0; padding: 52px clamp(34px, 5vw, 66px) 56px; }
+[data-theme='dark'] .messenger .discover-sidebar { background: var(--sidebar); }
+[data-theme='dark'] .messenger .discover-workspace { background: var(--canvas); }
+
+/* A chat's file link in the web app: the file is on the person's computer. */
+.message-remote-file { position: relative; display: inline-block; }
+.message-local-file.is-remote:not(.is-failed) { border-color: var(--line); color: var(--ink); }
+.message-remote-file-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  width: min(340px, 80vw);
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--canvas);
+  box-shadow: 0 12px 36px rgba(16, 23, 36, 0.16);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.message-remote-file-popover strong { font-weight: 600; }
+.message-remote-file-note { color: var(--muted); }
+.message-remote-file-path { padding: 6px 8px; overflow-wrap: anywhere; border-radius: 6px; background: var(--surface); font-size: 12px; user-select: all; }
+.message-remote-file-status { color: var(--muted); font-size: 12px; }
+.message-remote-file-status.is-error { color: #a44338; }
+.message-remote-file-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.message-remote-file-actions button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+.message-remote-file-actions button.is-primary { border-color: transparent; background: var(--accent-500, #0b5cff); color: #fff; }
+.message-remote-file-actions button:disabled { opacity: .6; cursor: default; }

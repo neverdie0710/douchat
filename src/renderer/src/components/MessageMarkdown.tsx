@@ -3,7 +3,7 @@ import { memo, useState, createContext, useContext, isValidElement, cloneElement
 import { CodeBlock, Streamdown, type Components, type ControlsConfig, type MermaidErrorComponentProps, type PluginConfig } from 'streamdown'
 import { cjk } from '@streamdown/cjk'
 import { mermaid } from '@streamdown/mermaid'
-import { FileText, LoaderCircle, TriangleAlert } from 'lucide-react'
+import { Copy, FileText, Laptop, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { SvgPreview } from './SvgPreview'
 import { CodeArtifact, codeArtifactLanguages } from './CodeArtifact'
 import { CodeCopyButton } from './CodeCopyButton'
@@ -30,6 +30,8 @@ function LocalFileLink({ href, children }: { href: string; children: ReactNode }
   const path = localFilePathFromHref(href)
   const [state, setState] = useState<'idle' | 'opening' | 'failed'>('idle')
   if (!path) return <span>{children}</span>
+  // The web app cannot open a file that lives on the person's computer.
+  if (typeof window !== 'undefined' && window.douchat?.desktopAvailability) return <RemoteFileLink path={path} conversationId={conversationId}>{children}</RemoteFileLink>
 
   const open = async (): Promise<void> => {
     if (state === 'opening') return
@@ -57,6 +59,58 @@ function LocalFileLink({ href, children }: { href: string; children: ReactNode }
           : <FileText className="message-local-file-icon" size={13} aria-hidden="true" />}
       <span>{children}</span>
     </button>
+  )
+}
+
+/**
+ * A file on the person's computer, seen from the web app: say where it is,
+ * offer its path, and open it on that computer while its desktop is online.
+ * Red is kept for a file the desktop reports gone.
+ */
+function RemoteFileLink({ path, conversationId, children }: { path: string; conversationId?: string; children: ReactNode }): ReactElement {
+  const [open, setOpen] = useState(false)
+  const [status, setStatus] = useState<{ kind: 'idle' | 'opening' | 'opened' | 'copied' | 'missing' | 'error'; message?: string }>({ kind: 'idle' })
+  const online = window.douchat.desktopAvailability?.() === 'online'
+  const openOnComputer = async (): Promise<void> => {
+    setStatus({ kind: 'opening' })
+    try {
+      await window.douchat.openLocalFile(path, conversationId)
+      setStatus({ kind: 'opened' })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setStatus(/ENOENT|no such file|not found|does not exist|no longer/i.test(message) ? { kind: 'missing' } : { kind: 'error', message })
+    }
+  }
+  const copyPath = async (): Promise<void> => {
+    try { await window.douchat.copyText(path); setStatus({ kind: 'copied' }) } catch { setStatus({ kind: 'error', message: t('Could not copy the path') }) }
+  }
+  return (
+    <span className="message-remote-file">
+      <button type="button" className={`message-local-file is-remote${status.kind === 'missing' ? ' is-failed' : ''}`} title={path}
+        aria-label={`${t('File on your computer')}: ${path}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {status.kind === 'missing'
+          ? <TriangleAlert className="message-local-file-icon" size={13} aria-hidden="true" />
+          : <Laptop className="message-local-file-icon" size={13} aria-hidden="true" />}
+        <span>{children}</span>
+      </button>
+      {open && <span className="message-remote-file-popover" role="dialog" aria-label={t('File on your computer')}>
+        <strong>{t('This file is on your computer')}</strong>
+        <span className="message-remote-file-note">{online
+          ? t('The web app cannot open it directly. You can open it on your computer.')
+          : t('The web app cannot open it directly. Open the Douchat desktop app to view it on your computer.')}</span>
+        <code className="message-remote-file-path">{path}</code>
+        {status.kind === 'opened' && <span className="message-remote-file-status">{t('Opened on your computer.')}</span>}
+        {status.kind === 'copied' && <span className="message-remote-file-status">{t('Path copied.')}</span>}
+        {status.kind === 'missing' && <span className="message-remote-file-status is-error">{t('This file is no longer available at its saved location.')}</span>}
+        {status.kind === 'error' && <span className="message-remote-file-status is-error">{status.message}</span>}
+        <span className="message-remote-file-actions">
+          <button type="button" onClick={() => void copyPath()}><Copy size={13} aria-hidden="true" />{t('Copy path')}</button>
+          {online && <button type="button" className="is-primary" disabled={status.kind === 'opening'} onClick={() => void openOnComputer()}>
+            {status.kind === 'opening' ? <LoaderCircle size={13} aria-hidden="true" /> : <Laptop size={13} aria-hidden="true" />}{t('Open on computer')}
+          </button>}
+        </span>
+      </span>}
+    </span>
   )
 }
 

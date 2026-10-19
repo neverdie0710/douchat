@@ -391,6 +391,7 @@ export function createWebApi(): DouchatApi {
   const api: Partial<DouchatApi> = {
     platform: 'web',
     microphonePermissionOwner: 'Douchat',
+    desktopAvailability: () => desktopOnline() ? 'online' : 'offline',
 
     // Account and session.
     getAuthState: async () => { await booted; return auth },

@@ -14,6 +14,8 @@ export const DESKTOP_RPC = {
   parseSkillArchive: 'douchat:parse-skill-archive',
   getAttachmentData: 'douchat:attachment-data',
   socialAction: 'douchat:social-action',
+  // Opens a file from a chat on that computer, within the chat's allowed folders.
+  openLocalFile: 'douchat:open-local-file',
   saveGroupMemory: 'douchat:save-group-memory',
   saveUserMemory: 'douchat:save-user-memory',
   connectIMChannel: 'douchat:im-connect',
