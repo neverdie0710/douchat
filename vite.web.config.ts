@@ -3,29 +3,36 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
 /**
- * The web app: the desktop renderer on top of src/web/webApi.ts. It is served
- * by douchat-tanstack from /app (and as app.douchat.ai), so /api is the same
- * origin. In development, /api and the login page go to the local service.
+ * The web app: the desktop renderer on top of src/web/webApi.ts. Built, it is
+ * served by douchat-tanstack from /app and as app.douchat.ai, so /api is the
+ * same origin and sign-in happens on douchat.ai.
+ *
+ * `npm run dev:web` serves it with live reload at http://app.localhost:5276
+ * (the stand-in for app.douchat.ai): /api and /v1 go to the local service,
+ * and sign-in goes to the local service's site, which allows this callback.
  */
 const service = process.env.DOUCHAT_SERVICE_URL || 'http://localhost:3004'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   root: resolve(__dirname, 'src/web'),
-  base: '/app/',
+  // Pages live at the root on the app host; the built files sit under /app.
+  base: command === 'build' ? '/app/' : '/',
   publicDir: resolve(__dirname, 'src/renderer/public'),
   plugins: [react()],
   resolve: { dedupe: ['react', 'react-dom'] },
+  define: command === 'build' ? {} : { 'import.meta.env.VITE_DOUCHAT_SITE': JSON.stringify(service) },
   build: {
     outDir: resolve(__dirname, 'out/web'),
     emptyOutDir: true
   },
   server: {
+    host: 'localhost',
     port: 5276,
     strictPort: true,
+    allowedHosts: ['app.localhost'],
     proxy: {
       '/api': { target: service, changeOrigin: true },
-      '/v1': { target: service, changeOrigin: true },
-      '/desktop-auth': { target: service, changeOrigin: true }
+      '/v1': { target: service, changeOrigin: true }
     }
   }
-})
+}))

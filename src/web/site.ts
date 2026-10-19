@@ -10,6 +10,9 @@ export const onAppHost = (): boolean => location.hostname.startsWith('app.')
 
 /** The main site: douchat.ai for app.douchat.ai, and the page's own origin elsewhere. */
 export function siteOrigin(): string {
+  // `npm run dev:web` points at the local service, which runs on its own port.
+  const configured = import.meta.env.VITE_DOUCHAT_SITE as string | undefined
+  if (configured) return new URL(configured).origin
   if (!onAppHost()) return location.origin
   const url = new URL(location.origin)
   url.hostname = url.hostname.slice('app.'.length)
