@@ -560,6 +560,8 @@ const translations: Record<string, string> = {
   'The web app cannot open it directly. Open the Douchat desktop app to view it on your computer.': '网页版不能直接打开它。打开 Douchat 桌面版后，可以在你的电脑上查看。',
   'Opened on your computer.': '已在你的电脑上打开。', 'Path copied.': '路径已复制。', 'Could not copy the path': '路径复制失败',
   'Open on computer': '在电脑上打开',
+  'Web': '网页版', 'Douchat for desktop': 'Douchat 桌面版', 'Download desktop app': '下载桌面版',
+  'Run local agents such as Codex and Claude Code, work with files on your computer, and keep everything in sync with the web app.': '在电脑上运行 Codex、Claude Code 等本地智能体，读写电脑上的文件，并与网页版保持同步。',
   'Share with support': '分享给客服', 'Share': '分享', 'Revoke': '撤销', 'Revoked': '已撤销', 'Access active': '有效',
   'Douchat support will be able to read this conversation, including its messages and member names, until access expires or you revoke it. Each time they open it is counted below.': '分享后，Douchat 客服可以查看此会话的消息和成员名称，直到授权到期或你撤销为止。客服每次查看都会记录在下方。',
   'Describe the problem (optional)': '描述遇到的问题（可选）', 'Access duration': '授权时长', '24 hours': '24 小时', '3 days': '3 天', '7 days': '7 天',

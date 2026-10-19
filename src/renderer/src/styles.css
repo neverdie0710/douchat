@@ -7324,3 +7324,6 @@ html.native-dialog-window,
 .message-remote-file-actions button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
 .message-remote-file-actions button.is-primary { border-color: transparent; background: var(--accent-500, #0b5cff); color: #fff; }
 .message-remote-file-actions button:disabled { opacity: .6; cursor: default; }
+
+/* The web app's About page links to the desktop download instead of updating itself. */
+.about-action a.primary-button { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }

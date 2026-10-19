@@ -423,6 +423,8 @@ function AboutTab(): ReactElement {
       {status === 'checking' ? t('Checking for updates…') : t('Check for updates')}
     </button>
   )
+  // The web app has no install to update or local logs; it points to the desktop app instead.
+  const web = window.douchat.platform === 'web'
   return <div className="about-page">
     <header className="about-hero">
       <img className="about-logo" src={douchatLogo} alt="" />
@@ -430,23 +432,33 @@ function AboutTab(): ReactElement {
         <h1>Douchat</h1>
         <p>{t('A desktop workspace where AI agents work and talk together.')}</p>
         <div className="about-meta">
-          <code>{update?.currentVersion ? `v${update.currentVersion}` : '…'}</code>
-          <span className="about-badge">{status === 'disabled' ? t('Development') : t('Desktop')}</span>
+          {web ? <span className="about-badge">{t('Web')}</span> : <>
+            <code>{update?.currentVersion ? `v${update.currentVersion}` : '…'}</code>
+            <span className="about-badge">{status === 'disabled' ? t('Development') : t('Desktop')}</span>
+          </>}
         </div>
       </div>
     </header>
     <nav className="about-links" aria-label={t('Links')}>
-      <a className="about-link about-website-button" href="https://douchat.ai/?utm_source=douchat-desktop" target="_blank" rel="noreferrer">{t('Official website')}<ExternalLink size={15} /></a>
+      <a className="about-link about-website-button" href={`https://douchat.ai/?utm_source=${web ? 'douchat-web' : 'douchat-desktop'}`} target="_blank" rel="noreferrer">{t('Official website')}<ExternalLink size={15} /></a>
       <a className="about-link" href="https://github.com/thinkany-ai/douchat" target="_blank" rel="noreferrer">{t('Source code')}<ExternalLink size={15} /></a>
       <a className="about-link" href="https://github.com/thinkany-ai/douchat/issues" target="_blank" rel="noreferrer">{t('Report an issue')}<ExternalLink size={15} /></a>
-      <button type="button" className="about-link" title={t('Share local logs to help troubleshoot display errors.')} onClick={() => { void window.douchat.openDiagnosticLogs().catch((error) => window.alert(String(error))) }}>{t('Open log folder')}<FolderOpen size={15} /></button>
+      {!web && <button type="button" className="about-link" title={t('Share local logs to help troubleshoot display errors.')} onClick={() => { void window.douchat.openDiagnosticLogs().catch((error) => window.alert(String(error))) }}>{t('Open log folder')}<FolderOpen size={15} /></button>}
     </nav>
     <footer className="about-footer">
       <span>{t('AGPL-3.0-only license')}</span>
       <span aria-hidden="true">·</span>
       <span>© 2026 ThinkAny, LLC</span>
     </footer>
-    <section className="about-update-card" aria-labelledby="about-update-title">
+    {web ? <section className="about-update-card" aria-labelledby="about-download-title">
+      <div className="about-update-copy">
+        <h2 id="about-download-title">{t('Douchat for desktop')}</h2>
+        <div className="about-update-status"><span>{t('Run local agents such as Codex and Claude Code, work with files on your computer, and keep everything in sync with the web app.')}</span></div>
+      </div>
+      <div className="about-action">
+        <a className="primary-button" href="https://douchat.ai/?utm_source=douchat-web#download" target="_blank" rel="noreferrer">{t('Download desktop app')}<ExternalLink size={15} /></a>
+      </div>
+    </section> : <section className="about-update-card" aria-labelledby="about-update-title">
       <div className="about-update-copy">
         <h2 id="about-update-title">{t('Software update')}</h2>
         <div className="about-update-status" aria-live="polite">
@@ -474,7 +486,7 @@ function AboutTab(): ReactElement {
                 ? <button className="secondary-button update-check-button" disabled>{t('Downloading update…')} {update?.percent ?? 0}%</button>
                 : checkButton}
       </div>
-    </section>
+    </section>}
     <section className="about-community" aria-labelledby="about-community-title">
       <QRCodeSVG value={communityUrl} size={112} level="M" marginSize={4} title={t('Invitation QR code')} />
       <div className="about-community-copy">
