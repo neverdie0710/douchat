@@ -9,6 +9,7 @@ import type { DesktopAuth } from './desktopAuth'
 import type { DouchatStore } from './store'
 import type { DouchatRuntime } from './runtime'
 import type { SocialAction, SocialAgent, SocialResult, SocialSnapshot, SocialTask, SocialMessage, SocialImage, SocialFile } from '../shared/social'
+import { overlapCursor } from '../shared/social'
 import { checkHumanAgentTargets, privacySafeSocialSnapshot, rendererSocialSnapshot, sharedGroupReplyTargets } from '../shared/socialRules'
 export { privacySafeSocialSnapshot, rendererSocialSnapshot, sharedGroupReplyTargets }
 
@@ -16,7 +17,6 @@ interface InboxDelivery {
   snapshot: SocialSnapshot
   pages: Record<string, SocialResult & { after: { time: string; id: string }; pending: string[] }>
 }
-const overlapCursor = (cursor: { time: string; id: string }) => ({ time: new Date(Math.max(0, Date.parse(cursor.time) - 5000)).toISOString(), id: '' })
 
 function sharedAgentProfile(agent: AgentConfig) {
   const permissions = agentPermissions(agent.permissions)
@@ -29,6 +29,13 @@ function sharedAgentProfile(agent: AgentConfig) {
 export function agentRoomAgentId(ownerId: string, localId: string): string {
   return createHash('sha256').update(JSON.stringify(['agent', ownerId, localId])).digest('hex')
 }
+
+/**
+ * How often each room's whole history is re-read to catch anything the
+ * incremental cursor missed. That walk pages through every message, so it
+ * is kept rare; new messages arrive through the cursor in between.
+ */
+const AUDIT_MS = 30 * 60_000
 
 /** Tokens and execution claims never cross the preload boundary. */
 export class SocialClient {
@@ -143,7 +150,7 @@ export class SocialClient {
         const local = this.store.accountConversations.find((conversation) => conversation.remoteRoomId === room.id)
         const known = new Set(local ? [...this.store.topicMessages(local.id, local.activeTopicId).map((message) => message.id), ...this.store.socialClearedMessageIds(local.id)] : [])
         const incoming: SocialMessage[] = []
-        const incremental = previous && Date.now() - previous.auditedAt < 300000
+        const incremental = previous && Date.now() - previous.auditedAt < AUDIT_MS
         if (incremental) {
           // Replay a small overlap so equal timestamps and transaction commit
           // ordering cannot drop messages at the cursor boundary.
@@ -155,7 +162,7 @@ export class SocialClient {
             const chunk = pendingIds.splice(0, 200)
             const page = prefetched && prefetched.after.time === fetchCursor.time && prefetched.after.id === fetchCursor.id && JSON.stringify(prefetched.pending) === JSON.stringify(chunk)
               ? prefetched
-              : await this.request<SocialResult>({ action: 'messages', roomId: room.id, after: fetchCursor, pending: chunk }, identity, signal)
+              : await this.request<SocialResult>({ action: 'messages', roomId: room.id, after: fetchCursor, pending: chunk, attachments: 'ref' }, identity, signal)
             prefetched = undefined
             const batch = page.messages ?? []
             incoming.push(...batch, ...(page.updates ?? []))
@@ -166,7 +173,7 @@ export class SocialClient {
         } else {
           let before: string | undefined
           for (;;) {
-            const page = await this.request<SocialResult>({ action: 'messages', roomId: room.id, before }, identity, signal)
+            const page = await this.request<SocialResult>({ action: 'messages', roomId: room.id, before, attachments: 'ref' }, identity, signal)
             const batch = page.messages || []
             incoming.push(...batch)
             if (!page.hasMore || !batch.length || (snapshot.syncVersion !== 1 && batch.some((message) => known.has(`${local?.id}:${message.id}`)))) break
@@ -192,7 +199,9 @@ export class SocialClient {
             const saved: MessageAttachment[] = []
             for (const image of images) {
               if (this.identity().id !== identity.id || this.store.currentAccountId !== identity.id) throw new Error('Chat account mismatch')
-              saved.push(await this.store.saveImageAttachment({ ...image, data: Buffer.from(image.base64, 'base64') }, identity.id))
+              // Refs are fetched here, once: a known message never downloads its images again.
+              const base64 = image.base64 ?? (await this.request<{ attachment: { base64: string } }>({ action: 'attachment', roomId: room.id, ref: image.ref }, identity, signal)).attachment.base64
+              saved.push(await this.store.saveImageAttachment({ name: image.name, mimeType: image.mimeType, data: Buffer.from(base64, 'base64') }, identity.id))
             }
             attachments.set(id, saved)
           }
@@ -454,7 +463,7 @@ export class SocialClient {
             const state = this.roomSync.get(`${identity.id}:${room.id}`)
             return state && state.pending.size <= 200 ? [[room.id, { after: overlapCursor(state.cursor), pending: [...state.pending] }]] : []
           }))
-          const result = await this.request<Partial<InboxDelivery>>({ action: 'watch', versions, includeMessages: true, cursors }, identity, signal)
+          const result = await this.request<Partial<InboxDelivery>>({ action: 'watch', versions, includeMessages: true, cursors, attachments: 'ref' }, identity, signal)
           if (result.snapshot && result.pages) delivery = { snapshot: result.snapshot, pages: result.pages }
           delay = 0
         }

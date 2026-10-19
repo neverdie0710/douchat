@@ -716,3 +716,25 @@ it('shares how far a friend chat was read and applies a later mark from another 
   expect(mark.roomId).toBe('dm')
   expect(mark.readAt).toBeGreaterThanOrEqual(Date.parse(at(3)))
 })
+
+it('fetches an image sent by reference once and never again for a known message', async () => {
+  const image = { name: 'shot.png', mimeType: 'image/png' as const, base64: 'iVBORw0KGgo=' }
+  const message: SocialMessage = { id: 'with-image', roomId: room.id, authorId: 'alice', authorName: 'Alice', content: 'Look', status: 'sent', createdAt: room.createdAt }
+  const requests: Record<string, unknown>[] = []
+  vi.stubGlobal('fetch', vi.fn(async (_url: unknown, options?: RequestInit) => {
+    if (!options?.body) return Response.json({ data: { filesVersion: 1, userId: 'bob', friendships: [], rooms: [room] } })
+    const body = JSON.parse(String(options.body))
+    requests.push(body)
+    if (body.action === 'attachment') return Response.json({ data: { attachment: image } })
+    const images = body.attachments === 'ref' ? [{ name: image.name, mimeType: image.mimeType, size: 8, ref: 'with-image|image|0' }] : [image]
+    return Response.json({ data: { messages: [{ ...message, images }], hasMore: false } })
+  }))
+  const bob = account('bob')
+  await bob.client.syncInbox()
+  await bob.client.syncInbox(true)
+  expect(requests.filter((body) => body.action === 'messages').every((body) => body.attachments === 'ref')).toBe(true)
+  expect(requests.filter((body) => body.action === 'attachment')).toEqual([{ action: 'attachment', roomId: room.id, ref: 'with-image|image|0' }])
+  const received = bob.store.topicMessages(bob.store.accountConversations[0].id, 'main').at(-1)!
+  expect(await bob.store.attachmentDataUrl(received.attachments![0].id)).toBe('data:image/png;base64,iVBORw0KGgo=')
+  bob.store.close()
+})

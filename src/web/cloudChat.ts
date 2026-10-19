@@ -390,15 +390,17 @@ export async function sendToCloudAgent(params: {
   text: string
   /** The stored reply takes this id, so it replaces the streamed draft in place. */
   replyId: string
+  /** The human message's id, when it continues a queued request. */
+  messageId?: string
   hooks: CloudReplyHooks
 }): Promise<void> {
-  const { sync, token, user, agent, conversation, text, replyId, hooks } = params
+  const { sync, token, user, agent, conversation, text, replyId, messageId, hooks } = params
   const topic = conversation.topics.find((item) => item.id === conversation.activeTopicId) ?? conversation.topics[0]
   const topicId = topic?.id ?? conversation.activeTopicId
   const now = Date.now()
   // Messages after a context reset carry its id, as a desktop's do.
   const version = topic?.contextReset ? { contextVersion: topic.contextReset.id } : {}
-  const message: ChatMessage = { id: crypto.randomUUID(), conversationId: conversation.id, topicId, authorId: 'user', authorName: user.name, text, kind: 'message', createdAt: now, ...version }
+  const message: ChatMessage = { id: messageId ?? crypto.randomUUID(), conversationId: conversation.id, topicId, authorId: 'user', authorName: user.name, text, kind: 'message', createdAt: now, ...version }
   const touch = (at: number, title?: string) => ({
     kind: 'conversation' as const,
     id: conversation.id,

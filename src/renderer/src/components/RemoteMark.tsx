@@ -2,8 +2,8 @@ import { Server } from 'lucide-react'
 import type { LocalAgent } from '../../../shared/types'
 import { t } from '../preferences'
 
-/** Remote agents known to this window, by local agent id → SSH host alias.
- * Updated whenever the agent list is detected, so labels stay in sync. */
+/** Remote agents known to this window, by local agent id → the name of the
+ * connection it runs on. Updated whenever the agent list is detected. */
 let remoteHosts = new Map<string, string>()
 let remoteAdapters = new Map<string, string>()
 let localAgentsLoaded = false
@@ -11,9 +11,15 @@ let localAgentsLoaded = false
 /** `loaded` turns true once the first local agent scan has finished, even if it failed. */
 export function setRemoteAgents(agents: LocalAgent[], loaded = true): void {
   localAgentsLoaded = loaded
-  remoteHosts = new Map(agents.flatMap(agent => agent.daemon ? [[agent.id, agent.daemon.label] as const] : agent.remote ? [[agent.id, agent.remote.host] as const] : []))
+  remoteHosts = new Map(agents.flatMap(agent => agent.daemon || agent.remote ? [[agent.id, agentServer(agent)!] as const] : []))
   remoteAdapters = new Map(agents.flatMap(agent => agent.remote ? [[agent.id, agent.remote.adapter] as const] : agent.daemon && agent.remoteAgent ? [[agent.id, agent.remoteAgent.adapter] as const] : []))
   daemonAgents = new Set(agents.filter(agent => agent.daemon).map(agent => agent.id))
+}
+
+/** Where a remote agent runs, by its connection's name; undefined for one on this computer. */
+export function agentServer(agent: LocalAgent): string | undefined {
+  if (!agent.remote && !agent.daemon && !agent.remoteAgent) return undefined
+  return agent.connectionName || agent.daemon?.label || agent.remote?.host || t('Server')
 }
 
 let daemonAgents = new Set<string>()

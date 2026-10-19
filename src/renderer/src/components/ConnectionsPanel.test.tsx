@@ -2,9 +2,9 @@
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import type { ConnectionView } from '../../../shared/types'
+import type { ConnectionView, LocalAgent } from '../../../shared/types'
 vi.mock('./NativeDialog', () => ({ NativeDialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
-vi.mock('../preferences', () => ({ t: (text: string) => text }))
+vi.mock('../preferences', () => ({ t: (text: string) => text, tr: (text: string, values: Record<string, unknown>) => text.replace(/\{(\w+)\}/g, (_, key) => String(values[key])) }))
 import { ConnectionsPanel } from './ConnectionsPanel'
 
 let container: HTMLDivElement, root: Root
@@ -32,7 +32,8 @@ const button = (label: string) => [...container.querySelectorAll('button')].find
 it('shows status and toggles a connection off', async () => {
   await render()
   expect(container.querySelector('[role=status]')?.textContent).toBe('Connected · 40 ms')
-  expect(container.textContent).toContain('me@box')
+  expect(container.textContent).toContain('Box')
+  expect(container.textContent).not.toContain('me@box')
   await act(async () => button('Enabled Box').click())
   expect(api.setConnectionEnabled).toHaveBeenCalledWith(view().id, false)
   expect(container.querySelector('[role=status]')?.textContent).toBe('Turned off')
@@ -67,17 +68,33 @@ it('asks before deleting a connection that agents use, and can keep them', async
 it('scans the server and adds only the chosen agents', async () => {
   const changed = await render()
   await act(async () => button('Scan for agents on this server Box').click())
-  const boxes = [...container.querySelectorAll<HTMLInputElement>('.local-agent-checkbox input')]
+  const boxes = [...container.querySelectorAll<HTMLInputElement>('.discovered-agent input')]
   expect(boxes).toHaveLength(2)
+  expect(button('Add 2 agents')).toBeTruthy()
   await act(async () => boxes[1].click())
-  await act(async () => button('Add selected').click())
+  await act(async () => button('Add 1 agent').click())
   expect(api.addDiscoveredAgents).toHaveBeenCalledWith(view().id, [{ adapter: 'codex', executable: '/usr/bin/codex', name: 'Codex · Box' }])
   expect(changed).toHaveBeenCalled()
 })
 
+it('marks agents already added from the server, adds only new ones, then shows them in Agents', async () => {
+  const showAgents = vi.fn()
+  const existing = { id: 'custom:1', name: 'Codex · Box', command: '/usr/bin/codex', installed: true, discovered: true, custom: true, status: 'ready', chatSupported: true, authentication: 'unchecked',
+    remoteAgent: { connectionId: view().id, adapter: 'codex', executable: '/usr/bin/codex', args: [] } } as LocalAgent
+  await act(async () => root.render(<ConnectionsPanel agents={[existing]} onAgentsChange={vi.fn()} onShowAgents={showAgents} />))
+  await act(async () => button('Scan for agents on this server Box').click())
+  const rows = [...container.querySelectorAll('.discovered-agent')]
+  expect(rows[0].classList.contains('added')).toBe(true)
+  expect(rows[0].textContent).toContain('Added')
+  expect(rows[0].querySelector('input')!.disabled).toBe(true)
+  await act(async () => button('Add 1 agent').click())
+  expect(api.addDiscoveredAgents).toHaveBeenCalledWith(view().id, [{ adapter: 'claude', executable: '/usr/bin/claude', name: 'Claude Code · Box' }])
+  expect(showAgents).toHaveBeenCalledWith(view().id)
+})
+
 it('copies enrollment commands through the desktop bridge and reports success and failure', async () => {
   await render()
-  await act(async () => button('douchat-host').click())
+  await act(async () => button('Host').click())
   await act(async () => button('Add').click())
   await act(async () => button('Copy install command').click())
   expect(api.copyText).toHaveBeenCalledWith('curl https://example.com/install.sh | sh')
@@ -91,4 +108,32 @@ it('copies enrollment commands through the desktop bridge and reports success an
   expect(api.copyText).toHaveBeenLastCalledWith('douchat-host uninstall')
   expect(uninstall.textContent).toBe('Copied')
   expect(container.querySelector('[role=alert]')).toBeNull()
+})
+
+it('opens on how to reach agents when there are no connections, per platform', async () => {
+  api.listConnections.mockResolvedValue([])
+  await render()
+  expect(container.querySelector('[role=tab][aria-selected=true]')?.textContent).toBe('Web app')
+  expect(container.querySelector<HTMLAnchorElement>('a.connection-peer-link')?.href).toBe('http://app.localhost:5276/')
+  expect(button('Add')).toBeUndefined()
+})
+
+it('on the web, shows only the desktop app while it is offline', async () => {
+  api.listConnections.mockResolvedValue([])
+  Object.assign(api, { platform: 'web', desktopAvailability: vi.fn(() => 'offline') })
+  await render()
+  expect(container.querySelector('[role=status]')?.textContent).toContain('The desktop app is offline')
+  expect([...container.querySelectorAll<HTMLAnchorElement>('a.connection-peer-link')].map(link => link.textContent)).toEqual(['Open desktop app', 'Download desktop app'])
+  expect(container.querySelector('[role=tablist]')).toBeNull()
+  expect(button('Add')).toBeUndefined()
+})
+
+it('on the web, offers only to open the desktop app while it is online', async () => {
+  api.listConnections.mockResolvedValue([])
+  Object.assign(api, { platform: 'web', desktopAvailability: vi.fn(() => 'online') })
+  await render()
+  const links = [...container.querySelectorAll<HTMLAnchorElement>('a.connection-peer-link')]
+  expect(links.map(link => link.textContent)).toEqual(['Open desktop app'])
+  expect(links[0].getAttribute('href')).toBe('douchat-dev://open')
+  expect(container.querySelector('[role=tablist]')).toBeNull()
 })

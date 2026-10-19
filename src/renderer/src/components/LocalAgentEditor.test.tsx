@@ -73,15 +73,22 @@ it('adds a remote agent by connection, never by host', async () => {
   add.mockResolvedValue([])
   ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a'), connection('conn_b', { enabled: false })])
   await render()
-  await act(async () => container.querySelectorAll<HTMLInputElement>('input[name=location]')[1].click())
-  const select = [...container.querySelectorAll('label')].find(label => label.textContent?.startsWith('Connection'))!.querySelector('select')!
-  expect(select.value).toBe('conn_a')
+  const select = container.querySelector<HTMLSelectElement>('select[aria-label="Run location"]')!
+  expect(select.value).toBe('@local')
+  expect([...select.options].map(option => option.textContent)).toEqual(['This computer', 'Box', 'Off (Turned off)'])
   expect([...select.options].find(option => option.value === 'conn_b')!.disabled).toBe(true)
+  await act(async () => { select.value = 'conn_a'; select.dispatchEvent(new Event('change', { bubbles: true })) })
   expect(container.textContent).not.toContain('Host alias')
   await act(async () => { const name = container.querySelector<HTMLInputElement>('input[required]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'Server Codex'); name.dispatchEvent(new Event('input', { bubbles: true })) })
   await click('Save')
   expect(add).toHaveBeenCalledWith({ name: 'Server Codex', command: 'codex', avatar: '', args: [], remoteAgent: { connectionId: 'conn_a', adapter: 'codex', executable: 'codex', args: [] } })
   expect(add.mock.calls[0][0]).not.toHaveProperty('remote')
+})
+it('starts a new agent on the server the agent list is showing', async () => {
+  ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a')])
+  await act(async () => root.render(<LocalAgentEditor connectionId="conn_a" onSaved={saved} onClose={closed} />))
+  expect(container.querySelector<HTMLSelectElement>('select[aria-label="Run location"]')!.value).toBe('conn_a')
+  expect(container.textContent).toContain('Agent type')
 })
 it('explains an agent whose connection is gone and keeps its saved settings', async () => {
   ;(window.douchat as any).listConnections = vi.fn(async () => [connection('conn_a')])

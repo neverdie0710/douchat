@@ -4,6 +4,8 @@ export const CREDITS_CALLBACK_HOST = 'payment'
 export const CREDITS_CALLBACK_PATH = '/callback'
 export const DESKTOP_AUTH_CLIENT_ID = 'douchat-desktop'
 export const DOUCHAT_PRODUCTION_ORIGIN = 'https://douchat.ai'
+/** The Douchat web app, offered after a desktop sign-in completes in the browser. */
+export const DOUCHAT_WEB_APP_ORIGIN = 'https://app.douchat.ai'
 /** Registered only by the development host, so its browser returns never open the packaged app. */
 export const DEVELOPMENT_APP_SCHEME = 'douchat-dev'
 

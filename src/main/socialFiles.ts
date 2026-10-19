@@ -2,13 +2,13 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { basename } from 'node:path'
 import type { MessageFileInput } from '../shared/types'
-import type { SocialFile, SocialImage } from '../shared/social'
+import type { SocialFile, SocialMessageImage } from '../shared/social'
 import type { DouchatStore } from './store'
 
 const MAX_BYTES = 20 * 1024 * 1024
-export function decodeSocialFiles(files: SocialFile[] = [], images: SocialImage[] = []): MessageFileInput[] {
+export function decodeSocialFiles(files: SocialFile[] = [], images: SocialMessageImage[] = []): MessageFileInput[] {
   if (!Array.isArray(files) || !Array.isArray(images) || files.length + images.length > 4) throw new Error('一次最多发送 4 个附件。')
-  let total = images.reduce((sum, image) => sum + Buffer.from(image.base64, 'base64').length, 0)
+  let total = images.reduce((sum, image) => sum + (image.base64 === undefined ? image.size : Buffer.from(image.base64, 'base64').length), 0)
   return files.map(file => {
     if (!file || typeof file.name !== 'string' || !file.name.trim() || file.name.length > 240 || typeof file.base64 !== 'string' || file.base64.length > Math.ceil(MAX_BYTES / 3) * 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(file.base64)) throw new Error('无效的文件附件。')
     const data = Buffer.from(file.base64, 'base64')

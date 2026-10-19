@@ -18,7 +18,7 @@ import { groupRoutingProfile } from '../shared/groupProfile'
 import { agentIdentityPrompt, agentPersona, validateAgentFiles, withoutSkillFiles, type AgentFiles } from '../shared/agentCustomization'
 import { groupMemoryPrompt, userMemoryPrompt, localUserMemoryEdits, MEMORY_OPEN, MEMORY_CLOSE, type UserMemoryEdit } from '../shared/userMemory'
 import { groupNotice, groupText } from '../shared/groupText'
-import { CUSTOM_PROVIDER_PREFIX } from '../shared/customModels'
+import { CUSTOM_PROVIDER_PREFIX, customDefaultThinking } from '../shared/customModels'
 import { cancellableGroupPlan, firstGroupPlan, planningFailureReason, GROUP_PLANNING_ATTEMPT_MS, GROUP_PLANNING_BUDGET_MS } from './groupPlanning'
 import { DecisionEscalation, GroupDecisionService } from './groupDecision'
 import { rankGroupMembers, refreshGroupHealth, type GroupHealth } from './groupHealth'
@@ -938,6 +938,9 @@ export class DouchatRuntime {
     // Douchat cloud models run at a fixed thinking level; only custom providers honor the per-agent setting.
     const customProvider = config.provider.startsWith(CUSTOM_PROVIDER_PREFIX)
     const agentThinking = customProvider ? config.thinkingLevel : undefined
+    const defaultThinking = customProvider
+      ? customDefaultThinking(this.decisionProviders.find((record) => CUSTOM_PROVIDER_PREFIX + record.id === config.provider), config.model)
+      : DEFAULT_CLOUD_THINKING_LEVEL
     const modelBinding = `${config.provider}/${config.model}#${agentThinking ?? ''}#${this.connectors.revision?.() ?? ''}`
     if (existing && (!existing.modelBinding || existing.modelBinding === modelBinding)) return existing.agent
     if (existing) this.disposeSession(sessionKey)
@@ -1008,7 +1011,7 @@ export class DouchatRuntime {
         systemPrompt: this.systemPrompt(config, context, routineCreationAllowed),
         model,
         // pi-ai clamps this to what the model supports (non-reasoning models become 'off').
-        thinkingLevel: agentThinking ?? DEFAULT_CLOUD_THINKING_LEVEL,
+        thinkingLevel: agentThinking ?? defaultThinking,
         tools: guardedTools
       },
       streamFn: (selectedModel, streamContext, options) => {

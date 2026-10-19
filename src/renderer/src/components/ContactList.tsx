@@ -152,7 +152,7 @@ export function ContactList({
                 {section.contacts.map(botRow)}
               </div>
             ))}
-            {!bots.length && <p className="empty-search">{tr('No agents match “{query}”.', { query: query.trim() })}</p>}
+            {!bots.length && <p className="empty-search">{query.trim() ? tr('No agents match “{query}”.', { query: query.trim() }) : t('No agents yet')}</p>}
           </div>
         )}
         <button className="contact-folder" onClick={() => setFriendsOpen((open) => !open)} aria-expanded={friendsOpen}>

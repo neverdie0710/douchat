@@ -3,7 +3,6 @@ import { GroupInviteDialog } from './GroupInviteDialog'
 import { ContactKindBadge } from './ContactKindBadge'
 import { remoteHost } from './RemoteMark'
 import { ConversationWorkspaceSetting } from './ConversationWorkspaceSetting'
-import { SupportShareDialog } from './SupportShareDialog'
 import type { SocialPerson } from '../../../shared/social'
 import type { ProfileAnchor } from './MemberProfilePopover'
 import { t } from '../preferences'
@@ -56,7 +55,7 @@ export function InspectorRail({
     && Boolean(conversation.socialRoom?.members[0]?.id) && Boolean(conversation.ownerId)
     && conversation.socialRoom!.members[0].id !== conversation.ownerId
   useEffect(() => { setConfirmLeave(false) }, [conversation?.id])
-  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | 'support' | null>(null)
+  const [recordsDialog, setRecordsDialog] = useState<'history' | 'routines' | 'invite' | null>(null)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ChatMessage[]>([])
   const [busy, setBusy] = useState(false)
@@ -193,7 +192,6 @@ export function InspectorRail({
               </section>
               <ConversationWorkspaceSetting conversation={conversation} agents={snapshot.agents} />
               <button className="detail-search-button" onClick={() => setRecordsDialog('invite')}>{t('Invite to group')} <ChevronRight size={16} /></button>
-              {!conversation.remoteRoomId && <button className="detail-search-button" onClick={() => setRecordsDialog('support')}>{t('Share with support')} <ChevronRight size={16} /></button>}
               <div className="detail-toggles">
                 <label>{t('Save to contacts')}<button type="button" className="detail-switch" role="switch" aria-label={t('Save to contacts')} aria-checked={!!conversation.savedToContacts} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { savedToContacts: !conversation.savedToContacts }))} /></label>
                 <label>{t('Mute notifications')}<button type="button" className="detail-switch" role="switch" aria-label={t('Mute notifications')} aria-checked={!!conversation.muted} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { muted: !conversation.muted }))} /></label>
@@ -204,7 +202,6 @@ export function InspectorRail({
               <ConversationWorkspaceSetting conversation={conversation} agents={snapshot.agents} />
               <button className="detail-search-button" onClick={() => { setError(''); setQuery(''); setRecordsDialog('history') }}>{t('Search chat history')} <ChevronRight size={16} /></button>
               <button className="detail-search-button" onClick={() => { setError(''); setRecordsDialog('routines') }}>{t('View scheduled tasks')} <ChevronRight size={16} /></button>
-              {!conversation.remoteRoomId && !conversation.person && <button className="detail-search-button" onClick={() => setRecordsDialog('support')}>{t('Share with support')} <ChevronRight size={16} /></button>}
               <div className="detail-toggles">
                 <label>{t('Mute notifications')}<button type="button" className="detail-switch" role="switch" aria-label={t('Mute notifications')} aria-checked={!!conversation.muted} disabled={busy} onClick={() => void update(() => window.douchat.updateConversation(conversation.id, { muted: !conversation.muted }))} /></label>
                 <label>{t('Pin to top')}<button type="button" className="detail-switch" role="switch" aria-label={t('Pin to top')} aria-checked={!!conversation.pinned} disabled={busy} onClick={() => void update(() => window.douchat.setConversationPinned(conversation.id, !conversation.pinned))} /></label>
@@ -236,7 +233,6 @@ export function InspectorRail({
       <OverlayScrollbar target={scrollRef} />
     </aside>
     {conversation && recordsDialog === 'invite' && createPortal(<GroupInviteDialog key={conversation.id} conversation={conversation} agents={snapshot.agents} userName={snapshot.userName} userAvatar={snapshot.userAvatar} onClose={() => setRecordsDialog(null)} />, document.body)}
-    {conversation && recordsDialog === 'support' && createPortal(<SupportShareDialog key={conversation.id} conversation={conversation} onClose={() => setRecordsDialog(null)} />, document.body)}
     {conversation && recordsDialog === 'history' && createPortal(<ChatHistoryDialog
       conversation={conversation}
       messages={results}

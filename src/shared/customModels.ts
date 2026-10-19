@@ -1,12 +1,19 @@
+import { DEFAULT_CLOUD_THINKING_LEVEL, type ThinkingLevel } from './thinkingLevels'
 /** Provider editor and endpoint conventions adapted from Termany ModelSettings. */
 export type CustomModelKind = 'openai' | 'anthropic'
 export interface CustomProviderInput { id: string; name: string; kind: CustomModelKind; apiBase: string; apiKey?: string; models: string[]; modelLabels?: Record<string, string>
-  /** Models that accept a thinking/reasoning parameter. Others always run with thinking off. */
+  /** Models marked "thinking" by the former settings checkbox. Any custom model
+   * may now think at the level its contact picks; these keep thinking by default. */
   reasoningModels?: string[] }
 export interface CustomProviderView extends Omit<CustomProviderInput, 'apiKey'> { hasKey: boolean }
 export interface CustomModelConfig { providers: CustomProviderView[]; defaultModel: string }
 export interface CustomModelTest { provider: CustomProviderInput; model: string }
 export const CUSTOM_PROVIDER_PREFIX = 'custom:'
+/** A custom model thinks only when its contact picks a level, except models
+ * already marked as thinking, which keep their earlier default. */
+export function customDefaultThinking(provider: Pick<CustomProviderInput, 'reasoningModels'> | undefined, model: string): ThinkingLevel {
+  return provider?.reasoningModels?.includes(model) ? DEFAULT_CLOUD_THINKING_LEVEL : 'off'
+}
 export function customEndpoint(base: string, kind: CustomModelKind): string {
   const value = base.trim().replace(/\/+$/, '') || (kind === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1')
   const endpoint = kind === 'anthropic' ? '/v1/messages' : '/v1/chat/completions'

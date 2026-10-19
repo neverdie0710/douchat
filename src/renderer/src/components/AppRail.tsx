@@ -1,11 +1,11 @@
 import { t, tr } from '../preferences'
-import { Settings, UsersRound, MessageCircle, X, Minus, Maximize2 } from 'lucide-react'
+import { Compass, Settings, UsersRound, MessageCircle, X, Minus, Maximize2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { UpdateStatus } from '../../../shared/types'
 import { UserAvatar } from './common'
 
-export type AppView = 'chats' | 'contacts'
+export type AppView = 'chats' | 'contacts' | 'discover'
 
 export function AppRail({
   view,
@@ -64,8 +64,17 @@ export function AppRail({
         <UsersRound size={23} strokeWidth={1.8} />
         {friendRequests > 0 && <span className="rail-badge" aria-label={tr('{count} pending friend requests', { count: friendRequests })}>{friendRequests > 99 ? '99+' : friendRequests}</span>}
       </button>
+      <button
+        className={`rail-button no-drag ${view === 'discover' ? 'active' : ''}`}
+        onClick={() => onSelect('discover')}
+        aria-label={t('Discover')}
+        aria-current={view === 'discover'}
+        title={t('Discover')}
+      >
+        <Compass size={23} strokeWidth={1.8} />
+      </button>
       <div className="rail-spacer" />
-      <button className={`rail-button no-drag ${settingsOpen ? 'active' : ''}`} onClick={() => onOpenSettings()} aria-label={t('Settings')} title={updateReady ? t('Update available') : t('Settings')} aria-current={settingsOpen}><Settings size={23} strokeWidth={1.8} />{updateReady && <span className="rail-update-dot" />}</button>
+      <button className={`rail-button rail-settings no-drag ${settingsOpen ? 'active' : ''}`} onClick={() => onOpenSettings()} aria-label={t('Settings')} title={updateReady ? t('Update available') : t('Settings')} aria-current={settingsOpen}><Settings size={23} strokeWidth={1.8} />{updateReady && <span className="rail-update-dot" />}</button>
     </nav>
   )
 }

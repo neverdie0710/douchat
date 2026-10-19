@@ -3,11 +3,12 @@ import { CustomModelSelection } from './CustomModelSelection'
 import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { conversationMembers } from './common'
 import type { SocialSnapshot } from '../../../shared/social'
-import { LocalAgentSelect } from './LocalAgentSelect'
+import { AgentHarnessPicker, CLOUD_PLACE, harnessPlaces, placeOf } from './AgentHarnessPicker'
+import { configurableLocalAgents, localAgentAdapter, type LocalModelList } from '../../../shared/localModels'
 import { t, tr } from '../preferences'
 import { readAvatarFile } from '../avatarFile'
 import { parseStartupArgsText, validateAgentStartupArgs } from '../../../shared/localAgentArguments'
-import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, Laptop, PlugZap, Search, Smile, X } from 'lucide-react'
+import { CalendarClock, Camera, Check, ChevronDown, ChevronRight, PlugZap, Search, Smile, X } from 'lucide-react'
 import { useContext, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent, ReactElement } from 'react'
 import type {
@@ -59,7 +60,37 @@ export function BotModal({
 }): ReactElement {
   const embedded = useContext(EmbeddedAgentSettings)
   const [localAgentId, setLocalAgentId] = useState(agent?.localAgentId ?? initialLocalAgentId ?? (!agent ? localAgents.find((item) => item.installed)?.id : '') ?? '')
-  const [agentSource, setAgentSource] = useState<'custom' | 'local'>(agent?.localAgentId || initialLocalAgentId ? 'local' : 'custom')
+  // Where the new agent runs: the cloud (on a model), this computer, or a server.
+  const places = harnessPlaces(localAgents)
+  const initialAgent = localAgents.find((item) => item.id === initialLocalAgentId)
+  const [place, setPlace] = useState(initialAgent ? placeOf(initialAgent) : CLOUD_PLACE)
+  const agentSource: 'custom' | 'local' = place === CLOUD_PLACE ? 'custom' : 'local'
+  const [nameEdited, setNameEdited] = useState(Boolean(agent))
+  const chooseHarness = (id: string, agentId: string): void => {
+    setPlace(id)
+    if (id === CLOUD_PLACE) { if (!nameEdited) setName(''); return }
+    if (agentId !== localAgentId) chooseAgent(agentId)
+    else if (!nameEdited) setName(localAgents.find((item) => item.id === agentId)?.name ?? '')
+  }
+  const chooseAgent = (id: string): void => {
+    setLocalAgentId(id)
+    setLocalModel('default')
+    // The harness name is a fine default until the user names the agent.
+    if (!nameEdited) setName(localAgents.find((item) => item.id === id)?.name ?? '')
+  }
+  const [localModel, setLocalModel] = useState('default')
+  const [localModels, setLocalModels] = useState<{ agentId: string; list?: LocalModelList }>()
+  const selectedRuntime = localAgents.find((item) => item.id === localAgentId)
+  const modelConfigurable = Boolean(selectedRuntime && configurableLocalAgents.includes(localAgentAdapter(selectedRuntime)))
+  useEffect(() => {
+    if (agent || agentSource !== 'local' || !modelConfigurable || !window.douchat?.listRuntimeModels) return
+    let active = true
+    setLocalModels({ agentId: localAgentId })
+    window.douchat.listRuntimeModels(localAgentId).then(list => { if (active) setLocalModels({ agentId: localAgentId, list }) })
+      .catch(() => { if (active) setLocalModels({ agentId: localAgentId, list: { models: [], source: 'manual', configurable: true } }) })
+    return () => { active = false }
+  }, [agent, agentSource, localAgentId, modelConfigurable])
+  const modelList = localModels?.agentId === localAgentId ? localModels.list : undefined
   const [customModels, setCustomModels] = useState<CustomModelConfig>({ providers: [], defaultModel: '' })
   const [customProviderId, setCustomProviderId] = useState('cloud')
   const [customModel, setCustomModel] = useState('douchat-default')
@@ -142,6 +173,7 @@ export function BotModal({
         labels: labels.trim(),
         color,
         localAgentId: agentSource === 'local' ? localAgentId : '',
+        ...(agentSource === 'local' && modelConfigurable && localModel.trim() && localModel !== 'default' ? { localModel: localModel.trim() } : {}),
         ...(startupArgs ? { startupArgs } : {}),
         ...(agentSource === 'custom' && customProviderId === 'cloud' && cloudModel !== 'douchat-default' ? { cloudModel: { model: cloudModel } } : {}),
         ...(agentSource === 'custom' && selectedCustomModel?.providerId !== 'cloud' ? { customModel: selectedCustomModel } : {})
@@ -175,27 +207,22 @@ export function BotModal({
           <h2 id="create-contact-title">{t('Create agent')}</h2>
           <button type="button" className="icon-button" onClick={onClose} aria-label={t('Close')}><X size={18} /></button>
         </div>
-        <label className="field-row"><span>{t('Agent name')}</span>
-          <input autoFocus required value={name} onChange={(event) => setName(event.target.value)} placeholder={t('Enter agent name')} />
-        </label>
-        <div className="field-row agent-source-field"><span>{t('Runs with')}</span>
-          <div className="agent-source-cards" role="radiogroup" aria-label={t('Runs with')}>
-            <button type="button" role="radio" aria-checked={agentSource === 'custom'} className={agentSource === 'custom' ? 'selected' : ''} onClick={() => setAgentSource('custom')}>
-              <span className="agent-source-icon"><PlugZap size={18} /></span><span className="agent-source-copy"><strong>{t("Custom model")}</strong><small>{t("Use your configured model service")}</small></span><span className="agent-source-radio" aria-hidden="true"><i /></span>
-            </button>
-            <button type="button" role="radio" aria-checked={agentSource === 'local'} className={agentSource === 'local' ? 'selected' : ''} onClick={() => setAgentSource('local')}>
-              <span className="agent-source-icon"><Laptop size={18} strokeWidth={1.9} /></span>
-              <span className="agent-source-copy"><strong>{t('Agent')}</strong><small>{t('AI tools on this computer or your servers')}</small></span>
-              <span className="agent-source-radio" aria-hidden="true"><i /></span>
-            </button>
-          </div>
+        <div className="field-row"><span>{t('Agent Harness')}</span>
+          <AgentHarnessPicker places={places} place={place} agentId={localAgentId} disabled={saving} onChoose={chooseHarness} onSettings={onSettings} />
         </div>
         {agentSource === 'custom' && <CustomModelSelection config={customModels} cloudModels={cloudModels} providerId={customProviderId} model={customProviderId === 'cloud' ? cloudModel : customModel} disabled={saving} onChange={(providerId, model) => { setCustomProviderId(providerId); providerId === 'cloud' ? setCloudModel(model) : setCustomModel(model) }} />}
         {agentSource === 'custom' && <p className="settings-note">{modelLoadError || (customProviderId === 'cloud' ? t("Use Douchat cloud models with pay-as-you-go credits.") : t("Use your own API key. Your model provider handles billing."))} <button type="button" className="local-settings-link" onClick={customProviderId === 'cloud' ? (onCreditsSettings ?? onSettings) : (onModelSettings ?? onSettings)}>{customProviderId === 'cloud' ? t("View credits") : t("Configure model")}</button></p>}
-        {agentSource === 'local' && <div className="field-row"><span>{t('Agent')}</span>
-          <LocalAgentSelect agents={localAgents.filter((item) => item.installed)} value={localAgentId} onChange={setLocalAgentId} />
-        </div>}
-        {agentSource === 'local' && !localAgents.some((item) => item.installed) && <p className="settings-note">{t('No available agents')} <button type="button" className="local-settings-link" onClick={onSettings}>{t('Settings')}</button></p>}
+        {agentSource === 'local' && localAgent?.installed && modelConfigurable && <label className="field-row"><span>{t('Model')}</span>
+          {modelList && !modelList.models.length
+            ? <input aria-label={t('Model')} value={localModel === 'default' ? '' : localModel} maxLength={256} spellCheck={false} disabled={saving} placeholder={t('Use agent default')} onChange={(event) => setLocalModel(event.target.value || 'default')} />
+            : <select aria-label={t('Model')} value={localModel} disabled={saving || !modelList} onChange={(event) => setLocalModel(event.target.value)}>
+              <option value="default">{modelList ? t('Use agent default') : t('Loading models…')}</option>
+              {modelList?.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+            </select>}
+        </label>}
+        <label className="field-row"><span>{t('Agent name')}</span>
+          <input required value={name} onChange={(event) => { setName(event.target.value); setNameEdited(true) }} placeholder={t('Enter agent name')} />
+        </label>
         {agentSource === 'local' && localAgent?.installed && <div className="field-row">
           <button type="button" className="local-settings-link" aria-expanded={startupArgsOpen} onClick={() => setStartupArgsOpen(open => !open)}>{t(startupArgsOpen ? 'Hide startup arguments' : 'Startup arguments (optional)')}</button>
           {startupArgsOpen && <>

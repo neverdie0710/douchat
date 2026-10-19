@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronRight, X } from 'lucide-react'
+import { ChevronRight, CloudOff, X } from 'lucide-react'
 import { type ConnectorCommand, type ConnectorName, type ConnanySession, type ConnanyState, type ConnectorSelection } from '../../../shared/connany'
 import { t } from '../preferences'
 import { ConnanyDetails, ConnectorIcon, connectorDescription } from './ConnanyDetails'
@@ -24,6 +24,8 @@ export function errorText(error: unknown): string {
     rate_limited: t("Too many requests. Wait a moment and retry."),
     invalid_response: t("The connector service returned an unexpected response. Check the backend's CONNANY_BASE_URL."),
   }
+  // The browser's own wording for a request that never reached the service.
+  if (/^(?:TypeError: )?(?:Failed to fetch|Load failed|NetworkError\b)/i.test(text)) return t('Cannot reach the connector service. Try again.')
   return Object.entries(messages).find(([key]) => text.includes(key))?.[1] || text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '').replace(/^Connector error: \w+$/, t('Cannot reach the connector service. Try again.'))
 }
 export function ConnanyPanel() {
@@ -127,7 +129,8 @@ export function ConnanyPanel() {
     finally { if (alive.current) setBusy(false) }
   }
   return <div className="connany-panel">
-    {error && <div role="alert" className="connany-error">{error} <button disabled={busy} onClick={() => void run({ op: 'list' })}>{t('Retry')}</button><button aria-label={t('Dismiss')} onClick={() => setError('')}><X size={14} /></button></div>}
+    {/* Before the list ever loaded, the failure is the page; after, it is a notice above the list. */}
+    {error && state && <div role="alert" className="connany-error">{error} <button disabled={busy} onClick={() => void run({ op: 'list' })}>{t('Retry')}</button><button aria-label={t('Dismiss')} onClick={() => setError('')}><X size={14} /></button></div>}
     {detail ? <ConnanyDetails key={detail} connector={detail} state={state} session={sessions.find(s => s.connector === detail)} busy={busy} run={run} select={select} accountErrors={accountErrors} notices={notices} accessWaiting={Object.keys(accessWaiting)} dismissAccountError={id => setAccountErrors(errors => ({ ...errors, [id]: '' }))} dismissSession={() => { const session = sessions.find(s => s.connector === detail); if (session) dismissedSessions.current.add(session.id); setSessions(s => s.filter(x => x.connector !== detail)) }}
       stopWaiting={() => setSessions(s => s.filter(x => x.connector !== detail))} onBack={() => setDetail(undefined)} /> : <>
       {(() => {
@@ -146,6 +149,12 @@ export function ConnanyPanel() {
           </div>
           <p className="connany-description">{t('Connect external accounts so your agents can use their data.')}</p>
           {!state && !error && <p role="status">{t('Loading…')}</p>}
+          {!state && error && <div role="alert" className="connany-load-error">
+            <CloudOff size={28} aria-hidden="true" />
+            <strong>{t('Connectors could not load')}</strong>
+            <p>{error}</p>
+            <button type="button" className="secondary-button" disabled={busy} onClick={() => void run({ op: 'list' })}>{t('Retry')}</button>
+          </div>}
           {state && !all.length && <p className="connany-description">{t('No connectors are available yet.')}</p>}
           {state && all.length > 0 && !shown.length && <p className="connany-empty">{t(filter === 'connected' ? 'No connected accounts yet.' : 'Every connector has an account.')}</p>}
           <div className="connany-list">{shown.map(item => {

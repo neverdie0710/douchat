@@ -1,4 +1,5 @@
 import type { AppView } from './components/AppRail'
+import type { DiscoverPage } from './components/DiscoverView'
 import type { SettingsTab } from './components/SettingsPanel'
 
 /**
@@ -7,6 +8,7 @@ import type { SettingsTab } from './components/SettingsPanel'
  *
  *   /chat              chat list          /contacts            contacts
  *   /chat/<code>       one conversation   /settings/<tab>      settings
+ *   /discover          Discover list      /<page>              a Discover page (/automation, /connectors)
  *
  * A conversation appears by a short code derived from its id rather than the
  * id itself: ids are long compound keys that other records reference, and
@@ -15,13 +17,16 @@ import type { SettingsTab } from './components/SettingsPanel'
  * On douchat.ai these live under /app; on app.douchat.ai at the root.
  */
 
-const SETTINGS_TABS: readonly SettingsTab[] = ['memory', 'profile', 'general', 'usage', 'automation', 'agents', 'connections', 'models', 'scheduling', 'about', 'connectors']
+const SETTINGS_TABS: readonly SettingsTab[] = ['memory', 'profile', 'general', 'usage', 'agents', 'connections', 'models', 'scheduling', 'about', 'more']
+const DISCOVER_PAGES: readonly DiscoverPage[] = ['automation', 'connectors']
 
 export interface WebRoute {
   view: AppView
   /** In a route read from the address, the conversation's code, not its id. */
   conversationId?: string
   settingsTab?: SettingsTab
+  /** A page under Discover; absent for its bare list (a phone's first Discover screen). */
+  discoverPage?: DiscoverPage
 }
 
 /** 53-bit cyrb53 hash in base 36: short, stable, and synchronous. */
@@ -53,6 +58,10 @@ export function routeBase(pathname = window.location.pathname): string {
 export function readRoute(pathname = window.location.pathname): WebRoute {
   const parts = pathname.slice(routeBase(pathname).length).split('/').filter(Boolean).map(decodeURIComponent)
   if (parts[0] === 'contacts') return { view: 'contacts' }
+  // Discover pages live at the top level; /discover/<page> and the Settings
+  // tabs they moved from are older links that still land on them.
+  const discover = DISCOVER_PAGES.includes(parts[0] as DiscoverPage) ? parts[0] : parts[0] === 'discover' ? parts[1] : parts[0] === 'settings' && DISCOVER_PAGES.includes(parts[1] as DiscoverPage) ? parts[1] : undefined
+  if (parts[0] === 'discover' || discover) return { view: 'discover', ...(DISCOVER_PAGES.includes(discover as DiscoverPage) ? { discoverPage: discover as DiscoverPage } : {}) }
   if (parts[0] === 'settings') {
     const tab = SETTINGS_TABS.includes(parts[1] as SettingsTab) ? parts[1] as SettingsTab : 'profile'
     return { view: 'chats', settingsTab: tab }
@@ -63,6 +72,7 @@ export function readRoute(pathname = window.location.pathname): WebRoute {
 export function routePath(route: WebRoute, base = routeBase()): string {
   if (route.settingsTab) return `${base}/settings/${route.settingsTab}`
   if (route.view === 'contacts') return `${base}/contacts`
+  if (route.view === 'discover') return route.discoverPage ? `${base}/${route.discoverPage}` : `${base}/discover`
   return route.conversationId ? `${base}/chat/${conversationCode(route.conversationId)}` : `${base}/chat`
 }
 

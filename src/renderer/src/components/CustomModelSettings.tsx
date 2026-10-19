@@ -125,7 +125,6 @@ export function CustomModelSettings() {
             {draft.models.map((model, index) => <div className="custom-model-input-row" key={index}>
               <input aria-label={t("Model ID ") + (index + 1)} value={model} disabled={busy || testing} placeholder={t("Model ID, e.g. org/model")} onChange={e => change({ models: draft.models.map((value, i) => i === index ? e.target.value : value) })} />
               <input aria-label={t("Model display name ") + (index + 1)} value={draft.modelLabels?.[model] || ''} disabled={busy || testing} placeholder={t("Display name (optional)")} onChange={e => change({ modelLabels: { ...draft.modelLabels, [model]: e.target.value } })} />
-              <label className="custom-model-reasoning" title={t("The model accepts a thinking level")}><input type="checkbox" aria-label={t("Supports thinking ") + (index + 1)} checked={Boolean(model.trim() && draft.reasoningModels?.includes(model.trim()))} disabled={busy || testing || !model.trim()} onChange={e => { const id = model.trim(); const rest = (draft.reasoningModels ?? []).filter(item => item !== id); change({ reasoningModels: e.target.checked ? [...rest, id] : rest }) }} />{t("Thinking")}</label>
               <button className="icon-button" type="button" aria-label={t("Remove model ") + (index + 1)} disabled={busy || testing || draft.models.length === 1} onClick={() => change({ models: draft.models.filter((_, i) => i !== index) })}><Trash2 size={16} /></button>
             </div>)}
           </div>

@@ -38,12 +38,13 @@ describe('desktop authentication', () => {
     expect(() => (auth as any).requireBuiltInManifest(manifest)).toThrow('translation')
   })
 
-  it('offers a safe way back to the Douchat website after loopback login', () => {
+  it('offers the web app after a successful loopback login', () => {
     const page = createLoopbackSuccessPage()
 
     expect(page).toContain('登录成功')
-    expect(page).toContain('返回 Douchat 官网')
-    expect(page).toContain('href="https://douchat.ai"')
+    expect(page).toContain('打开 Douchat 网页版')
+    expect(page).toContain('href="https://app.douchat.ai"')
+    expect(page).not.toContain('返回 Douchat 官网')
     expect(page).not.toContain('douchat://')
   })
 
@@ -80,6 +81,8 @@ describe('desktop authentication', () => {
       const page = await response.text()
       expect(response.status).toBe(success ? 200 : 502)
       expect(page).toContain(success ? '登录成功' : '登录未完成')
+      // Signed in → the web app; a failed sign-in → back to the website.
+      expect(page).toContain(success ? 'href="https://app.douchat.ai"' : 'href="https://douchat.ai"')
       if (!success) {
         expect(page).not.toContain('登录成功')
         expect(page).toContain('HTTP 503')

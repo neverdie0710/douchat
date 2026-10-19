@@ -4910,9 +4910,14 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
 .remote-directory-dialog .secondary-button { padding: 9px 16px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
 .remote-directory-dialog .secondary-button:hover { color: var(--ink); }
 .remote-directory-dialog .primary-button { padding: 9px 18px; border-radius: 10px; font-size: calc(13px * var(--font-scale, .92)); }
-.connections-tabs { display: flex; gap: 6px; margin: 0 0 12px; }
-.connections-tabs button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); color: var(--ink); font: inherit; }
-.connections-tabs button.active { border-color: var(--accent-500); color: var(--accent-600); }
+.connections-tabs { display: inline-flex; max-width: 100%; gap: 2px; margin: 0 0 14px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--sidebar); }
+.connections-tabs button { padding: 6px 16px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.connections-tabs button:hover { color: var(--ink); }
+.connections-tabs button.active { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+[data-theme='dark'] .connections-tabs button.active { background: var(--surface); }
+.connection-peer-link { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+.connection-peer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.connection-add { display: flex; margin: 0 0 12px; }
 .connection-row { align-items: flex-start; }
 .connection-row > .detail-switch { flex: 0 0 auto; margin-top: 10px; }
 .connection-status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: calc(12px * var(--font-scale, .92)); }
@@ -5248,7 +5253,7 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
 [data-theme='dark'] .messenger .workspace.empty-conversation { --empty-page: #202124; }
 [data-theme='dark'] .empty-conversation-mark { opacity: .22; }
 
-.messenger .agent-modal.create-contact-modal { width: min(400px, calc(100vw - 40px)); padding: 24px; }
+.messenger .agent-modal.create-contact-modal { width: min(560px, calc(100vw - 40px)); padding: 24px; }
 .create-contact-modal .modal-heading { margin-bottom: 24px; }
 .create-contact-modal .modal-footer { justify-content: flex-end; gap: 10px; margin-top: 24px; }
 
@@ -5257,6 +5262,23 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
 .create-contact-modal .field-row { margin-bottom: 18px; gap: 8px; }
 .messenger .create-contact-modal .field-row :is(input, select) { border-radius: 8px; padding: 10px 12px; box-shadow: none; }
 .messenger .create-contact-modal .field-row :is(input, select):focus { border-color: var(--accent-400); box-shadow: 0 0 0 2px var(--accent-150); }
+/* Create agent: where it runs (left), then which agent harness (right). */
+.harness-picker { display: grid; grid-template-columns: minmax(130px, 2fr) minmax(0, 3fr); height: 220px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--canvas); }
+.harness-places { display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow-y: auto; border-right: 1px solid var(--line); background: var(--sidebar); }
+.harness-agents { display: flex; flex-direction: column; gap: 2px; padding: 6px; overflow-y: auto; }
+.harness-picker button { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: calc(13px * var(--font-scale, .92)); text-align: left; cursor: pointer; }
+.harness-picker button:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.harness-picker button.selected { background: var(--accent-050); color: var(--accent-700); }
+.harness-places button > svg { flex: 0 0 auto; color: var(--muted); }
+.harness-places button.selected > svg { color: var(--accent-600); }
+.harness-places button > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness-places button > small { color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); }
+.harness-agent-copy { display: grid; flex: 1; min-width: 0; }
+.harness-agent-copy :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.harness-agent-copy strong { font-weight: 500; }
+.harness-agent-copy small { color: var(--muted); font-size: calc(11px * var(--font-scale, .92)); }
+.harness-agents button > svg { flex: 0 0 auto; color: var(--accent-600); }
+.harness-agents .settings-note { margin: 8px; }
 .agent-source-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .agent-source-cards button { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); min-width: 0; min-height: 66px; align-items: center; gap: 10px; padding: 10px 30px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); color: var(--ink); text-align: left; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
 .agent-source-cards button:hover { border-color: var(--accent-300); background: color-mix(in srgb, var(--accent-050) 65%, var(--canvas)); transform: translateY(-1px); }
@@ -5491,15 +5513,6 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
 .routine-record-actions button.danger:hover:not(:disabled) { border-color: #f0cfcb; background: #fff3f1; color: #a44338; }
 .routine-record-actions button:disabled { opacity: .4; cursor: default; }
 
-.support-share-modal { width: min(560px, calc(100vw - 64px)); height: min(620px, calc(100vh - 64px)); }
-.support-share-form { display: grid; gap: 10px; padding: 0 20px 14px; border-bottom: 1px solid var(--line); }
-.support-share-form > p { margin: 0; color: var(--muted); font-size: calc(12px * var(--font-scale, .92)); line-height: 1.55; }
-.support-share-form textarea { width: 100%; resize: none; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--canvas); color: var(--ink); font: inherit; font-size: calc(12.5px * var(--font-scale, .92)); }
-.support-share-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.support-share-actions [role='radiogroup'] { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--surface); }
-.support-share-actions [role='radio'] { padding: 5px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: calc(12px * var(--font-scale, .92)); cursor: pointer; }
-.support-share-actions [role='radio'].selected { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px rgba(16, 23, 36, .08); }
-.routine-record-actions button.support-share-revoke { width: auto; padding: 0 10px; font: inherit; font-size: calc(12px * var(--font-scale, .92)); }
 .routine-record-copy > header span[data-status='revoked'], .routine-record-copy > header span[data-status='expired'] { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--faint); }
 [data-theme='dark'] .conversation-records-modal { background: #202124; box-shadow: 0 26px 90px rgba(0, 0, 0, .52); }
 [data-theme='dark'] .records-search { background: #292a2f; }
@@ -5775,7 +5788,7 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
   color: #2f333a;
 }
 
-.settings-modal .settings-heading {
+:is(.settings-modal, .discover-workspace) .settings-heading {
   padding-right: 34px;
   margin-bottom: 26px;
 }
@@ -5785,16 +5798,16 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
   padding-right: 0;
 }
 
-.settings-modal .settings-heading h1 {
+:is(.settings-modal, .discover-workspace) .settings-heading h1 {
   font-size: calc(25px * var(--font-scale, 0.92));
   letter-spacing: -0.035em;
 }
 
-.settings-modal .settings-content section {
+:is(.settings-modal, .discover-workspace) .settings-content section {
   margin: 26px 0;
 }
 
-.settings-modal .automation-list {
+:is(.settings-modal, .discover-workspace) .automation-list {
   display: grid;
   gap: 12px;
   max-width: 820px;
@@ -5829,7 +5842,7 @@ html:is([data-platform='win32'], [data-platform='web']) .messenger .app-rail {
 .automation-row-actions .icon-button { display: grid; width: 31px; height: 31px; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
 .automation-row-actions .icon-button:hover:not(:disabled) { border-color: var(--line); background: var(--canvas); color: var(--ink); }
 .automation-row-actions .automation-delete:hover:not(:disabled) { border-color: #f0cfcb; background: #fff3f1; color: #a44338; }
-.settings-modal .automation-empty { display: grid; max-width: 700px; min-height: 210px; place-content: center; justify-items: center; gap: 9px; margin-top: 0; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; }
+:is(.settings-modal, .discover-workspace) .automation-empty { display: grid; max-width: 700px; min-height: 210px; place-content: center; justify-items: center; gap: 9px; margin-top: 0; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; }
 .automation-empty strong { color: var(--ink); font-size: calc(14px * var(--font-scale, 0.92)); }
 .automation-empty p, .automation-footnote { margin: 0; color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); line-height: 1.6; }
 .automation-footnote { max-width: 820px; }
@@ -6856,10 +6869,8 @@ html.native-dialog-window,
   .messenger :is(.custom-model-form, .custom-model-delete) .modal-footer button { padding-inline: 12px; }
 }
 .custom-model-inputs { display: grid; gap: 8px; max-height: 208px; overflow-y: auto; padding: 3px; margin: -3px; }
-.custom-model-input-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto 32px; align-items: center; gap: 8px; }
+.custom-model-input-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; align-items: center; gap: 8px; }
 .custom-model-input-row input { flex: 1; }
-.custom-model-input-row .custom-model-reasoning { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
-.custom-model-input-row .custom-model-reasoning input { flex: none; margin: 0; }
 .local-model-thinking-note { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 .custom-model-input-row .icon-button { flex: 0 0 32px; color: var(--muted); }
 .custom-model-add { display: inline-flex; align-items: center; justify-self: start; gap: 6px; padding: 6px 0; border: 0; background: transparent; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
@@ -6871,13 +6882,20 @@ html.native-dialog-window,
 .agent-source-cards .agent-source-radio { display: grid; top: 10px; right: 10px; }
 .agent-source-copy strong { font-size: calc(12px * var(--font-scale, .92)); }
 .agent-source-copy small { color: var(--muted); font-size: calc(10px * var(--font-scale, .92)); line-height: 1.35; }
-.custom-model-selection { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 12px; }
-.custom-model-selection > .field-row { align-content: start; min-width: 0; margin: 0; gap: 8px; }
-.custom-model-selection + .settings-note { margin-top: 16px; }
-.custom-model-selection > .field-row > select { height: 42px; min-height: 42px; font-size: calc(13px * var(--font-scale, 0.92)); }
-.local-model-modal .custom-model-selection .field-row { min-width: 0; margin: 0; gap: 8px; }
-.messenger .local-model-modal .custom-model-selection select { min-width: 0; width: 100%; border-radius: 8px; padding: 10px 12px; box-shadow: none; }
-@media (max-width: 440px) { .custom-model-selection { grid-template-columns: 1fr; gap: 0; } }
+.custom-model-selection + .settings-note { margin-top: 4px; }
+.harness-picker.model-picker { height: 260px; }
+/* The two-column pickers open below their one-line selector. */
+.picker-popover-panel { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 20; border-radius: 11px; background: var(--canvas); box-shadow: 0 14px 34px rgba(24, 31, 44, .16), 0 2px 7px rgba(24, 31, 44, .08); }
+.picker-popover-panel > .harness-picker { height: 260px; }
+.native-dialog-window .picker-popover-panel { position: relative; top: auto; margin-top: 6px; }
+/* Narrow screens: the places become one scrolling row of chips above the list. */
+@media (max-width: 520px) {
+  .harness-picker, .picker-popover-panel > .harness-picker { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: min(340px, 60vh); }
+  .harness-places { flex-direction: row; align-items: center; gap: 4px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--line); }
+  .harness-places button { flex: 0 0 auto; padding: 6px 10px; border-radius: 999px; }
+}
+/* The name fills the line, so the place and chevron sit at the right edge. */
+.picker-popover .agent-select-trigger > span:not(.agent-select-logo) { flex: 1; min-width: 0; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Model configuration shares the permission dialog shell and actions. */
 .local-model-body { display: flex; flex-direction: column; gap: 16px; }
@@ -6925,6 +6943,11 @@ html.native-dialog-window,
 
 /* Local CLI settings use the same surfaces and controls in both themes. */
 .local-agent-heading-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* "Installed" carries the add/detect actions on its right, above the list they change. */
+.local-agent-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.local-agent-section-heading h2 { margin: 0 !important; }
+.local-agent-section-heading .secondary-button { height: 32px; padding: 0 12px; font-size: calc(12.5px * var(--font-scale, 0.92)); }
+.local-agent-source { max-width: 200px; height: 34px; padding: 0 28px 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); color: var(--ink); font: inherit; font-size: calc(13px * var(--font-scale, 0.92)); cursor: pointer; }
 .local-agent-editor { width: 100%; max-width: 540px; padding: 24px; color: var(--ink); background: var(--canvas); border: 1px solid var(--line); border-radius: 14px; box-sizing: border-box; }
 .local-agent-editor header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .local-agent-editor h2 { margin: 0; font-size: calc(20px * var(--font-scale, .92)); }
@@ -7149,8 +7172,8 @@ html.native-dialog-window,
 .about-community-copy h2 { margin: 0 0 8px; font-size: 16px; }
 .about-community-copy p { margin: 0 0 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .about-community-copy .about-link { color: var(--accent-600); }
-.settings-content .about-page > .about-update-card { margin-bottom: 0; }
-.settings-content .about-page > .about-community { margin-top: 0; }
+/* The page's own gap spaces its blocks; the settings section margin would stack on top of it. */
+.settings-content .about-page > :is(.about-update-card, .about-community) { margin: 0; }
 
 /* Remote agents: a small server glyph on the icon plus the host alias. */
 .local-agent-icon, .agent-select-logo { position: relative; }
@@ -7171,14 +7194,14 @@ html.native-dialog-window,
 
 /* The list and the conversation sit as one inset card on the rail surface:
    a small gutter on the top, right and bottom, rounded at the outer corners. */
-.messenger.app-shell.with-rail:not(.detached-chat) { --pane-inset: 6px; --pane-radius: 10px; background: var(--rail); }
-.messenger.app-shell.with-rail:not(.detached-chat) > .app-rail { border-right: 0; }
-.messenger.app-shell.with-rail:not(.detached-chat) > .app-rail + * {
+.messenger.app-shell.with-rail:not(.detached-chat, .compact) { --pane-inset: 6px; --pane-radius: 10px; background: var(--rail); }
+.messenger.app-shell.with-rail:not(.detached-chat, .compact) > .app-rail { border-right: 0; }
+.messenger.app-shell.with-rail:not(.detached-chat, .compact) > .app-rail + * {
   margin: var(--pane-inset) 0;
   border-radius: var(--pane-radius) 0 0 var(--pane-radius);
   box-shadow: 0 0 0 .5px color-mix(in srgb, var(--ink) 6%, transparent);
 }
-.messenger.app-shell.with-rail:not(.detached-chat) > .app-rail + * + * {
+.messenger.app-shell.with-rail:not(.detached-chat, .compact) > .app-rail + * + * {
   margin: var(--pane-inset) var(--pane-inset) var(--pane-inset) 0;
   border-radius: 0 var(--pane-radius) var(--pane-radius) 0;
   overflow: hidden;
@@ -7186,7 +7209,7 @@ html.native-dialog-window,
 }
 /* The list rail stays overflow-visible for its resize handle, so round the
    scrolling list itself to keep row highlights inside the card corner. */
-.messenger.app-shell.with-rail:not(.detached-chat) > .app-rail + * :is(.conversation-list, .contact-list) { border-bottom-left-radius: var(--pane-radius); }
+.messenger.app-shell.with-rail:not(.detached-chat, .compact) > .app-rail + * :is(.conversation-list, .contact-list) { border-bottom-left-radius: var(--pane-radius); }
 /* Overlay scrollbars: the native bar is hidden so it never takes a gutter
    from the rows, and OverlayScrollbar draws a thin thumb only while scrolling. */
 .messenger :is(.conversation-list, .message-scroll, .contact-list, .inspector-scroll) { scrollbar-width: none; }
@@ -7236,12 +7259,15 @@ html.native-dialog-window,
 /* Chats, contacts, settings, me: evenly spread like a phone tab bar. */
 .messenger.app-shell.compact .app-rail { justify-content: space-evenly; }
 .messenger.app-shell.compact .rail-spacer { display: none; }
+/* Four tabs on a phone: settings open from the profile avatar instead. */
+.messenger.app-shell.compact .rail-settings { display: none; }
 .messenger.app-shell.compact .rail-profile { order: 3; width: 30px; height: 30px; }
 
 .messenger.app-shell.compact .compact-back {
   position: absolute;
   z-index: 35;
-  top: 10px;
+  /* Centered on the 48px chat header line. */
+  top: 5px;
   left: 6px;
   display: grid;
   width: 38px;
@@ -7269,11 +7295,19 @@ html.native-dialog-window,
   max-height: 100dvh !important;
   border-radius: 0 !important;
 }
-.messenger.app-shell.compact .settings-modal { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto minmax(0, 1fr); }
-.messenger.app-shell.compact .settings-modal .settings-tabs { display: flex; flex-direction: row; gap: 4px; overflow-x: auto; padding: 8px 12px; }
-.messenger.app-shell.compact .settings-modal .settings-tabs button { flex: 0 0 auto; width: auto; padding: 0 12px; }
+/* Settings on a phone: the tab list, then a tab's page with a way back, like chats. */
+.settings-back, .settings-list-close { display: none; }
+.messenger.app-shell.compact .settings-modal { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr) !important; }
+.messenger.app-shell.compact .settings-modal[data-compact-view='page'] .settings-sidebar { display: none; }
+.messenger.app-shell.compact .settings-modal[data-compact-view='list'] .settings-content { display: none; }
+.messenger.app-shell.compact .settings-modal .settings-sidebar { width: auto; min-width: 0; overflow-y: auto; border-right: 0; }
+.messenger.app-shell.compact .settings-modal .settings-modal-title { display: flex; align-items: center; justify-content: space-between; height: 48px; padding: 0 8px 0 20px; }
+.messenger.app-shell.compact .settings-modal .settings-list-close { display: grid; width: 38px; height: 38px; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--ink); }
+.messenger.app-shell.compact .settings-modal .settings-tabs { display: flex; flex-direction: column; gap: 2px; padding: 4px 12px 16px; }
+.messenger.app-shell.compact .settings-modal .settings-tabs button { width: 100%; height: 48px; justify-content: flex-start; padding: 0 12px; }
 .messenger.app-shell.compact .settings-modal .settings-tabs button span { display: inline; }
-.messenger.app-shell.compact .settings-modal .settings-modal-title { display: none; }
+.messenger.app-shell.compact .settings-modal .settings-back { position: absolute; z-index: 5; top: 5px; left: 6px; display: flex; align-items: center; gap: 2px; height: 38px; padding: 0 10px 0 4px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; }
+.messenger.app-shell.compact .settings-modal .settings-content { position: relative; padding-top: 52px; }
 
 /* ─────────────────────────────── Discover ─────────────────────────────── */
 
@@ -7327,3 +7361,33 @@ html.native-dialog-window,
 
 /* The web app's About page links to the desktop download instead of updating itself. */
 .about-action a.primary-button { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+
+/* ───────────────────────────── More from Us ───────────────────────────── */
+
+.settings-tabs-divider { height: 1px; margin: 8px 13px; background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.more-apps { display: grid; max-width: 820px; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.more-app { display: flex; align-items: center; gap: 14px; padding: 15px 18px; color: var(--ink); text-decoration: none; }
+.more-app + .more-app { border-top: 1px solid color-mix(in srgb, var(--ink) 7%, transparent); }
+.more-app:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.more-app:focus-visible { outline: 2px solid var(--accent-500); outline-offset: -2px; }
+.more-app-icon { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 8px; object-fit: contain; }
+.more-app-letter { display: grid; place-items: center; background: var(--faint); color: #fff; font-size: 16px; font-weight: 600; }
+.more-app-copy { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.more-app-copy strong { font-size: calc(14px * var(--font-scale, 0.92)); font-weight: 600; }
+.more-app-copy span { color: var(--muted); font-size: calc(12.5px * var(--font-scale, 0.92)); line-height: 1.5; }
+.more-app-open { flex: 0 0 auto; color: var(--faint); }
+.more-app:hover .more-app-open { color: var(--ink); }
+[data-theme='dark'] .more-apps { background: #28292e; }
+
+/* Agents found on a server: the Settings → Agents row, picked with a checkbox. */
+.discovered-agents { display: grid; max-height: min(52vh, 460px); overflow: auto; margin: 12px 0 8px; }
+.local-agent-editor label.discovered-agent { display: flex; align-items: center; gap: 14px; padding: 12px 2px; border-top: 1px solid var(--line); font-weight: 400; cursor: pointer; }
+.discovered-agent:last-child { border-bottom: 1px solid var(--line); }
+.discovered-agent .local-agent-icon { width: 40px; height: 40px; }
+.discovered-agent .local-agent-icon img { width: 26px; height: 26px; object-fit: contain; }
+.discovered-agent .local-agent-copy { gap: 5px; padding-top: 0; }
+.discovered-agent .local-agent-version { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.local-agent-editor .discovered-agent input[type='checkbox'] { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; accent-color: var(--accent-600); }
+.local-agent-editor label.discovered-agent.added { cursor: default; }
+.discovered-agent.added :is(.local-agent-icon, .local-agent-copy) { opacity: .55; }
+.discovered-agent-added { color: var(--muted); font-size: calc(12px * var(--font-scale, 0.92)); white-space: nowrap; }

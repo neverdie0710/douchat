@@ -164,7 +164,7 @@ class RelayHub {
     const daemon = daemonOf(spec)
     if (!backend) throw new Error('Sign in to Douchat to use douchat-host connections.')
     const owner = backend.ownerId()
-    if (owner !== daemon.ownerId) throw new Error('This douchat-host belongs to another Douchat account. Sign in with that account to use it.')
+    if (owner !== daemon.ownerId) throw new Error('This host was added with another Douchat account. Sign in with that account to use it, or delete it and add it again.')
     signal?.throwIfAborted()
     const streamId = randomUUID()
     const signed = backend.sign(daemon.hostId, 'relay.open', { streamId, ...payload }, daemon.serviceUrl)

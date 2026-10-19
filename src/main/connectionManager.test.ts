@@ -102,6 +102,26 @@ describe('connection state machine', () => {
   })
 })
 
+describe('connections per account', () => {
+  it('shows and checks a douchat-host only while the account that added it is signed in', async () => {
+    const store = new ConnectionStore(join(directory, 'connections.json'))
+    const check = vi.fn(async () => 1)
+    const manager = new ConnectionManager(store, async () => [], async () => 1)
+    manager.setDaemonBackend({ check, discover: async () => [], revoke: async () => {} })
+    const ssh = await store.save({ name: 'Box', ssh: { host: 'box' } })
+    const host = await store.saveDaemon({ name: 'Mac', daemon: { hostId: `hst_${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}`, serviceUrl: 'https://douchat.ai', ownerId: 'alice' } })
+    const ids = async () => (await manager.list()).map(item => item.id)
+    expect(await ids()).toEqual([ssh.id])
+    await manager.setAccount('bob')
+    expect(await ids()).toEqual([ssh.id])
+    expect(check).not.toHaveBeenCalled()
+    await manager.setAccount('alice')
+    expect((await ids()).sort()).toEqual([ssh.id, host.id].sort())
+    await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1))
+    manager.stop()
+  })
+})
+
 describe('agent discovery', () => {
   it('accepts only known CLIs at absolute, normalized paths and trims hostile versions', () => {
     const output = [

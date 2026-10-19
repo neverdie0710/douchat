@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addCustomLocalAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, findDesktopApp, remoteAgentPlacement, removeCustomLocalAgent, setConnectionAccount, updateLocalAgent, validateLocalAgent, hasRemoteAgent } from './localAgents'
 import { resolveExecutable } from './shellPath'
 vi.mock('./shellPath', () => ({ resolveExecutable: vi.fn() }))
 let registryDirectory = ''
@@ -124,6 +124,17 @@ describe('agents on connections', () => {
     await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remote: { transport: 'ssh', host: 'box', adapter: 'codex', executable: 'codex', args: [] } })).rejects.toThrow(/connection first/)
     await expect(addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(`conn_${'0'.repeat(32)}`) })).rejects.toThrow(/connection/)
   })
+  it('hides agents on a douchat-host added by another account, with the host', async () => {
+    const host = await connections().saveDaemon({ name: 'Mac', daemon: { hostId: `hst_${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}`, serviceUrl: 'https://douchat.ai', ownerId: 'alice' } })
+    const id = await addCustomLocalAgent({ name: 'Codex · Mac', command: 'codex', remoteAgent: binding(host.id) })
+    const listed = async () => (await detectLocalAgents({ executable: async () => undefined, desktopApp: async () => undefined })).some(agent => agent.id === id)
+    try {
+      setConnectionAccount('bob')
+      expect(await listed()).toBe(false)
+      setConnectionAccount('alice')
+      expect(await listed()).toBe(true)
+    } finally { setConnectionAccount('') }
+  })
   it('runs on the connection and is identified by it, changing identity only when the server changes', async () => {
     const connection = await connections().save({ name: 'Box', ssh: { host: 'box', user: 'me' } })
     const id = await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
@@ -145,10 +156,19 @@ describe('agents on connections', () => {
     await connections().setEnabled(connection.id, false)
     await expect(remoteAgentPlacement(id)).rejects.toThrow(/turned off/)
     await expect(validateLocalAgent(id)).rejects.toThrow()
-    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)).toMatchObject({ unavailable: 'disabled', installed: false, remoteAgent: binding(connection.id) })
+    expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)).toMatchObject({ unavailable: 'disabled', installed: false, connectionName: 'Box', remoteAgent: binding(connection.id) })
     await connections().remove(connection.id)
     await expect(remoteAgentPlacement(id)).rejects.toThrow(/removed/)
     expect((await detectLocalAgents({ desktopApp: async () => undefined })).find(agent => agent.id === id)?.unavailable).toBe('missing')
+  })
+  it('knows which executables are already added on a connection', async () => {
+    const connection = await connections().save({ name: 'Box', ssh: { host: 'box' } })
+    const other = await connections().save({ name: 'Other', ssh: { host: 'other' } })
+    expect(await hasRemoteAgent(connection.id, 'codex')).toBe(false)
+    await addCustomLocalAgent({ name: 'Remote', command: 'codex', remoteAgent: binding(connection.id) })
+    expect(await hasRemoteAgent(connection.id, 'codex')).toBe(true)
+    expect(await hasRemoteAgent(connection.id, '/usr/bin/codex')).toBe(false)
+    expect(await hasRemoteAgent(other.id, 'codex')).toBe(false)
   })
   it('still rejects arguments that disable the sandbox', async () => {
     const connection = await connections().save({ name: 'Box', ssh: { host: 'box' } })

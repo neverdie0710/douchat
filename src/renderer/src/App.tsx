@@ -26,6 +26,7 @@ import type {
 } from '../../shared/types'
 import { SettingsPanel, type SettingsTab } from './components/SettingsPanel'
 import { AppRail, type AppView } from './components/AppRail'
+import { DiscoverContent, DiscoverSidebar, type DiscoverPage } from './components/DiscoverView'
 import { COMPACT_LAYOUT_QUERY, readRoute, resolveConversation, showRoute, usesWebRoutes } from './webRoute'
 import { BotInbox } from './components/BotInbox'
 import { MemberProfilePopover, type ProfileAnchor } from './components/MemberProfilePopover'
@@ -83,10 +84,11 @@ function WorkspaceApp(): ReactElement {
     updateSettingsOpen(open)
   }
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialRoute?.settingsTab ?? 'profile')
+  const [discoverPage, setDiscoverPage] = useState<DiscoverPage>(initialRoute?.discoverPage ?? 'automation')
   // The web app mirrors the page in its address, and follows Back/Forward.
   // On a phone the list and the open chat (or contact) are separate screens.
   const compact = useCompactLayout()
-  const [detailOpen, setDetailOpen] = useState(Boolean(initialRoute?.conversationId))
+  const [detailOpen, setDetailOpen] = useState(Boolean(initialRoute?.conversationId || initialRoute?.discoverPage))
   /** The open chat added a history entry, so Back (or the back button) returns to the list. */
   const detailPushed = useRef(false)
   const openDetail = (): void => {
@@ -101,14 +103,16 @@ function WorkspaceApp(): ReactElement {
   useEffect(() => {
     if (!usesWebRoutes()) return
     const showsChat = view === 'chats' && (!compact || detailOpen)
-    showRoute({ view, conversationId: showsChat ? activeId || undefined : undefined, settingsTab: settingsOpen ? settingsTab : undefined },
+    showRoute({ view, conversationId: showsChat ? activeId || undefined : undefined, settingsTab: settingsOpen ? settingsTab : undefined,
+      discoverPage: view === 'discover' && (!compact || detailOpen) ? discoverPage : undefined },
       { separateScreens: compact, awaitingChat: Boolean(routedConversation.current) })
-  }, [view, activeId, settingsOpen, settingsTab, compact, detailOpen])
+  }, [view, activeId, settingsOpen, settingsTab, compact, detailOpen, discoverPage])
   useEffect(() => {
     if (!usesWebRoutes()) return
     const follow = () => {
       const route = readRoute()
       setView(route.view)
+      if (route.discoverPage) setDiscoverPage(route.discoverPage)
       const routed = resolveConversation(route.conversationId, snapshotRef.current?.conversations ?? [])
       if (routed) setActiveId(routed)
       updateSettingsOpen(Boolean(route.settingsTab))
@@ -117,6 +121,7 @@ function WorkspaceApp(): ReactElement {
         // Back from a chat on a phone is back to the list.
         if (!route.conversationId) detailPushed.current = false
         if (route.view === 'chats') setDetailOpen(Boolean(route.conversationId))
+        if (route.view === 'discover') setDetailOpen(Boolean(route.discoverPage))
       }
     }
     window.addEventListener('popstate', follow)
@@ -174,8 +179,10 @@ function WorkspaceApp(): ReactElement {
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const scanInFlight = useRef(false)
+  // A scan asked for while one runs (say, the account changed) runs right after it.
+  const scanAgain = useRef(false)
   async function scanAgents(): Promise<void> {
-    if (scanInFlight.current) return
+    if (scanInFlight.current) { scanAgain.current = true; return }
     scanInFlight.current = true
     let scanTimer: ReturnType<typeof setTimeout> | undefined
     setScanning(true)
@@ -185,11 +192,17 @@ function WorkspaceApp(): ReactElement {
       new Promise<LocalAgent[]>((_, reject) => { scanTimer = setTimeout(() => reject(new Error('检测暂未完成，请稍后点击检测重试。')), 20000) })
     ])) }
     catch (error) { setScanError(messageSendError(error)) }
-    finally { clearTimeout(scanTimer); scanInFlight.current = false; setScanning(false); setLocalAgentsLoaded(true) }
+    finally {
+      clearTimeout(scanTimer); scanInFlight.current = false; setScanning(false); setLocalAgentsLoaded(true)
+      if (scanAgain.current) { scanAgain.current = false; void scanAgents() }
+    }
   }
+  // Agents on a douchat-host belong to the account that added the host, so
+  // the list is read again whenever a different account signs in.
+  const signedInAccountId = authState.status === 'signed-in' ? authState.user.id : ''
   useEffect(() => {
     void scanAgents()
-  }, [])
+  }, [signedInAccountId])
 
   useEffect(() => {
     void window.douchat.getAuthState().then(setAuthState)
@@ -529,7 +542,24 @@ function WorkspaceApp(): ReactElement {
 
       {compact && detailOpen && <button type="button" className="compact-back" onClick={() => showInspector ? setShowInspector(false) : closeDetail()} aria-label={t('Back')} title={t('Back')}><ChevronLeft size={22} /></button>}
 
-      {view === 'contacts' ? (
+      {view === 'discover' ? (
+        <>
+          <DiscoverSidebar page={discoverPage} onSelect={(next) => { setDiscoverPage(next); openDetail() }} />
+          <DiscoverContent
+            page={discoverPage}
+            userId={authState.user.id}
+            userName={authState.user.name}
+            userAvatar={authState.user.image || ''}
+            routines={snapshot.routines}
+            runs={snapshot.runs}
+            agents={snapshot.agents}
+            conversations={snapshot.conversations}
+            onDeleteRoutine={async (id) => setSnapshot(await window.douchat.deleteRoutine(id))}
+            onSetRoutineEnabled={async (id, enabled) => setSnapshot(await window.douchat.setRoutineEnabled(id, enabled))}
+            onRunRoutineNow={(id) => window.douchat.runRoutineNow(id)}
+          />
+        </>
+      ) : view === 'contacts' ? (
         <>
           <ContactList
             snapshot={uiSnapshot}
@@ -749,10 +779,6 @@ function WorkspaceApp(): ReactElement {
         <SettingsPanel
           user={authState.user}
           agents={localAgents}
-          routines={snapshot.routines}
-          runs={snapshot.runs}
-          workspaceAgents={snapshot.agents}
-          conversations={snapshot.conversations}
           scanning={scanning}
           error={scanError}
           tab={settingsTab}
@@ -774,9 +800,6 @@ function WorkspaceApp(): ReactElement {
           onDetect={() => void scanAgents()}
           onLocalAgentsChange={setLocalAgents}
           onRemoveCustom={async (id) => setLocalAgents(await window.douchat.removeCustomLocalAgent(id))}
-          onDeleteRoutine={async (id) => setSnapshot(await window.douchat.deleteRoutine(id))}
-          onSetRoutineEnabled={async (id, enabled) => setSnapshot(await window.douchat.setRoutineEnabled(id, enabled))}
-          onRunRoutineNow={(id) => window.douchat.runRoutineNow(id)}
         />
       )}
       </DialogErrorBoundary>

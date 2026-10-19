@@ -69,9 +69,30 @@ export class ConnectionManager {
   private readonly listeners = new Set<(id: string, status: ConnectionStatus) => void>()
   private stopped = false
   private daemon?: DaemonBackend
+  /** The signed-in account; '' while signed out. */
+  private accountId = ''
   constructor(readonly store: ConnectionStore, private readonly agentsOn: (id: string) => Promise<string[]>, private readonly sshCheck: (connection: RemoteConnection) => Promise<number> = defaultCheck) {}
 
   setDaemonBackend(backend: DaemonBackend): void { this.daemon = backend }
+
+  /**
+   * A douchat-host is bound to the account that added it and works only for
+   * that account, so it is shown and checked only while that account is signed
+   * in. SSH connections use this computer's keys and stay with the computer.
+   */
+  async setAccount(accountId: string): Promise<void> {
+    if (accountId === this.accountId) return
+    this.accountId = accountId
+    for (const connection of await this.store.list()) {
+      if (connection.kind !== 'daemon') continue
+      if (this.visible(connection) && connection.enabled) void this.refresh(connection.id)
+      else { this.clear(connection.id); this.entries.delete(connection.id) }
+    }
+  }
+
+  private visible(connection: RemoteConnection): boolean {
+    return connection.kind !== 'daemon' || (Boolean(this.accountId) && connection.daemon?.ownerId === this.accountId)
+  }
   private daemonBackend(): DaemonBackend {
     if (!this.daemon) throw new Error('Daemon connections are unavailable.')
     return this.daemon
@@ -88,7 +109,7 @@ export class ConnectionManager {
   status(id: string): ConnectionStatus { return this.entries.get(id)?.status ?? { state: 'disabled' } }
 
   async list(): Promise<ConnectionView[]> {
-    const connections = await this.store.list()
+    const connections = (await this.store.list()).filter(connection => this.visible(connection))
     return Promise.all(connections.map(async connection => ({
       ...connection, label: connectionLabel(connection), agentIds: await this.agentsOn(connection.id),
       status: connection.enabled ? this.entries.get(connection.id)?.status ?? { state: 'connecting' } : { state: 'disabled' }
@@ -97,7 +118,7 @@ export class ConnectionManager {
 
   /** Start checking every enabled connection. */
   async start(): Promise<void> {
-    for (const connection of await this.store.list()) if (connection.enabled) void this.refresh(connection.id)
+    for (const connection of await this.store.list()) if (connection.enabled && this.visible(connection)) void this.refresh(connection.id)
   }
 
   stop(): void {
@@ -174,7 +195,7 @@ export class ConnectionManager {
     let checked: RemoteConnection | undefined
     const work = (async () => {
       const connection = await this.store.get(id)
-      if (this.stopped || !connection || !connection.enabled) { this.clear(id); return }
+      if (this.stopped || !connection || !connection.enabled || !this.visible(connection)) { this.clear(id); return }
       checked = connection
       const entry = this.entries.get(id)
       if (!entry || entry.status.state !== 'connected') this.publish(id, { state: 'connecting' })

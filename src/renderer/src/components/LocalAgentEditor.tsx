@@ -17,8 +17,12 @@ const DEFAULT_COMMANDS: Record<RemoteAgentAdapter, string> = {
   kimi: 'kimi', openclaw: 'openclaw', fastclaw: 'fastclaw', hermes: 'hermes', omp: 'omp', custom: ''
 }
 
-export function LocalAgentEditor({ agent, onSaved, onClose }: {
+const LOCAL = '@local'
+
+export function LocalAgentEditor({ agent, connectionId: initialConnection, onSaved, onClose }: {
   agent?: LocalAgent
+  /** For a new agent: start on this server connection (the one Settings → Agents is showing). */
+  connectionId?: string
   onSaved: (agents: LocalAgent[]) => void
   onClose: () => void
 }) {
@@ -27,9 +31,9 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
   const [args, setArgs] = useState((agent?.remoteAgent?.args ?? agent?.args ?? []).join('\n'))
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
   // The run location is fixed once saved; only new custom agents can choose it.
-  const [location, setLocation] = useState<'local' | 'remote'>(agent?.remoteAgent ? 'remote' : 'local')
+  const [location, setLocation] = useState<'local' | 'remote'>(agent?.remoteAgent || (!agent && initialConnection) ? 'remote' : 'local')
   const [adapter, setAdapter] = useState<RemoteAgentAdapter>(agent?.remoteAgent?.adapter ?? 'codex')
-  const [connectionId, setConnectionId] = useState(agent?.connectionId ?? '')
+  const [connectionId, setConnectionId] = useState(agent?.connectionId ?? (agent ? '' : initialConnection ?? ''))
   const [connections, setConnections] = useState<ConnectionView[]>()
   const [advanced, setAdvanced] = useState(Boolean(agent?.remoteAgent && (agent.remoteAgent.args.length || agent.remoteAgent.executable !== DEFAULT_COMMANDS[agent.remoteAgent.adapter])))
   const [executable, setExecutable] = useState(agent?.remoteAgent?.executable ?? 'codex')
@@ -105,22 +109,26 @@ export function LocalAgentEditor({ agent, onSaved, onClose }: {
           }} />
         </div>
         <label>{t('Name')}<input autoFocus required maxLength={80} value={name} onChange={event => { setName(event.target.value); changed() }} /></label>
-        {canChooseLocation && <div className="local-agent-location" role="radiogroup" aria-label={t('Run location')}>
-          <span>{t('Run location')}</span>
-          <label><input type="radio" name="location" checked={!remote} onChange={() => { setLocation('local'); changed() }} />{t('This computer')}</label>
-          <label><input type="radio" name="location" checked={remote} onChange={() => { setLocation('remote'); changed() }} />{t('Remote server')}</label>
-        </div>}
+        {/* One choice: this computer or a specific server connection. */}
+        {canChooseLocation && <label>{t('Run location')}<select aria-label={t('Run location')} value={remote ? connectionId : LOCAL} onChange={event => {
+          if (event.target.value === LOCAL) setLocation('local')
+          else { setLocation('remote'); setConnectionId(event.target.value) }
+          changed()
+        }}>
+          <option value={LOCAL}>{t('This computer')}</option>
+          {connections?.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : ` (${t('Turned off')})`}</option>)}
+        </select></label>}
+        {canChooseLocation && connections && !connections.length && <p className="settings-note">{t('To run it on a server, add the server in Settings → Connections first.')}</p>}
         {!remote && <>
           <label>{t('Executable path')}<input required maxLength={2048} value={command} placeholder={agent?.path || '/path/to/agent'} spellCheck={false} onChange={event => { setCommand(event.target.value); changed() }} /></label>
           <label>{t('Startup arguments')}<textarea value={args} rows={4} spellCheck={false} placeholder={'--model\nmy-model'} onChange={event => { setArgs(event.target.value); changed() }} /></label>
           <p className="settings-note">{t(agent && !agent.custom ? 'One argument per line. Added to the built-in launch arguments.' : 'One argument per line. Use {prompt} for the message; otherwise it is appended as the last argument.')}</p>
         </>}
         {remote && <>
-          <label>{t('Connection')}<select value={connectionId} onChange={event => { setConnectionId(event.target.value); changed() }}>
+          {!canChooseLocation && <label>{t('Connection')}<select value={connectionId} onChange={event => { setConnectionId(event.target.value); changed() }}>
             {!connection && <option value="">{t(connections && !connections.length ? 'No connections yet' : 'Choose a connection')}</option>}
-            {connections?.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name} · {item.label}{item.enabled ? '' : ` (${t('Turned off')})`}</option>)}
-          </select></label>
-          {connections && !connections.length && <p className="settings-note">{t('Add your server in Settings → Connections first.')}</p>}
+            {connections?.map(item => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : ` (${t('Turned off')})`}</option>)}
+          </select></label>}
           {agent?.unavailable && <p className="settings-error" role="alert">{t(agent.unavailable === 'disabled' ? 'This agent\'s connection is turned off.' : 'This agent\'s connection was removed. Choose another one.')}</p>}
           <label>{t('Agent type')}<select value={adapter} onChange={event => {
             const next = event.target.value as RemoteAgentAdapter

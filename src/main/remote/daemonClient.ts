@@ -175,7 +175,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
 
   private ownDaemon(connection: RemoteConnection): NonNullable<RemoteConnection['daemon']> {
     if (connection.kind !== 'daemon' || !connection.daemon) throw new Error('This is not a daemon connection.')
-    if (connection.daemon.ownerId !== this.identity().id) throw new Error('This daemon belongs to another Douchat account. Sign in with that account to use it.')
+    if (connection.daemon.ownerId !== this.identity().id) throw new Error('This host was added with another Douchat account. Sign in with that account to use it, or delete it and add it again.')
     return connection.daemon
   }
 

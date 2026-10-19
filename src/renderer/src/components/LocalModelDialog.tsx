@@ -2,9 +2,10 @@ import { useContext, useEffect, useRef, useState, type ReactElement } from 'reac
 import { X } from 'lucide-react'
 import type { AgentConfig, ModelOption } from '../../../shared/types'
 import { CustomModelSelection } from './CustomModelSelection'
+import { remoteAdapter } from './RemoteMark'
 import { configurableLocalAgents, localModelId, type LocalModelList } from '../../../shared/localModels'
-import type { CustomModelConfig } from '../../../shared/customModels'
-import { DEFAULT_CLOUD_THINKING_LEVEL, THINKING_LEVELS, THINKING_LEVEL_LABELS, localThinkingLevels, type ThinkingLevel } from '../../../shared/thinkingLevels'
+import { customDefaultThinking, type CustomModelConfig } from '../../../shared/customModels'
+import { THINKING_LEVELS, THINKING_LEVEL_LABELS, localThinkingLevels, type ThinkingLevel } from '../../../shared/thinkingLevels'
 import { t, tr } from '../preferences'
 import { EmbeddedAgentSettings, AgentDialogSurface as NativeDialog } from './AgentDialogSurface'
 import { localAgentDisplayName } from './common'
@@ -44,7 +45,8 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [agent.id, revision, custom])
-  const supported = configurableLocalAgents.includes(agent.localAgentId || '')
+  // A server agent supports what the CLI it runs supports.
+  const supported = configurableLocalAgents.includes(remoteAdapter(agent.localAgentId) ?? agent.localAgentId ?? '')
   const selectedProvider = customModels?.providers.find(provider => provider.id === customProviderId)
   const validSelection = customProviderId === '@default' ? Boolean(customModels?.defaultModel) : customProviderId === 'cloud' ? model === 'douchat-default' || cloudModels.some(item => item.model === model) : selectedProvider?.models.includes(model)
   const localModels = list?.models ?? []
@@ -52,11 +54,10 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
   const cloudSelected = custom && customProviderId === 'cloud'
   const reasoningProvider = customProviderId === '@default' ? customModels?.providers.find(provider => customModels.defaultModel.startsWith(provider.id + '/')) : selectedProvider
   const reasoningModel = customProviderId === '@default' ? customModels?.defaultModel.slice((reasoningProvider?.id.length ?? 0) + 1) : model
-  const thinkingLevels: readonly ThinkingLevel[] = !custom ? localThinkingLevels(agent.localAgentId)
-    : cloudSelected ? []
-    : reasoningProvider?.reasoningModels?.includes(reasoningModel ?? '') ? THINKING_LEVELS : []
+  // Any custom model may think; "default" is off unless the model was marked as thinking before.
+  const thinkingLevels: readonly ThinkingLevel[] = !custom ? localThinkingLevels(agent.localAgentId) : cloudSelected ? [] : THINKING_LEVELS
   const thinkingSupported = thinkingLevels.length > 0
-  const defaultThinkingLabel = custom ? tr('Default ({level})', { level: t(THINKING_LEVEL_LABELS[DEFAULT_CLOUD_THINKING_LEVEL]) }) : t('Use agent’s thinking setting')
+  const defaultThinkingLabel = custom ? tr('Default ({level})', { level: t(THINKING_LEVEL_LABELS[customDefaultThinking(reasoningProvider, reasoningModel ?? '')]) }) : t('Use agent’s thinking setting')
   return <NativeDialog width={560} className="modal-backdrop" onClose={() => !saving && onClose()}>
     <form className="agent-modal agent-permissions-modal local-model-modal" role="dialog" aria-modal="true" aria-labelledby="local-model-title" onSubmit={async event => {
       event.preventDefault()
@@ -103,8 +104,8 @@ export function LocalModelDialog({ agent, cloudModels = [], onModelSettings, onC
         </select></label>
       </div>
       <p className="local-model-thinking-note">{!thinkingSupported
-        ? custom ? t("This model is not marked as supporting thinking. Enable it in Settings → Models.") : t("This local agent does not support a thinking level.")
-        : t("Higher levels answer more carefully but slower and cost more.")}</p>
+        ? t("This local agent does not support a thinking level.")
+        : custom ? t("Choose a level only if this model supports thinking. Higher levels answer more carefully but slower and cost more.") : t("Higher levels answer more carefully but slower and cost more.")}</p>
       </>}
       {!custom && !supported && <p className="local-model-note">{t('This tool does not support a per-conversation model override.')}</p>}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}

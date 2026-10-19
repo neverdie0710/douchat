@@ -26,6 +26,11 @@ interface CustomLocalAgentDefinition extends CustomLocalAgentInput {
 const CUSTOM_ID = /^custom:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 let connectionStore: ConnectionStore | undefined
+/** The signed-in account. Agents on a douchat-host added by another account are hidden, like the host itself. */
+let connectionAccountId = ''
+export function setConnectionAccount(accountId: string): void { connectionAccountId = accountId }
+const otherAccountHost = (connection: RemoteConnection | undefined): boolean =>
+  connection?.kind === 'daemon' && connection.daemon?.ownerId !== connectionAccountId
 export function configureLocalAgentRegistry(userDataPath?: string, connections?: ConnectionStore): void {
   customRegistryPath = userDataPath ? join(userDataPath, 'local-agents.json') : undefined
   connectionStore = userDataPath ? connections ?? new ConnectionStore(join(userDataPath, 'connections.json')) : undefined
@@ -212,6 +217,10 @@ async function validatedInput(input: CustomLocalAgentInput): Promise<CustomLocal
   if (value.remoteAgent && !(await connectionStore?.get(value.remoteAgent.connectionId))) throw new Error('Choose a server connection.')
   return value
 }
+/** Whether an agent already runs this executable on this connection, so a scan never adds it twice. */
+export async function hasRemoteAgent(connectionId: string, executable: string): Promise<boolean> {
+  return (await customDefinitions()).some(item => item.remoteAgent?.connectionId === connectionId && item.remoteAgent.executable === executable)
+}
 export async function addCustomLocalAgent(input: CustomLocalAgentInput): Promise<string> {
   const value = await validatedInput(input)
   const id = `custom:${randomUUID()}`
@@ -366,19 +375,22 @@ async function detectLocalAgentsInternal(dependencies: DetectionDependencies = {
     ...localAgentCatalog.map(([id, name, command, appNames]) => [id, name, command, appNames, false] as const),
     ...custom.filter(item => CUSTOM_ID.test(item.id)).map(({ id, name, command }) => [id, name, command, [], true] as const)
   ]
-  return Promise.all(definitions.filter(([id]) => !onlyId || id === onlyId).map(async ([id, name, command, appNames, isCustom]) => {
+  const hidden = new Set(custom.filter(item => item.remoteAgent && otherAccountHost(connections.find(entry => entry.id === item.remoteAgent!.connectionId))).map(item => item.id))
+  return Promise.all(definitions.filter(([id]) => (!onlyId || id === onlyId) && !hidden.has(id)).map(async ([id, name, command, appNames, isCustom]) => {
     const override = custom.find(item => item.id === id)
     // Remote agents are not resolved through this computer's PATH; the server is probed at launch.
     if (override?.remoteAgent && isCustom) {
       const placement = await placementOf(override, connections)
+      // Shown wherever the agent's server is named; the address stays in Settings → Connections.
+      const connectionName = connections.find(item => item.id === override.remoteAgent!.connectionId)?.name
       if (placement && 'daemon' in placement) return { id, name: override.name, command: override.remoteAgent.executable, args: override.remoteAgent.args, avatar: override.avatar,
         installed: true, discovered: true, version: placement.daemon.label, chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true,
-        connectionId: placement.connection.id, remoteAgent: override.remoteAgent, daemon: placement.daemon } satisfies LocalAgent
+        connectionId: placement.connection.id, connectionName, remoteAgent: override.remoteAgent, daemon: placement.daemon } satisfies LocalAgent
       const daemon = daemonAgents.get(id)
-      if (placement && 'spec' in placement) return { ...remoteLocalAgent(id, override.name, override.avatar, placement.spec, placement.target, placement.connection.id), remoteAgent: override.remoteAgent }
+      if (placement && 'spec' in placement) return { ...remoteLocalAgent(id, override.name, override.avatar, placement.spec, placement.target, placement.connection.id), connectionName, remoteAgent: override.remoteAgent }
       // Kept in the list so the owner can see and fix it; never launched.
       return { id, name: override.name, command: override.remoteAgent.executable, args: override.remoteAgent.args, avatar: override.avatar, installed: false, discovered: true,
-        chatSupported: true, status: 'not-found', authentication: 'unchecked', custom: true, connectionId: override.remoteAgent.connectionId,
+        chatSupported: true, status: 'not-found', authentication: 'unchecked', custom: true, connectionId: override.remoteAgent.connectionId, connectionName,
         remoteAgent: override.remoteAgent, unavailable: placement?.unavailable ?? 'missing', ...(daemon ? { daemon: { connectionId: daemon.connectionId, hostId: daemon.hostId, label: daemon.label } } : {}) }
     }
     name = override?.name ?? name

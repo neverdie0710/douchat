@@ -16,6 +16,7 @@ import {
   createDesktopLoginUrl,
   DESKTOP_AUTH_CLIENT_ID,
   DOUCHAT_PRODUCTION_ORIGIN,
+  DOUCHAT_WEB_APP_ORIGIN,
   parseDesktopAuthCallback
 } from './authProtocol'
 import type { DeviceIdentity } from './deviceIdentity'
@@ -51,7 +52,12 @@ function createLoopbackResultPage(error?: string): string {
   const title = error ? '登录未完成' : '登录成功'
   const description = error
     ? `请回到桌面客户端重新开始登录。${error}`
-    : '账号已连接到 Douchat。你可以回到桌面客户端继续使用。'
+    : '账号已连接到 Douchat。你可以回到桌面客户端继续使用，也可以在浏览器中打开网页版。'
+  // Signed in: the web app is the useful next stop in this browser. After a
+  // failed sign-in it would only ask to sign in again, so link the website.
+  const action = error
+    ? { href: DOUCHAT_PRODUCTION_ORIGIN, label: '返回 Douchat 官网' }
+    : { href: DOUCHAT_WEB_APP_ORIGIN, label: '打开 Douchat 网页版' }
   const escapedDescription = description.replace(/[&<>"']/g, character => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   })[character]!)
@@ -164,8 +170,8 @@ function createLoopbackResultPage(error?: string): string {
     </div>
     <h1>${title}</h1>
     <p>${escapedDescription}</p>
-    <a class="button" href="${DOUCHAT_PRODUCTION_ORIGIN}">
-      返回 Douchat 官网
+    <a class="button" href="${action.href}">
+      ${action.label}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M5 12h14M13 6l6 6-6 6" />
       </svg>
@@ -238,7 +244,7 @@ export class DesktopAuth {
 
     this.accessToken = stored.accessToken
     this.deviceId = stored.deviceId ?? ''
-    if (this.deviceId) await this.device?.load().catch(() => undefined)
+    if (this.deviceId) await this.device?.use(this.deviceId).catch(() => false)
     try {
       const user = await this.fetchUser(this.accessToken)
       return this.setState({ status: 'signed-in', user })
@@ -602,13 +608,15 @@ export class DesktopAuth {
 
   private async exchangeCode(code: string, codeVerifier: string): Promise<{ accessToken: string; user: DesktopAuthUser; deviceId?: string }> {
     // Without secure storage the session simply has no device identity.
-    const device = await this.device?.loginProof(code).catch(() => undefined)
+    // `device` alone is what services before per-account keys read.
+    const devices = await this.device?.loginProofs(code).catch(() => []) ?? []
+    const device = devices[0]
     let response: Response
     try {
       response = await fetch(new URL('/api/desktop-auth/token', this.webAppUrl), {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID, ...(device ? { device } : {}) }),
+        body: JSON.stringify({ code, codeVerifier, clientId: DESKTOP_AUTH_CLIENT_ID, ...(device ? { device, devices } : {}) }),
         signal: AbortSignal.timeout(30_000)
       })
     } catch {
@@ -627,8 +635,9 @@ export class DesktopAuth {
     }
     const accessToken = payload.data.accessToken || ''
     if (!accessToken.startsWith('dch_')) throw new Error('Login service returned an invalid session.')
-    // Only the device this computer proved can be adopted.
-    const deviceId = device && payload.data.deviceId === device.id ? device.id : undefined
+    // Only a device this computer proved can be adopted.
+    const offered = devices.find(item => item.id === payload.data!.deviceId)
+    const deviceId = offered && await this.device!.adopt(offered.id).catch(() => false) ? offered.id : undefined
     return { accessToken, user: this.requireUser(payload.data.user), ...(deviceId ? { deviceId } : {}) }
   }
 

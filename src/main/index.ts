@@ -12,7 +12,7 @@ import { testLocalAgent } from './localAgentTest'
 import { listSshHosts } from './sshHosts'
 import { listLocalAgentModels, cancelLocalModelQueries } from './localAgentModels'
 import { disposeAllLocalAgentSessions } from './localAgentRuntime'
-import { localModelId, configurableLocalAgents } from '../shared/localModels'
+import { localModelId, configurableLocalAgents, localAgentAdapter } from '../shared/localModels'
 import { thinkingLevel } from '../shared/thinkingLevels'
 import { authorizeTokenDance } from './tokenDanceAuth'
 import { CustomModelStore } from './customModels'
@@ -20,13 +20,15 @@ import { CUSTOM_PROVIDER_PREFIX, type CustomProviderInput, type CustomModelTest 
 import { configureManagedNode, ensureManagedNode } from './managedNode'
 import { configureNativeDialogWindows, resizeNativeDialog } from './nativeDialogs'
 import { mkdirSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
+import { BUILT_IN_PRODUCTS, parseProducts } from '../shared/products'
 import { DiagnosticLog } from './diagnostics'
 import { hostname, release as osRelease } from 'node:os'
 import { notifyWindows } from './windowNotifications'
 import { SocialClient } from './social'
 import { CloudSyncClient } from './cloudSync'
 import { captureIpcHandlers, REMOTE_SENDER, runDesktopRpc } from './desktopRpc'
+import { fitImageForSync } from './remoteImage'
 import { SUPPORT_SHARE_HOURS } from '../shared/cloudSync'
 import type { SocialAction } from '../shared/social'
 import 'dotenv/config'
@@ -59,7 +61,7 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, agentsOnConnection, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, agentsOnConnection, hasRemoteAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, setConnectionAccount, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { ConnectionManager } from './connectionManager'
 import { migrateConnections, skippedMigrationAgents } from './connectionStore'
 import { migrateWorkspaceTargets } from './workspaceMigration'
@@ -301,8 +303,9 @@ function receiveAppUrl(url: string): void {
     if (mainWindow) notifyWindows([mainWindow], 'douchat:credits-updated')
     return
   }
-  if (!isDesktopAuthUrl(url, authScheme)) return
   focusMainWindow()
+  // Other links, such as douchat://open from the web app, only bring Douchat forward.
+  if (!isDesktopAuthUrl(url, authScheme)) return
   // Signing in starts account sync and shared tasks; wait until startup (and migration) is done.
   if (!auth || !startupReady) {
     pendingAuthUrl = url
@@ -390,6 +393,9 @@ function broadcastAuth(state: DesktopAuthState): void {
   }
   if (nextSocialAccount !== socialAccountId) {
     socialAccountId = nextSocialAccount
+    // Hosts belong to the account that added them; SSH connections stay with this computer.
+    setConnectionAccount(nextSocialAccount)
+    void connections.setAccount(nextSocialAccount).then(() => notifyWindows(BrowserWindow.getAllWindows(), 'douchat:connections-changed'))
     if (nextSocialAccount) { social?.start(); daemon?.start(); cloudSync?.start() }
     else { social?.stop(); daemon?.stop(); cloudSync?.stop() }
   }
@@ -806,6 +812,20 @@ app.whenReady().then(async () => {
   ipcMain.handle('douchat:open-subscription-plans', () => auth.openSubscriptionPlans())
   ipcMain.handle('douchat:open-billing-portal', () => auth.openBillingPortal())
   ipcMain.handle('douchat:get-update-state', () => updater.state())
+  // More from Us: the service's list, else the last good copy, else the built-in one.
+  ipcMain.handle('douchat:get-products', async () => {
+    const cache = join(app.getPath('userData'), 'products.json')
+    try {
+      const response = await net.fetch(new URL('/api/products', webAppUrl).toString(), { signal: AbortSignal.timeout(10_000) })
+      const payload = response.ok ? await response.json() : undefined
+      const products = parseProducts(payload, webAppUrl)
+      if (products) {
+        await writeFile(cache, JSON.stringify(payload)).catch(() => undefined)
+        return products
+      }
+    } catch { /* Offline: fall back below. */ }
+    return parseProducts(await readFile(cache, 'utf8').then(JSON.parse).catch(() => undefined), webAppUrl) ?? BUILT_IN_PRODUCTS
+  })
   ipcMain.handle('douchat:check-for-updates', () => updater.checkForUpdates())
   ipcMain.handle('douchat:install-update', () => updater.installUpdate())
   ipcMain.handle('douchat:maintain-local-agent', async (event, id: unknown) => {
@@ -828,6 +848,11 @@ app.whenReady().then(async () => {
     const agent = store.accountAgents.find(item => item.id === agentId)
     if (!agent?.localAgentId) throw new Error('Local agent not found')
     return listLocalAgentModels(agent.localAgentId)
+  })
+  // Before a contact exists: listLocalAgentModels validates the runtime id itself.
+  ipcMain.handle('douchat:list-runtime-models', (_event, localAgentId: unknown) => {
+    if (typeof localAgentId !== 'string' || !localAgentId) throw new Error('Local agent not found')
+    return listLocalAgentModels(localAgentId)
   })
   ipcMain.handle('douchat:detect-local-agents', async () => { resetShellPath(); return checkLocalAgentUpdates(await detectLocalAgents()) })
   ipcMain.handle('douchat:open-local-agent-terminal', (event, id: unknown) => {
@@ -951,6 +976,8 @@ app.whenReady().then(async () => {
     for (const item of chosen as Array<{ adapter?: unknown; executable?: unknown; name?: unknown }>) {
       const match = found.find(agent => agent.adapter === item?.adapter && agent.executable === item?.executable)
       if (!match) throw new Error('This agent was not found on the server. Scan again.')
+      // Already added from an earlier scan: keep the one there is.
+      if (await hasRemoteAgent(connectionId, match.executable)) continue
       await addCustomLocalAgent({ name: typeof item.name === 'string' && item.name.trim() ? item.name : match.adapter, command: match.executable,
         remoteAgent: { connectionId, adapter: match.adapter, executable: match.executable, args: [] } })
     }
@@ -1022,7 +1049,11 @@ app.whenReady().then(async () => {
     if (image.isEmpty()) throw new Error('Image could not be copied')
     clipboard.writeImage(image)
   })
-  ipcMain.handle('douchat:attachment-data', (_event, attachmentId: string) => store.attachmentDataUrl(attachmentId))
+  ipcMain.handle('douchat:attachment-data', async (event, attachmentId: string) => {
+    const dataUrl = await store.attachmentDataUrl(attachmentId)
+    // For the web app the image returns through a size-capped sync record.
+    return event.sender === REMOTE_SENDER ? fitImageForSync(dataUrl) : dataUrl
+  })
   ipcMain.handle('douchat:open-local-file', async (event, path: string, conversationId?: string) => {
     if (!isDouchatRenderer(event.sender) || typeof path !== 'string' || (conversationId !== undefined && typeof conversationId !== 'string')) throw new Error('Invalid file request')
     const document = await store.ownedDocumentPath(path)
@@ -1113,10 +1144,12 @@ app.whenReady().then(async () => {
     const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined
     // The main process owns runtime bindings. In particular, a renderer cannot
     // choose a model for a Cloud Agent by smuggling provider/model over IPC.
+    const localModel = input.localAgentId ? localModelId(input.localModel) : undefined
+    if (localModel && !configurableLocalAgents.includes(localAgentAdapter(localAgent!))) throw new Error('This local agent does not support a model override')
     const binding = input.localAgentId
-      ? { provider: 'local', model: 'default' }
+      ? { provider: 'local', model: localModel ?? 'default' }
       : input.customModel ? runtime.customAgentModel(input.customModel.providerId, input.customModel.model) : input.cloudModel ? runtime.cloudAgentModel(input.cloudModel.model) : runtime.defaultCloudAgentModel()
-    const { customModel: _selection, cloudModel: _cloudSelection, thinkingLevel: requestedThinking, ...agentInput } = input
+    const { customModel: _selection, cloudModel: _cloudSelection, localModel: _localModel, thinkingLevel: requestedThinking, ...agentInput } = input
     const agent = store.createAgent({
       ...agentInput,
       // Douchat cloud models do not take a per-agent thinking level.
@@ -1182,7 +1215,8 @@ app.whenReady().then(async () => {
     if (finalProvider !== 'local' && !finalProvider.startsWith(CUSTOM_PROVIDER_PREFIX) && (existing.thinkingLevel || 'thinkingLevel' in input)) input.thinkingLevel = 'default'
     if (input.model !== undefined && (input.localAgentId || existing.localAgentId)) {
       const model = localModelId(input.model)
-      if (model && !configurableLocalAgents.includes(input.localAgentId || existing.localAgentId!)) throw new Error('This local agent does not support a model override')
+      // A server agent takes the override of the CLI it runs (its adapter), as at launch.
+      if (model && !configurableLocalAgents.includes(localAgentAdapter(await validateLocalAgent(input.localAgentId || existing.localAgentId!, { allowDaemon: true })))) throw new Error('This local agent does not support a model override')
       input = { ...input, model: model ?? 'default' }
     }
     const localAgent = input.localAgentId ? await validateLocalAgent(input.localAgentId, { allowDaemon: true }) : undefined

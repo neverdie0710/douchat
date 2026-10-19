@@ -1,34 +1,34 @@
 import { QRCodeSVG } from 'qrcode.react'
-import { ConnanyPanel } from './ConnanyPanel'
-import { CONNECTORS_ENABLED } from '../../../shared/connany'
 import { UserMemoryPanel } from './UserMemoryPanel'
 import { LocalAgentEditor } from './LocalAgentEditor'
 import { ConnectionsPanel } from './ConnectionsPanel'
 import { CustomModelSettings } from './CustomModelSettings'
 import { SchedulingSettings } from './SchedulingSettings'
-import { RemoteMark } from './RemoteMark'
+import { RemoteMark, agentServer } from './RemoteMark'
 import { messageSendError } from '../messageQueue'
 import { NativeDialog } from './NativeDialog'
 import { reportDiagnostic } from '../diagnostics'
 import { agentIcons } from '../agentIcons'
 import douchatLogo from '../../../../resources/icons/douchat.png'
 import { setPreferences, usePreferences, resolveInterfaceLanguage, t, tr, type LanguagePreference } from '../preferences'
-import { SlidersHorizontal, Bot, CalendarClock, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Network, Pause, Play, Plug, Plus, RefreshCw, ScanSearch, Server, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
+import { SlidersHorizontal, Bot, ChevronLeft, LayoutGrid, SquareArrowUpRight, Camera, CircleUserRound, Coins, Cpu, ExternalLink, FolderOpen, Info, LogOut, Network, Plus, RefreshCw, ScanSearch, Server, SquareArrowOutUpRight, Trash2, TriangleAlert, Workflow, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactElement } from 'react'
-import type { AgentConfig, Conversation, DesktopAuthUser, LocalAgent, Routine, RoutineSchedule, TaskRun, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
+import type { DesktopAuthUser, LocalAgent, UpdateDesktopProfileInput, UpdateState, UsageSummary } from '../../../shared/types'
 import { readAvatarFile } from '../avatarFile'
-import { AgentAvatar, ConversationAvatar, EmptyAvatar, UserAvatar, agentDisplayName, conversationDisplayName } from './common'
+import { BUILT_IN_PRODUCTS, productLink, type Product } from '../../../shared/products'
+import { trimmedIcon } from '../productIcon'
+import { UserAvatar } from './common'
 
-export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'automation' | 'agents' | 'connections' | 'models' | 'scheduling' | 'about' | 'connectors'
+const LOCAL_AGENTS = '@local'
+/** The server connection an agent runs on; none for one on this computer. */
+const agentConnection = (agent: LocalAgent): string | undefined => agent.connectionId ?? agent.remoteAgent?.connectionId ?? agent.daemon?.connectionId
 
-export function SettingsPanel({ user, agents, routines = [], runs = [], workspaceAgents = [], conversations = [], scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom, onDeleteRoutine, onSetRoutineEnabled, onRunRoutineNow }: {
+export type SettingsTab = 'memory' | 'profile' | 'general' | 'usage' | 'agents' | 'connections' | 'models' | 'scheduling' | 'about' | 'more'
+
+export function SettingsPanel({ user, agents, scanning, error, tab, creditsRefreshToken, creditsAttention = false, onCreditsAvailable, onTab, onClose, onSignOut, onUpdateProfile, onDetect, onLocalAgentsChange, onRemoveCustom }: {
   user: DesktopAuthUser
   agents: LocalAgent[]
-  routines?: Routine[]
-  runs?: TaskRun[]
-  workspaceAgents?: AgentConfig[]
-  conversations?: Conversation[]
   scanning: boolean
   error: string
   tab: SettingsTab
@@ -42,9 +42,6 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
   onDetect: () => void
   onLocalAgentsChange?: (agents: LocalAgent[]) => void
   onRemoveCustom?: (id: string) => Promise<void>
-  onDeleteRoutine?: (id: string) => Promise<void>
-  onSetRoutineEnabled?: (id: string, enabled: boolean) => Promise<void>
-  onRunRoutineNow?: (id: string) => Promise<void>
 }): ReactElement {
   const closeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -72,15 +69,37 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
     return () => window.clearTimeout(timer)
   }, [tab])
   const preferences = usePreferences()
+  // On a phone the tab list and a tab's page take turns filling the screen.
+  const [tabListShown, setTabListShown] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState('')
   const [customError, setCustomError] = useState('')
   const [editingLocalAgent, setEditingLocalAgent] = useState<LocalAgent | 'new'>()
-  const installed = agents.filter((agent) => agent.installed)
-  const desktopOnly = agents.filter((agent) => agent.status === 'desktop-only')
+  // The list shows one place at a time: this computer by default, or one server connection.
+  const [agentSource, setAgentSource] = useState<string>(LOCAL_AGENTS)
+  const [connectionNames, setConnectionNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    if (tab !== 'agents' || !window.douchat.listConnections) return
+    let active = true
+    void window.douchat.listConnections().then((list) => { if (active) setConnectionNames(Object.fromEntries(list.map((item) => [item.id, item.name]))) }).catch(() => undefined)
+    return () => { active = false }
+  }, [tab])
+  const servers = [...new Map(agents.flatMap((agent) => {
+    const id = agentConnection(agent)
+    return id ? [[id, connectionNames[id] || agentServer(agent) || t('Server')] as const] : []
+  })).entries()]
+  // The desktop app runs and manages these agents; the web app only uses them
+  // and lists this computer's, as server connections are managed there too.
+  const manageable = window.douchat.platform !== 'web'
+  const source = manageable && servers.some(([id]) => id === agentSource) ? agentSource : LOCAL_AGENTS
+  const inSource = (agent: LocalAgent) => (agentConnection(agent) ?? LOCAL_AGENTS) === source
+  const countIn = (id: string) => agents.filter((agent) => (agentConnection(agent) ?? LOCAL_AGENTS) === id).length
+  const shownAgents = agents.filter(inSource)
+  const installed = shownAgents.filter((agent) => agent.installed)
+  const desktopOnly = shownAgents.filter((agent) => agent.status === 'desktop-only')
   // Remote agents whose connection is off or removed are listed with the reason, not as "not detected".
-  const unavailable = agents.filter((agent) => agent.unavailable)
-  const missing = agents.filter((agent) => agent.status === 'not-found' && !agent.unavailable)
+  const unavailable = shownAgents.filter((agent) => agent.unavailable)
+  const missing = shownAgents.filter((agent) => agent.status === 'not-found' && !agent.unavailable)
 
 
   const signOut = async (): Promise<void> => {
@@ -120,35 +139,36 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           <code title={agent.remote ? agent.version : agent.path || agent.desktopPath}>{agent.remote ? agent.remote.executable : agent.path || agent.desktopPath || agent.command}</code>
         </div>
         <div className="local-agent-row-aside">
-          {agent.remote && <span className="local-agent-remote-badge" title={agent.version}><Server size={12} />{t('Remote')} · {agent.remote.host}</span>}
+          {agent.remote && <span className="local-agent-remote-badge" title={agent.version}><Server size={12} />{agentServer(agent)}</span>}
           {agent.unavailable && <span className="local-agent-remote-badge"><Server size={12} />{t(agent.unavailable === 'disabled' ? 'Connection turned off' : 'Connection removed')}</span>}
           {version && !agent.remote && <span className="local-agent-version" title={agent.version}>{version}</span>}
           {agent.installed && !agent.custom && (!agent.updateStatus || agent.updateStatus === 'unknown') && <span className="local-agent-version" title={t('Could not confirm the latest version. Detect again later.')}>{t('Version unconfirmed')}</span>}
-          {(!agent.custom && !agent.unavailable && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
-          <button type="button" className="secondary-button" aria-label={`${t('Edit')} ${agent.name}`} onClick={() => setEditingLocalAgent(agent)}>{t('Edit')}</button>
-          {agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
+          {manageable && (!agent.custom && !agent.unavailable && (!agent.installed || agent.updateStatus === 'available')) && <button type="button" className="secondary-button" title={agent.latestVersion ? tr('Latest version: {version}', { version: agent.latestVersion }) : undefined} disabled={Boolean(maintaining) || scanning} onClick={() => void maintain(agent)}>{t(maintaining === agent.id ? 'Preparing…' : agent.installed ? 'Update' : 'Install')}</button>}
+          {manageable && <button type="button" className="secondary-button" aria-label={`${t('Edit')} ${agent.name}`} onClick={() => setEditingLocalAgent(agent)}>{t('Edit')}</button>}
+          {manageable && agent.custom && <button type="button" className="icon-button local-agent-remove" aria-label={`${t('Remove')} ${agent.name}`} title={t('Remove')} onClick={() => void removeCustom(agent)}><Trash2 size={16} /></button>}
         </div>
       </article>
   }
   return <><NativeDialog className="modal-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()} onClose={onClose} width={980} height={720}>
-    <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-compact-view={tabListShown ? 'list' : 'page'}>
     <aside className="settings-sidebar">
-      <div className="settings-modal-title"><div id="settings-title" className="wordmark">{t('Settings')}</div></div>
-      <div className="settings-tabs" role="tablist" aria-label={t('Settings')}>
+      <div className="settings-modal-title"><div id="settings-title" className="wordmark">{t('Settings')}</div><button type="button" className="settings-list-close" onClick={onClose} aria-label={t('Close')} title={t('Close')}><X size={18} /></button></div>
+      <div className="settings-tabs" role="tablist" aria-label={t('Settings')} onClick={() => setTabListShown(false)}>
         <button id="profile-tab" role="tab" aria-selected={tab === 'profile'} aria-controls="settings-content" className={tab === 'profile' ? 'active' : ''} onClick={() => onTab('profile')}><CircleUserRound size={18} /><span>{t('Account')}</span></button>
         <button id="general-tab" role="tab" aria-selected={tab === 'general'} aria-controls="settings-content" className={tab === 'general' ? 'active' : ''} onClick={() => onTab('general')}><SlidersHorizontal size={18} /><span>{t('General')}</span></button>
         <button id="usage-tab" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-content" className={tab === 'usage' ? 'active' : ''} onClick={() => onTab('usage')}><Coins size={18} /><span>{t('Credits')}</span></button>
-        <button id="automation-tab" role="tab" aria-selected={tab === 'automation'} aria-controls="settings-content" className={tab === 'automation' ? 'active' : ''} onClick={() => onTab('automation')}><CalendarClock size={18} /><span>{t('Automation')}</span></button>
         <button id="models-tab" role="tab" aria-selected={tab === 'models'} aria-controls="settings-content" className={tab === 'models' ? 'active' : ''} onClick={() => onTab('models')}><Cpu size={18} /><span>{t("Models")}</span></button>
-        {CONNECTORS_ENABLED && <button id="connectors-tab" role="tab" aria-selected={tab === 'connectors'} aria-controls="settings-content" className={tab === 'connectors' ? 'active' : ''} onClick={() => onTab('connectors')}><Plug size={18} /><span>{t('Connectors')}</span></button>}
         <button id="agents-tab" role="tab" aria-selected={tab === 'agents'} aria-controls="settings-content" className={tab === 'agents' ? 'active' : ''} onClick={() => onTab('agents')}><Bot size={18} /><span>{t('Agents')}</span></button>
         <button id="connections-tab" role="tab" aria-selected={tab === 'connections'} aria-controls="settings-content" className={tab === 'connections' ? 'active' : ''} onClick={() => onTab('connections')}><Network size={18} /><span>{t('Connections')}</span></button>
         <button id="scheduling-tab" role="tab" aria-selected={tab === 'scheduling'} aria-controls="settings-content" className={tab === 'scheduling' ? 'active' : ''} onClick={() => onTab('scheduling')}><Workflow size={18} /><span>{t('Scheduling')}</span></button>
         <button id="about-tab" role="tab" aria-selected={tab === 'about'} aria-controls="settings-content" className={tab === 'about' ? 'active' : ''} onClick={() => onTab('about')}><Info size={18} /><span>{t('About')}</span></button>
+        <div className="settings-tabs-divider" role="separator" />
+        <button id="more-tab" role="tab" aria-selected={tab === 'more'} aria-controls="settings-content" className={tab === 'more' ? 'active' : ''} onClick={() => onTab('more')}><LayoutGrid size={18} /><span>{t('More from Us')}</span></button>
       </div>
     </aside>
     <main id="settings-content" role="tabpanel" aria-labelledby={`${tab}-tab`} className="settings-content">
       <button ref={closeRef} className="settings-close" onClick={onClose} aria-label={t('Close')} title={t('Close')}><X size={18} /></button>
+      <button type="button" className="settings-back" onClick={() => setTabListShown(true)} aria-label={t('Settings')}><ChevronLeft size={22} /><span>{t('Settings')}</span></button>
       {tab === 'profile' ? (
         <ProfileTab user={user} signingOut={signingOut} signOutError={signOutError} onSignOut={() => void signOut()} onUpdateProfile={onUpdateProfile} />
       ) : tab === 'memory' ? <UserMemoryPanel key={user.id} /> : tab === 'general' ? <>
@@ -162,154 +182,32 @@ export function SettingsPanel({ user, agents, routines = [], runs = [], workspac
           </div></label>
           <div className="font-size-preview" aria-label={t('Font preview')}>{t('Messages and interface text update immediately.')}</div>
         </div>
-      </> : tab === 'usage' ? <UsageTab refreshToken={creditsRefreshToken} attention={creditsAttention} onCreditsAvailable={onCreditsAvailable} /> : tab === 'automation' ? <AutomationTab
-        routines={routines}
-        runs={runs}
-        agents={workspaceAgents}
-        conversations={conversations}
-        userName={user.name}
-        userAvatar={user.image || ''}
-        onDelete={onDeleteRoutine}
-        onSetEnabled={onSetRoutineEnabled}
-        onRunNow={onRunRoutineNow}
-      /> : tab === 'agents'  ? <>
-        <header className="settings-heading local-proxy-heading"><div><h1>{t('Agents')}</h1><p>{t('Agents on this computer and on your servers.')}</p></div>
-          <div className="local-agent-heading-actions"><button className="secondary-button" onClick={() => setEditingLocalAgent('new')}><Plus size={15} />{t('Add')}</button>
-          <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button></div>
+      </> : tab === 'usage' ? <UsageTab refreshToken={creditsRefreshToken} attention={creditsAttention} onCreditsAvailable={onCreditsAvailable} /> : tab === 'agents'  ? <>
+        <header className="settings-heading local-proxy-heading"><div><h1>{t('Agents')}</h1><p>{t('Agent programs on this computer and your servers. Use them to create contacts.')}</p></div>
+          {manageable && servers.length > 0 && <select className="local-agent-source" aria-label={t('Show agents on')} value={source} onChange={(event) => setAgentSource(event.target.value)}>
+            <option value={LOCAL_AGENTS}>{t('This computer')} ({countIn(LOCAL_AGENTS)})</option>
+            {servers.map(([id, name]) => <option key={id} value={id}>{name} ({countIn(id)})</option>)}
+          </select>}
         </header>
+        {!manageable && <p className="settings-note">{t('These agents run in the desktop app on your computer, and are added and changed there. While it is online, you can use them here.')}</p>}
         {error && <p className="settings-error" role="alert">{t(error)}</p>}
         {maintaining && <p role="status">{t('Preparing to install or update. Downloading the runtime for the first time may take a few minutes.')}</p>}
         {customError && <p className="settings-error" role="alert">{t(customError)}</p>}
-        <section aria-label={t('Installed agents')}><h2>{t('Installed')} <span>{installed.length}</span></h2>
+        <section aria-label={t('Installed agents')}><div className="local-agent-section-heading"><h2>{t('Installed')} <span>{installed.length}</span></h2>
+          {manageable && <div className="local-agent-heading-actions"><button className="secondary-button" onClick={() => setEditingLocalAgent('new')}><Plus size={15} />{t('Add')}</button>
+          <button className="secondary-button" disabled={scanning} onClick={onDetect}>{scanning ? <RefreshCw className="spin" size={15} /> : <ScanSearch size={15} />}{scanning ? t('Detecting…') : t('Detect')}</button></div>}</div>
           {installed.map(row)}
-          {!installed.length && <p className="settings-note">{scanning ? t('Checking your shell and installed commands…') : t('No supported local agents found. Install one in your terminal, then detect again.')}</p>}
+          {!installed.length && <p className="settings-note">{source !== LOCAL_AGENTS ? t('No agents on this server can run right now.') : scanning ? t('Checking your shell and installed commands…') : t('No supported local agents found. Install one in your terminal, then detect again.')}</p>}
         </section>
         {unavailable.length > 0 && <section aria-label={t('Unavailable server agents')}><h2>{t('Server unavailable')} <span>{unavailable.length}</span></h2>{unavailable.map(row)}</section>}
         {desktopOnly.length > 0 && <section aria-label={t('Desktop apps needing a CLI')}><h2>{t('Desktop app only')} <span>{desktopOnly.length}</span></h2>{desktopOnly.map(row)}</section>}
         {missing.length > 0 && <section aria-label={t('Other supported agents')}><h2>{t('Not detected')} <span>{missing.length}</span></h2>{missing.map(row)}</section>}
-      </> : tab === 'connections' ? <ConnectionsPanel key={user.id} onAgentsChange={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} />
-      : CONNECTORS_ENABLED && tab === 'connectors' ? <ConnanyPanel key={user.id} /> : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : <AboutTab />}
+      </> : tab === 'connections' ? <ConnectionsPanel key={user.id} agents={agents} onAgentsChange={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} onShowAgents={(id) => { setAgentSource(id); onTab('agents') }} />
+      : tab === 'models' ? <CustomModelSettings /> : tab === 'scheduling' ? <SchedulingSettings /> : tab === 'more' ? <MoreFromUsTab /> : <AboutTab />}
     </main>
     </section>
   </NativeDialog>
-  {editingLocalAgent && <LocalAgentEditor agent={editingLocalAgent === 'new' ? undefined : editingLocalAgent} onSaved={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} onClose={() => setEditingLocalAgent(undefined)} />}
-  </>
-}
-
-function routineScheduleLabel(schedule: RoutineSchedule): string {
-  if (schedule.kind === 'once') {
-    return t('Once')
-  }
-  if (schedule.kind === 'interval') {
-    const minutes = Math.max(1, Math.round(schedule.intervalMinutes))
-    if (minutes % 1440 === 0) return t('Every {count} days').replace('{count}', String(minutes / 1440))
-    if (minutes % 60 === 0) return t('Every {count} hours').replace('{count}', String(minutes / 60))
-    return t('Every {count} minutes').replace('{count}', String(minutes))
-  }
-  const labels = [t('Sun'), t('Mon'), t('Tue'), t('Wed'), t('Thu'), t('Fri'), t('Sat')]
-  const days = [...new Set(schedule.days)].sort().map((day) => labels[day]).join(' · ')
-  return `${days} · ${schedule.time}`
-}
-
-function AutomationTab({ routines, runs, agents, conversations, userName, userAvatar, onDelete, onSetEnabled, onRunNow }: {
-  routines: Routine[]
-  runs: TaskRun[]
-  agents: AgentConfig[]
-  conversations: Conversation[]
-  userName: string
-  userAvatar: string
-  onDelete?: (id: string) => Promise<void>
-  onSetEnabled?: (id: string, enabled: boolean) => Promise<void>
-  onRunNow?: (id: string) => Promise<void>
-}): ReactElement {
-  const [busy, setBusy] = useState('')
-  const [error, setError] = useState('')
-  const perform = async (key: string, action: () => Promise<void>): Promise<void> => {
-    setBusy(key)
-    setError('')
-    try { await action() }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { setBusy('') }
-  }
-  const remove = async (routine: Routine): Promise<void> => {
-    if (!onDelete || !window.confirm(t('Delete this automation?'))) return
-    await perform(`delete:${routine.id}`, () => onDelete(routine.id))
-  }
-  const date = (value: number): string => new Intl.DateTimeFormat(document.documentElement.lang || undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short'
-  }).format(new Date(value))
-
-  return <>
-    <header className="settings-heading"><div><h1>{t('Automation')}</h1><p>{t('Scheduled tasks created from your conversations.')}</p></div></header>
-    {error && <p className="settings-error" role="alert">{t(error)}</p>}
-    {!routines.length ? <section className="automation-empty">
-      <CalendarClock size={28} aria-hidden="true" />
-      <strong>{t('No scheduled tasks yet')}</strong>
-      <p>{t('Ask any contact to remind you later or run something on a schedule.')}</p>
-    </section> : <section className="automation-list" aria-label={t('Automation')}>
-      {routines.map((routine) => {
-        const agent = agents.find((item) => item.id === routine.agentId)
-        const conversation = conversations.find((item) => item.id === routine.conversationId)
-        const contactName = conversation
-          ? conversationDisplayName(conversation, agents)
-          : agent
-            ? agentDisplayName(agent)
-            : t('Unknown conversation')
-        const lastRun = runs
-          .filter((run) => run.routineId === routine.id)
-          .sort((left, right) => right.createdAt - left.createdAt)[0]
-        const onceFinished = routine.schedule.kind === 'once' && routine.schedule.runAt <= Date.now()
-        const status = lastRun?.status === 'running'
-          ? t('Running')
-          : routine.enabled && lastRun?.status === 'failed'
-            ? t('Retrying')
-            : routine.enabled
-              ? t('Active')
-              : lastRun?.status === 'failed'
-                ? t('Failed')
-                : onceFinished && lastRun?.status === 'succeeded'
-                  ? t('Completed')
-                  : onceFinished
-                    ? t('Expired')
-                    : t('Paused')
-        return <article className="automation-row" key={routine.id}>
-          <div className="automation-row-copy">
-            <div className="automation-row-title"><strong>{routine.name}</strong><span data-enabled={routine.enabled}>{status}</span></div>
-            <p>{routine.prompt}</p>
-            <div className="automation-row-meta">
-              <span className="automation-row-contact">
-                {conversation
-                  ? <ConversationAvatar conversation={conversation} agents={agents} userName={userName} userAvatar={userAvatar} size={22} />
-                  : agent
-                    ? <AgentAvatar agent={agent} size={22} />
-                    : <EmptyAvatar size={22} />}
-                <span className="automation-row-contact-name">{contactName}</span>
-              </span>
-              <span>{routineScheduleLabel(routine.schedule)}</span>
-              {routine.enabled
-                ? <span>{t('Next run: {time}').replace('{time}', date(routine.nextRunAt))}</span>
-                : routine.lastRunAt
-                  ? <span>{t('Last run: {time}').replace('{time}', date(routine.lastRunAt))}</span>
-                  : null}
-            </div>
-          </div>
-          <div className="automation-row-actions">
-            <button type="button" className="icon-button" disabled={!onRunNow || Boolean(busy)} aria-label={t('Run now')} title={t('Run now')} onClick={() => onRunNow && void perform(`run:${routine.id}`, () => onRunNow(routine.id))}><Play size={16} /></button>
-            <button
-              type="button"
-              className="icon-button"
-              disabled={!onSetEnabled || Boolean(busy) || (!routine.enabled && onceFinished)}
-              aria-label={routine.enabled ? t('Pause') : t('Resume')}
-              title={routine.enabled ? t('Pause') : t('Resume')}
-              onClick={() => onSetEnabled && void perform(`enabled:${routine.id}`, () => onSetEnabled(routine.id, !routine.enabled))}
-            >{routine.enabled ? <Pause size={16} /> : <Play size={16} />}</button>
-            <button type="button" className="icon-button automation-delete" disabled={!onDelete || Boolean(busy)} aria-label={t('Delete')} title={t('Delete')} onClick={() => void remove(routine)}><Trash2 size={16} /></button>
-          </div>
-        </article>
-      })}
-    </section>}
-    <p className="automation-footnote">{t('If Douchat is not running when a task is due, it runs once after the next launch.')}</p>
+  {editingLocalAgent && <LocalAgentEditor agent={editingLocalAgent === 'new' ? undefined : editingLocalAgent} connectionId={source !== LOCAL_AGENTS ? source : undefined} onSaved={list => { if (onLocalAgentsChange) onLocalAgentsChange(list); else onDetect() }} onClose={() => setEditingLocalAgent(undefined)} />}
   </>
 }
 
@@ -377,6 +275,48 @@ export function UsageTab({ refreshToken = 0, attention = false, onCreditsAvailab
       {error && <div className="usage-error" role="alert"><span>{t(error)}</span><button type="button" onClick={() => void load()}>{t('Try again')}</button></div>}
     </section>
   </>
+}
+
+/** Our other apps, from the service's shared list; the built-in copy shows until it answers. */
+function MoreFromUsTab(): ReactElement {
+  const [products, setProducts] = useState<Product[]>(BUILT_IN_PRODUCTS)
+  const preferences = usePreferences()
+  const chinese = resolveInterfaceLanguage(preferences.language) === 'zh-CN'
+  const source = window.douchat.platform === 'web' ? 'douchat-web' : 'douchat-desktop'
+  useEffect(() => {
+    let active = true
+    void window.douchat.getProducts().then((list) => { if (active && list.length) setProducts(list) }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
+  return <>
+    <header className="settings-heading"><div><h1>{t('More from Us')}</h1></div></header>
+    <section aria-labelledby="more-apps-title">
+      <h2 id="more-apps-title">{t('Our Other Apps')}</h2>
+      <div className="more-apps">
+        {products.map((product) => <a key={product.id} className="more-app" href={productLink(product, source)} target="_blank" rel="noreferrer" title={tr('Open {name}', { name: product.name })}>
+          <ProductIcon product={product} />
+          <span className="more-app-copy"><strong>{product.name}</strong><span>{chinese ? product.summary.zh : product.summary.en}</span></span>
+          <SquareArrowUpRight className="more-app-open" size={18} aria-hidden="true" />
+        </a>)}
+      </div>
+    </section>
+  </>
+}
+
+/** The app's icon with its margins trimmed (all icons then match in size), untrimmed if
+ * it cannot be read, or a tile with its first letter when there is none or it fails to load. */
+function ProductIcon({ product }: { product: Product }): ReactElement {
+  const [src, setSrc] = useState<string>()
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let active = true
+    setSrc(undefined)
+    if (product.icon) void trimmedIcon(product.icon).then((trimmed) => { if (active) setSrc(trimmed ?? product.icon) })
+    return () => { active = false }
+  }, [product.icon])
+  if (!product.icon || failed) return <span className="more-app-icon more-app-letter" aria-hidden="true">{product.name.slice(0, 1).toUpperCase()}</span>
+  // An empty tile holds the place while the icon is prepared, so nothing jumps.
+  return src ? <img className="more-app-icon" src={src} alt="" onError={() => setFailed(true)} /> : <span className="more-app-icon" aria-hidden="true" />
 }
 
 function AboutTab(): ReactElement {

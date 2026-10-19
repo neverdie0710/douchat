@@ -24,9 +24,11 @@ type Activity = (phase: 'planning' | 'replying', agentIds: string[]) => void
 /** The human posts in the group, and its cloud agents answer. */
 export async function sendToCloudGroup(params: {
   sync: WebSync; token: string; user: DesktopAuthUser; conversation: Conversation; text: string; onActivity: Activity
+  /** The human message's id, when it continues a queued request. */
+  messageId?: string
 }): Promise<void> {
   const { sync, conversation, user, text } = params
-  const message: ChatMessage = { id: crypto.randomUUID(), conversationId: conversation.id, topicId: conversation.activeTopicId, authorId: 'user', authorName: user.name, text, kind: 'message', createdAt: Date.now() }
+  const message: ChatMessage = { id: params.messageId ?? crypto.randomUUID(), conversationId: conversation.id, topicId: conversation.activeTopicId, authorId: 'user', authorName: user.name, text, kind: 'message', createdAt: Date.now() }
   await sync.mutate([
     { kind: 'message', id: message.id, apply: () => message as unknown as SyncRecord },
     { kind: 'conversation', id: conversation.id, apply: (current) => current ? { ...current, updatedAt: message.createdAt } : null }

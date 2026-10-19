@@ -24,6 +24,7 @@ export const DESKTOP_RPC = {
   cancelIMLogin: 'douchat:im-cancel-login',
   pollIMLogin: 'douchat:im-status',
   listLocalAgentModels: 'douchat:list-local-agent-models',
+  listRuntimeModels: 'douchat:list-runtime-models',
   detectLocalAgents: 'douchat:detect-local-agents',
   addCustomLocalAgent: 'douchat:add-custom-local-agent',
   updateLocalAgent: 'douchat:update-local-agent',

@@ -23,11 +23,11 @@ it('uses creation model selection for cloud agents and switches to a saved custo
     expect(host.textContent).toContain('Douchat Cloud')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(save).toHaveBeenLastCalledWith('douchat-default', 'cloud', 'default')
-    const provider = host.querySelector<HTMLSelectElement>('[aria-label="Model source"]')!
-    await act(async () => { provider.value = 'custom'; provider.dispatchEvent(new Event('change', { bubbles: true })) })
-    const model = host.querySelector<HTMLSelectElement>('[aria-label="Custom model"]')!
-    await act(async () => { model.value = JSON.stringify(['mine', 'org/model']); model.dispatchEvent(new Event('change', { bubbles: true })) })
-    expect(host.textContent).toContain('mine/org/model')
+    await act(async () => host.querySelector<HTMLButtonElement>('.agent-select-trigger[aria-label="Model"]')!.click())
+    const provider = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Provider"] [role="option"]')].find(item => item.textContent === 'My provider')!
+    await act(async () => provider.click())
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Custom model"] [role="option"]')!.click())
+    expect(host.querySelector('.agent-select-trigger[aria-label="Model"]')?.textContent).toBe('My modelMy provider')
     await act(async () => host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(save).toHaveBeenLastCalledWith('org/model', 'custom:mine', 'default')
   } finally { await act(async () => root.unmount()) }

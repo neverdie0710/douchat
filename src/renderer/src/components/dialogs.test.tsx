@@ -223,6 +223,10 @@ describe('create agent terminology', () => {
     container.remove()
   })
 
+  const open = async (label: string) => { if (container.querySelector(`.agent-select-trigger[aria-label="${label}"]`)?.getAttribute('aria-expanded') !== 'true') await act(async () => container.querySelector<HTMLButtonElement>(`.agent-select-trigger[aria-label="${label}"]`)!.click()) }
+  const places = () => [...container.querySelectorAll('[aria-label="Runs on"] [role="option"]')].map(item => item.textContent)
+  const place = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Runs on"] [role="option"]')].find(item => item.querySelector('span')?.textContent === name)!
+
   it('separates the created agent from its cloud or local agent', async () => {
     await act(async () => root.render(
       <BotModal
@@ -236,18 +240,18 @@ describe('create agent terminology', () => {
 
     expect(container.textContent).toContain('Create agent')
     expect(container.textContent).toContain('Agent name')
-    expect(container.textContent).toContain('Runs with')
-    expect(container.textContent).toContain('Custom model')
-    expect(container.textContent).toContain('AI tools on this computer or your servers')
     expect(container.textContent).not.toContain('Create contact')
-    expect([...container.querySelectorAll('[role="radio"] strong')].map(button => button.textContent)).toEqual(['Custom model', 'Agent'])
+    // Where it runs first, cloud selected, then the Douchat harness and its model.
+    expect(container.querySelector('.agent-select-trigger[aria-label="Agent Harness"]')?.textContent).toContain('Douchat')
+    expect(container.querySelector('.agent-select-trigger[aria-label="Model"]')).not.toBeNull()
+    await open('Agent Harness')
+    expect(places()).toEqual(['Built-in', 'This computer0'])
+    expect(container.querySelector('.harness-agents [aria-selected="true"]')?.textContent).toContain('Douchat')
 
-    const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('AI tools on this computer or your servers'))!
-    await act(async () => local.click())
-
-    expect(container.textContent).toContain('AI tools on this computer or your servers')
+    // Browsing a place changes nothing until a harness is chosen.
+    await act(async () => place('This computer').click())
     expect(container.textContent).toContain('No available agents')
+    expect(container.querySelector('.agent-select-trigger[aria-label="Model"]')).not.toBeNull()
   })
 
   it('creates an agent with a saved custom model without exposing its key', async () => {
@@ -256,15 +260,15 @@ describe('create agent terminology', () => {
     } })
     const onCreate = vi.fn(async () => undefined)
     await act(async () => root.render(<BotModal localAgents={[]} onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
-    const custom = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(b => b.textContent?.includes('Custom model'))!
-    await act(async () => custom.click())
-    const source = container.querySelector<HTMLSelectElement>('select[aria-label="Model source"]')!
-    expect(source.value).toBe('cloud')
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Custom model"]')?.value).toBe('default')
-    await act(async () => { source.value = 'custom'; source.dispatchEvent(new Event('change', { bubbles: true })) })
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Model source"]')?.value).toBe('custom')
-    expect(container.querySelector('[aria-label="Custom model"]')?.textContent).toContain('Default model')
-    const name = container.querySelector<HTMLInputElement>('input')!
+    await open('Model')
+    const providers = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Provider"] [role="option"]')]
+    expect(providers.map(item => item.textContent)).toEqual(['Douchat Cloud', 'Default model', 'Mine'])
+    expect(providers[0].getAttribute('aria-selected')).toBe('true')
+    await act(async () => providers[1].click())
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Custom model"] [role="option"]')!.click())
+    expect(container.querySelector('[aria-label="Provider"]')).toBeNull()
+    expect(container.querySelector('.agent-select-trigger[aria-label="Model"]')?.textContent).toBe('Follow default model')
+    const name = container.querySelector<HTMLInputElement>('input[placeholder="Enter agent name"]')!
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(name, 'My agent')
       name.dispatchEvent(new Event('input', { bubbles: true }))
@@ -303,7 +307,7 @@ describe('create agent terminology', () => {
       />
     ))
 
-    const name = container.querySelector<HTMLInputElement>('.field-row input')!
+    const name = container.querySelector<HTMLInputElement>('input[placeholder="Enter agent name"]')!
     const setValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(name), 'value')!.set!
     await act(async () => {
       setValue.call(name, 'Blank Slate')
@@ -362,14 +366,57 @@ describe('create agent terminology', () => {
       />
     ))
 
-    const local = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
-      .find((button) => button.textContent?.includes('AI tools on this computer or your servers'))!
-    await act(async () => local.click())
-    await act(async () => container.querySelector<HTMLButtonElement>('.agent-select-trigger')!.click())
+    await open('Agent Harness')
+    await act(async () => place('This computer').click())
 
-    const options = [...container.querySelectorAll<HTMLElement>('[role="option"]')].map((option) => option.textContent)
-    expect(options).toEqual(expect.arrayContaining(['Claude Code', 'OpenClaw', 'FastClaw', 'Hermes', 'OMP']))
-    expect(options).not.toContain('Missing')
+    const options = [...container.querySelectorAll<HTMLElement>('.harness-agents [role="option"] strong')].map((option) => option.textContent)
+    expect(options).toEqual(['Claude Code', 'OpenClaw', 'FastClaw', 'Hermes', 'OMP'])
+    // Choosing one names the agent until the user types a name.
+    await act(async () => [...container.querySelectorAll<HTMLButtonElement>('.harness-agents [role="option"]')][1].click())
+    expect(container.querySelector('.harness-picker')).toBeNull()
+    expect(container.querySelector<HTMLInputElement>('input[placeholder="Enter agent name"]')?.value).toBe('OpenClaw')
+  })
+
+  it('on the web lists only the desktop app\'s own agents', async () => {
+    Object.defineProperty(window, 'douchat', { configurable: true, value: { platform: 'web' } })
+    const localAgents: LocalAgent[] = [
+      { id: 'codex', name: 'Codex', command: 'codex', path: '/bin/codex', installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked' },
+      { id: 'custom:box', name: 'Claude · box', command: 'claude', installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, connectionId: 'conn_1', connectionName: 'box',
+        remote: { transport: 'ssh', host: 'box', adapter: 'claude', executable: 'claude', args: [] } }
+    ]
+    await act(async () => root.render(<BotModal localAgents={localAgents} onSettings={vi.fn()} onClose={vi.fn()} onCreate={vi.fn()} onUpdate={vi.fn()} />))
+    await open('Agent Harness')
+    expect(places()).toEqual(['Built-in', 'Desktop app1'])
+  })
+
+  it('groups server agents under their connection and creates one with a chosen model', async () => {
+    Object.defineProperty(window, 'douchat', { configurable: true, value: {
+      listRuntimeModels: vi.fn(async () => ({ models: [{ id: 'gpt-5', name: 'GPT-5' }], source: 'agent', configurable: true }))
+    } })
+    const onCreate = vi.fn(async () => undefined)
+    const localAgents: LocalAgent[] = [
+      { id: 'codex', name: 'Codex', command: 'codex', path: '/bin/codex', installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked' },
+      { id: 'custom:box', name: 'Claude · box', command: 'claude', installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, connectionId: 'conn_1', connectionName: 'box',
+        remote: { transport: 'ssh', host: 'box', adapter: 'claude', executable: 'claude', args: [] } }
+    ]
+    await act(async () => root.render(<BotModal localAgents={localAgents} onSettings={vi.fn()} onClose={vi.fn()} onCreate={onCreate} onUpdate={vi.fn()} />))
+    await open('Agent Harness')
+    expect(places()).toEqual(['Built-in', 'This computer1', 'box1'])
+    await act(async () => place('box').click())
+    expect([...container.querySelectorAll('.harness-agents [role="option"] strong')].map(item => item.textContent)).toEqual(['Claude · box'])
+    await act(async () => container.querySelector<HTMLButtonElement>('.harness-agents [role="option"]')!.click())
+    expect(container.querySelector('.agent-select-trigger[aria-label="Agent Harness"]')?.textContent).toContain('box')
+    // A server agent takes a model like the CLI it runs (here Claude), read from the server.
+    expect(container.querySelector('select[aria-label="Model"]')).not.toBeNull()
+    expect(window.douchat.listRuntimeModels).toHaveBeenCalledWith('custom:box')
+    await open('Agent Harness')
+    await act(async () => place('This computer').click())
+    await act(async () => container.querySelector<HTMLButtonElement>('.harness-agents [role="option"]')!.click())
+    const model = container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!
+    expect([...model.options].map(option => option.textContent)).toEqual(['Use agent default', 'GPT-5'])
+    await act(async () => { model.value = 'gpt-5'; model.dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Codex', localAgentId: 'codex', localModel: 'gpt-5' }))
   })
 })
 

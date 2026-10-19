@@ -9,7 +9,8 @@ vi.mock('../preferences', () => ({
   setPreferences: vi.fn(),
   resolveInterfaceLanguage: (language: string) => language,
   usePreferences: () => ({ language: 'en', appearance: 'system', fontSize: 1 }),
-  t: (text: string) => text
+  t: (text: string) => text,
+  tr: (text: string, values: Record<string, string>) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '')
 }))
 
 vi.mock('./common', () => ({
@@ -24,6 +25,7 @@ vi.mock('./common', () => ({
 }))
 
 import { SettingsPanel } from './SettingsPanel'
+import { AutomationPanel } from './AutomationPanel'
 
 describe('usage and billing settings', () => {
   let container: HTMLDivElement
@@ -114,22 +116,14 @@ describe('usage and billing settings', () => {
     conversations: Conversation[] = []
   ): Promise<void> {
     await act(async () => root.render(
-      <SettingsPanel
-        user={{ id: 'user-1', name: 'Ada', email: 'ada@example.com' }}
-        agents={[]}
+      <AutomationPanel
         routines={routines}
-        workspaceAgents={workspaceAgents}
+        runs={[]}
+        agents={workspaceAgents}
         conversations={conversations}
-        scanning={false}
-        error=""
-        tab="automation"
-        creditsRefreshToken={0}
-        onTab={vi.fn()}
-        onClose={vi.fn()}
-        onSignOut={vi.fn(async () => undefined)}
-        onUpdateProfile={vi.fn(async () => undefined)}
-        onDetect={vi.fn()}
-        onSetRoutineEnabled={onSetRoutineEnabled}
+        userName="Ada"
+        userAvatar=""
+        onSetEnabled={onSetRoutineEnabled}
       />
     ))
   }
@@ -149,6 +143,49 @@ describe('usage and billing settings', () => {
       await act(async () => { vi.runAllTimers() })
       expect(document.activeElement).toBe(opener)
     } finally { opener.remove(); vi.useRealTimers() }
+  })
+
+  it('lists our other apps from the service with tracked links', async () => {
+    Object.defineProperty(window, 'douchat', {
+      configurable: true,
+      value: { platform: 'darwin', getProducts: vi.fn(async () => [
+        { id: 'termany', name: 'Termany', url: 'https://termany.sh/?ref=x', icon: 'https://cdn.snapok.app/products/termany.png', summary: { en: 'The agent-native terminal.', zh: '为智能体打造的终端。' } }
+      ]) } as Partial<DouchatApi>
+    })
+    await act(async () => root.render(
+      <SettingsPanel user={{ id: 'user-1', name: 'Ada', email: 'ada@example.com' }} agents={[]} scanning={false} error="" tab="more" creditsRefreshToken={0}
+        onTab={vi.fn()} onClose={vi.fn()} onSignOut={vi.fn(async () => undefined)} onUpdateProfile={vi.fn(async () => undefined)} onDetect={vi.fn()} />
+    ))
+    expect(container.querySelector('#more-tab')?.getAttribute('aria-selected')).toBe('true')
+    const links = [...container.querySelectorAll<HTMLAnchorElement>('.more-app')]
+    expect(links.map((link) => link.textContent)).toEqual(['TermanyThe agent-native terminal.'])
+    expect(links[0].href).toBe('https://termany.sh/?ref=x&utm_source=douchat-desktop')
+    expect(links[0].target).toBe('_blank')
+  })
+
+  it('shows agents on this computer by default and filters by server connection', async () => {
+    const connectionId = `conn_${'a'.repeat(32)}`
+    Object.defineProperty(window, 'douchat', {
+      configurable: true,
+      value: { listConnections: vi.fn(async () => [{ id: connectionId, name: 'mini-local' }]) } as unknown as Partial<DouchatApi>
+    })
+    await renderAgents([
+      { id: 'codex', name: 'Codex', command: 'codex', installed: true, discovered: true, path: '/bin/codex', chatSupported: true, status: 'ready', authentication: 'unchecked' },
+      { id: 'remote-codex', name: 'Codex · mini-local', command: 'codex', installed: true, discovered: true, custom: true, chatSupported: true, status: 'ready', authentication: 'unchecked',
+        remoteAgent: { connectionId, adapter: 'codex', executable: '/usr/bin/codex', args: [] } }
+    ])
+    const names = () => [...container.querySelectorAll('.local-agent-copy strong')].map((item) => item.textContent)
+    const select = container.querySelector<HTMLSelectElement>('.local-agent-source')!
+    expect([...select.options].map((option) => option.textContent)).toEqual(['This computer (1)', 'mini-local (1)'])
+    expect(names()).toEqual(['Codex'])
+    await act(async () => { select.value = connectionId; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(names()).toEqual(['Codex · mini-local'])
+  })
+
+  it('leaves automation and connectors to Discover', async () => {
+    await renderGeneral()
+    expect(container.querySelector('#automation-tab')).toBeNull()
+    expect(container.querySelector('#connectors-tab')).toBeNull()
   })
 
   it('offers follow-system alongside the explicit interface languages', async () => {
@@ -186,7 +223,6 @@ describe('usage and billing settings', () => {
       updatedAt: Date.now()
     }], onSetRoutineEnabled, [contact], [conversation])
 
-    expect(container.querySelector('#automation-tab')?.getAttribute('aria-selected')).toBe('true')
     expect(container.textContent).toContain('Drink water')
     expect(container.textContent).toContain('Once')
     expect(container.querySelector('[data-conversation-avatar="conversation-1"]')).not.toBeNull()

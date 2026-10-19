@@ -22,6 +22,7 @@ import { createCloudAgent, createGroup, deleteAgent as deleteCloudAgent, updateA
 import { sha256 } from './insecureContext'
 import { siteOrigin } from './site'
 import { WebSocial } from './webSocial'
+import { BUILT_IN_PRODUCTS, parseProducts } from '../shared/products'
 import { canRunCloudGroup, runCloudGroupRound, sendToCloudGroup } from './cloudGroup'
 import { WebSync, type Mutation } from './webSync'
 
@@ -63,6 +64,17 @@ const randomToken = (size: number) => base64Url(crypto.getRandomValues(new Uint8
 /** The page Douchat serves the web app from; the login service only returns codes here. */
 /** The sign-in return: a page of this build on this host, which the login service allows. */
 const callbackUrl = () => `${location.origin}/app/index.html`
+
+/**
+ * The file in a base64 data: URL. Decoded here rather than with fetch(), which
+ * the page's Content-Security-Policy (connect-src 'self') refuses for data: URLs.
+ */
+export function dataUrlBlob(url: string): Blob {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url)
+  if (!match) throw new Error('This image could not be read. Choose it again.')
+  const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0))
+  return new Blob([bytes], { type: match[1] })
+}
 
 export function createWebApi(): DouchatApi {
   let token = read(TOKEN_KEY)
@@ -111,7 +123,7 @@ export function createWebApi(): DouchatApi {
     }
     if (!sync) {
       sync = new WebSync(() => token, signOutLocally)
-      sync.subscribe(() => { snapshot = undefined; const next = currentSnapshot(); for (const listener of snapshotListeners) listener(next) })
+      sync.subscribe(() => { snapshot = undefined; const next = currentSnapshot(); for (const listener of snapshotListeners) listener(next); adoptStrandedRequests() })
       // A desktop that syncs later can bring a second built-in Dr. Dou; fold it in when it shows up.
       let merging = false
       sync.subscribe(() => {
@@ -308,6 +320,85 @@ export function createWebApi(): DouchatApi {
   const viaDesktop = <M extends DesktopRpcMethod>(method: M, local?: (...args: Parameters<DouchatApi[M]>) => ReturnType<DouchatApi[M]>) =>
     ((...args: Parameters<DouchatApi[M]>) => desktopOnline() || !local ? desktop(method, args) : local(...args)) as DouchatApi[M]
 
+  /**
+   * Answer a message in this tab when no desktop is online: a Douchat Cloud
+   * agent's direct chat, or a group with cloud members. False when a desktop
+   * has to send it. `messageId` keeps a queued request's id, so its "sending"
+   * bubble becomes the sent message in place.
+   */
+  async function answerHere(conversationId: string, text: string, messageId?: string): Promise<boolean> {
+    const target = conversation(conversationId)
+    const [syncNow, tokenNow, userNow] = [sync, token, user]
+    if (!target || desktopOnline() || !syncNow || !tokenNow || !userNow) return false
+    const agent = target.type === 'direct' && !target.id.startsWith('im-') ? syncNow.get<AgentConfig>('agent', target.agentIds[0]) : undefined
+    if (isCloudAgent(agent)) {
+      if (replying.has(conversationId)) throw new Error('This conversation is still replying')
+      const activity: ConversationActivityState = { conversationId, topicId: target.activeTopicId, phase: 'replying', agentIds: [agent.id], label: agent.name, startedAt: Date.now() }
+      replying.set(conversationId, { activity })
+      refresh()
+      const draftId = crypto.randomUUID()
+      const posts: ChatMessage[] = []
+      try {
+        await sendToCloudAgent({ sync: syncNow, token: tokenNow, user: userNow, agent, conversation: target, text, messageId, replyId: draftId, hooks: { onText: (reply) => {
+          replying.set(conversationId, { activity, draft: { id: draftId, conversationId, topicId: activity.topicId, authorId: agent.id, authorName: agent.name, text: reply, kind: 'message', createdAt: Date.now() } })
+          refresh()
+        }, onFinish: () => { replying.delete(conversationId) }, onGroupPost: (post) => posts.push(post) } })
+      } finally {
+        replying.delete(conversationId)
+        refresh()
+      }
+      // Like a desktop, a group post that mentions members runs once its sender is done.
+      for (const post of posts) {
+        const group = conversation(post.conversationId)
+        if (!group || replying.has(group.id)) continue
+        await answerInGroup(group, (onActivity) => runCloudGroupRound({ sync: syncNow, token: tokenNow, user: userNow, conversation: group, trigger: post, onActivity })).catch(() => undefined)
+      }
+      return true
+    }
+    if (canRunCloudGroup(syncNow, target)) {
+      if (replying.has(conversationId)) throw new Error('This conversation is still replying')
+      await answerInGroup(target, (onActivity) => sendToCloudGroup({ sync: syncNow, token: tokenNow, user: userNow, conversation: target, text, messageId, onActivity }))
+      return true
+    }
+    return false
+  }
+
+  /** This tab, so a request it claims is recognizably its own. */
+  const tabId = `web:${crypto.randomUUID()}`
+  const adopting = new Set<string>()
+  /** A tab that claimed a request and then closed leaves it claimed; another tab takes it over after this. */
+  const ABANDONED_CLAIM_MS = 10 * 60_000
+  const adoptable = (request: WebSendRequest | undefined) => request?.state === 'pending'
+    || request?.state === 'claimed' && Boolean(request.deviceId?.startsWith('web:')) && Date.now() - (request.claimedAt ?? 0) > ABANDONED_CLAIM_MS
+  /**
+   * A message queued for a desktop that is no longer online would show
+   * "sending" forever. When the chat can be answered here, claim the request
+   * the way a desktop does (a revision-checked write, so only one client wins),
+   * answer it, then remove it.
+   */
+  function adoptStrandedRequests(): void {
+    if (!sync || desktopOnline()) return
+    for (const request of sync.all<WebSendRequest>('request')) {
+      if (!adoptable(request) || adopting.has(request.id) || replying.has(request.conversationId)) continue
+      const target = conversation(request.conversationId)
+      if (!target || target.type === 'direct' && !isCloudAgent(sync.get<AgentConfig>('agent', target.agentIds[0])) || target.type === 'group' && !canRunCloudGroup(sync, target)) continue
+      adopting.add(request.id)
+      const tracked = sync
+      void (async () => {
+        await tracked.mutate([{ kind: 'request', id: request.id, apply: (current) => adoptable(current as unknown as WebSendRequest | undefined)
+          ? { ...current, state: 'claimed', deviceId: tabId, claimedAt: Date.now() } : current ?? null }])
+        if (tracked.get<WebSendRequest>('request', request.id)?.deviceId !== tabId) return
+        try {
+          await answerHere(request.conversationId, request.text, request.id)
+          await tracked.mutate([{ kind: 'request', id: request.id, apply: () => null }])
+        } catch (error) {
+          await tracked.mutate([{ kind: 'request', id: request.id, apply: (current) => current
+            ? { ...current, state: 'failed', error: error instanceof Error ? error.message : 'The message could not be sent.' } : null }])
+        }
+      })().catch(() => undefined).finally(() => adopting.delete(request.id))
+    }
+  }
+
   /** Show a group's planning and replying state while its cloud agents answer in this tab. */
   async function answerInGroup(group: Conversation, run: (onActivity: (phase: 'planning' | 'replying', agentIds: string[]) => void) => Promise<void>): Promise<void> {
     const show = (phase: 'planning' | 'replying', agentIds: string[]) => {
@@ -425,7 +516,7 @@ export function createWebApi(): DouchatApi {
       if (typeof input.image === 'string') {
         let image = input.image.trim()
         if (image.startsWith('data:image/')) {
-          const blob = await (await fetch(image)).blob()
+          const blob = dataUrlBlob(image)
           const form = new FormData()
           form.append('file', blob, `avatar.${blob.type === 'image/jpeg' ? 'jpg' : blob.type.slice('image/'.length) || 'png'}`)
           image = (await service<{ url: string }>('/api/desktop-auth/avatar', { method: 'POST', body: form })).url
@@ -471,41 +562,7 @@ export function createWebApi(): DouchatApi {
         await social.send(conversationId, text.trim(), currentSnapshot().messages.filter((message) => message.conversationId === conversationId), mentions)
         return
       }
-      const target = conversation(conversationId)
-      const agent = target?.type === 'direct' && !target.id.startsWith('im-') ? sync?.get<AgentConfig>('agent', target.agentIds[0]) : undefined
-      // A desktop sends it with its full runtime (tools, groups, memory); without one, cloud agents answer here.
-      if (target && isCloudAgent(agent) && !desktopOnline() && sync && token && user) {
-        // Douchat Cloud agents answer right here; no desktop is needed.
-        if (replying.has(conversationId)) throw new Error('This conversation is still replying')
-        const activity: ConversationActivityState = { conversationId, topicId: target.activeTopicId, phase: 'replying', agentIds: [agent.id], label: agent.name, startedAt: Date.now() }
-        replying.set(conversationId, { activity })
-        refresh()
-        const draftId = crypto.randomUUID()
-        const posts: ChatMessage[] = []
-        try {
-          await sendToCloudAgent({ sync, token, user, agent, conversation: target, text: text.trim(), replyId: draftId, hooks: { onText: (reply) => {
-            replying.set(conversationId, { activity, draft: { id: draftId, conversationId, topicId: activity.topicId, authorId: agent.id, authorName: agent.name, text: reply, kind: 'message', createdAt: Date.now() } })
-            refresh()
-          }, onFinish: () => { replying.delete(conversationId) }, onGroupPost: (post) => posts.push(post) } })
-        } finally {
-          replying.delete(conversationId)
-          refresh()
-        }
-        // Like a desktop, a group post that mentions members runs once its sender is done.
-        const [syncNow, tokenNow, userNow] = [sync, token, user]
-        for (const post of posts) {
-          const group = conversation(post.conversationId)
-          if (!group || replying.has(group.id)) continue
-          await answerInGroup(group, (onActivity) => runCloudGroupRound({ sync: syncNow, token: tokenNow, user: userNow, conversation: group, trigger: post, onActivity })).catch(() => undefined)
-        }
-        return
-      }
-      if (target && !desktopOnline() && sync && token && user && canRunCloudGroup(sync, target)) {
-        // With no desktop online, the group's cloud agents answer right here.
-        if (replying.has(conversationId)) throw new Error('This conversation is still replying')
-        await answerInGroup(target, (onActivity) => sendToCloudGroup({ sync: sync!, token: token!, user: user!, conversation: target, text: text.trim(), onActivity }))
-        return
-      }
+      if (await answerHere(conversationId, text.trim())) return
       const request: WebSendRequest = { id: crypto.randomUUID(), conversationId, text: text.trim(), createdAt: Date.now(), state: 'pending' }
       await mutate([{ kind: 'request', id: request.id, apply: () => request as unknown as SyncRecord }])
     },
@@ -645,6 +702,10 @@ export function createWebApi(): DouchatApi {
       throw new Error('Open the Douchat desktop app to see this image.')
     },
     getUpdateState: async () => ({ status: 'disabled', currentVersion: 'web' }),
+    getProducts: async () => {
+      const response = await fetch('/api/products').catch(() => undefined)
+      return parseProducts(await response?.json().catch(() => undefined)) ?? BUILT_IN_PRODUCTS
+    },
     checkForUpdates: async () => ({ status: 'disabled', currentVersion: 'web' }),
     onUpdateState: () => () => undefined,
     onCreditsUpdated: () => () => undefined,
@@ -654,6 +715,7 @@ export function createWebApi(): DouchatApi {
     detectLocalAgents: viaDesktop('detectLocalAgents', async () => []),
     listSshHosts: viaDesktop('listSshHosts', async () => []),
     listConnections: viaDesktop('listConnections', async () => []),
+    listRuntimeModels: viaDesktop('listRuntimeModels', async () => ({ models: [], source: 'manual' as const, configurable: false })),
     listIMChannels: viaDesktop('listIMChannels', async () => []),
     getCustomModels: viaDesktop('getCustomModels', async () => ({ providers: [], defaultModel: '' })),
     getDecisionSettings: viaDesktop('getDecisionSettings', async () => DEFAULT_DECISION_SETTINGS),
@@ -665,6 +727,9 @@ export function createWebApi(): DouchatApi {
 
     // Browser stand-ins for desktop conveniences.
     copyText: (text) => navigator.clipboard.writeText(text),
+    // The browser clipboard takes PNG. Handing it the blob as a promise keeps the
+    // click's user activation, which Safari requires, while the data is decoded.
+    copyImageData: (dataUrl) => navigator.clipboard.write([new ClipboardItem({ 'image/png': fetch(dataUrl).then((response) => response.blob()) })]),
     resizeDialog: async () => true,
     reportDiagnostic: () => undefined,
     windowAction: () => undefined,

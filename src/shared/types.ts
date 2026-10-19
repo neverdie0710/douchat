@@ -37,6 +37,8 @@ export interface LocalAgent {
   remoteTarget?: ExecutionTarget
   /** The connection a remote agent runs on. */
   connectionId?: string
+  /** That connection's name, the one label the app shows for where the agent runs. */
+  connectionName?: string
   /** What is saved for a remote agent, even while its connection is unavailable. */
   remoteAgent?: RemoteAgentBinding
   /** The connection is turned off or missing: the agent cannot run. */
@@ -670,6 +672,8 @@ export interface CreateAgentInput {
   cloudModel?: { model: string }
   localAgentId?: string
   localAgentName?: string
+  /** A model override for a local agent; omitted or 'default' uses the agent's own. */
+  localModel?: string
   startupArgs?: string[]
 
   name: string
@@ -807,9 +811,13 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   openSubscriptionPlans: () => Promise<void>
   openBillingPortal: () => Promise<void>
   getUpdateState: () => Promise<UpdateState>
+  /** Our other apps, for Settings → More from Us. */
+  getProducts: () => Promise<import('./products').Product[]>
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<UpdateState>
   listLocalAgentModels: (agentId: string) => Promise<import('./localModels').LocalModelList>
+  /** Models of a detected local agent runtime, before any contact uses it. */
+  listRuntimeModels: (localAgentId: string) => Promise<import('./localModels').LocalModelList>
   detectLocalAgents: () => Promise<LocalAgent[]>
   maintainLocalAgent: (id: string) => Promise<boolean>
   openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>

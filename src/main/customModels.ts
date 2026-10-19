@@ -81,7 +81,8 @@ export function customModelProvider(p: CustomProviderRecord): Provider {
   const endpoint = customEndpoint(p.apiBase, p.kind)
   const baseUrl = endpoint.slice(0, -(p.kind === 'anthropic' ? '/v1/messages'.length : '/chat/completions'.length))
   const models = p.models.map(model => ({ id: model, name: model, provider: id, baseUrl,
-    api: p.kind === 'anthropic' ? 'anthropic-messages' : 'openai-completions', reasoning: Boolean(p.reasoningModels?.includes(model)), input: ['text', 'image'],
+    // Any custom model may think; the contact's level decides whether it does (customDefaultThinking).
+    api: p.kind === 'anthropic' ? 'anthropic-messages' : 'openai-completions', reasoning: true, input: ['text', 'image'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: p.reasoningModels?.includes(model) ? 32000 : 8192,
     compat: { maxTokensField: 'max_tokens' }
   })) as Model<any>[]

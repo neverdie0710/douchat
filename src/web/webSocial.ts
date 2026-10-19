@@ -1,6 +1,7 @@
 import type { SelectedMention } from '../shared/bot/mentions'
 import { addressesEveryone } from '../shared/bot/mentions'
-import type { SocialAction, SocialImage, SocialMessage, SocialResult, SocialRoom, SocialSnapshot } from '../shared/social'
+import type { SocialAction, SocialMessage, SocialMessageImage, SocialResult, SocialRoom, SocialSnapshot } from '../shared/social'
+import { overlapCursor } from '../shared/social'
 import { socialFollowUpTarget } from '../shared/socialFollowUp'
 import { checkHumanAgentTargets, privacySafeSocialSnapshot, rendererSocialSnapshot, sharedGroupReplyTargets } from '../shared/socialRules'
 import type { ChatMessage, Conversation, MessageAttachment } from '../shared/types'
@@ -23,7 +24,7 @@ const PREFS_KEY = 'douchat.web.socialPrefs'
 export type RoomPrefs = Partial<Pick<Conversation, 'pinned' | 'muted' | 'hidden' | 'savedToContacts'>>
 const stored = <T>(key: string): T => { try { return JSON.parse(localStorage.getItem(key) ?? '{}') as T } catch { return {} as T } }
 
-interface RoomState { revision?: string; messages: Map<string, SocialMessage>; loaded: boolean }
+interface RoomState { revision?: string; messages: Map<string, SocialMessage>; loaded: boolean; cursor: { time: string; id: string } }
 
 export class WebSocial {
   private snapshot?: SocialSnapshot
@@ -31,6 +32,9 @@ export class WebSocial {
   /** Messages sent here, shown until the service confirms them. */
   private readonly sending = new Map<string, ChatMessage>()
   private readonly attachments = new Map<string, string>()
+  /** Images the service sent by reference, fetched the first time they are shown. */
+  private readonly imageRefs = new Map<string, { roomId: string; ref: string }>()
+  private readonly loadingImages = new Map<string, Promise<string>>()
   private readRooms = stored<Record<string, number>>(READ_KEY)
   private prefs = stored<Record<string, RoomPrefs>>(PREFS_KEY)
   /** When this browser first saw each room, for rooms no client has read yet. */
@@ -42,18 +46,51 @@ export class WebSocial {
 
   constructor(private readonly service: Service, private readonly ownerId: () => string | undefined, private readonly onChange: () => void) {}
 
-  start(): void { void this.poll() }
-  stop(): void { this.stopped = true; clearTimeout(this.timer) }
+  start(): void {
+    document.addEventListener('visibilitychange', this.onVisible)
+    void this.poll()
+  }
+  stop(): void {
+    this.stopped = true
+    clearTimeout(this.timer)
+    document.removeEventListener('visibilitychange', this.onVisible)
+  }
+  /** Catch up as soon as a hidden tab is shown again. */
+  private readonly onVisible = () => {
+    if (document.hidden || this.stopped) return
+    clearTimeout(this.timer)
+    void this.poll()
+  }
 
   getSnapshot(): SocialSnapshot { return this.snapshot ?? { userId: this.ownerId() ?? '', friendships: [], rooms: [] } }
-  attachmentData(id: string): string | undefined { return this.attachments.get(id) }
+  attachmentData(id: string): string | Promise<string> | undefined {
+    const data = this.attachments.get(id)
+    if (data) return data
+    const image = this.imageRefs.get(id)
+    if (!image) return undefined
+    let loading = this.loadingImages.get(id)
+    if (!loading) {
+      loading = this.action({ action: 'attachment', roomId: image.roomId, ref: image.ref })
+        .then((result) => {
+          const attachment = (result as { attachment?: { mimeType?: string; base64?: string } }).attachment
+          if (!attachment?.base64) throw new Error('This image is no longer available.')
+          const url = `data:${attachment.mimeType};base64,${attachment.base64}`
+          this.attachments.set(id, url)
+          return url
+        })
+        .finally(() => this.loadingImages.delete(id))
+      this.loadingImages.set(id, loading)
+    }
+    return loading
+  }
   roomOf(conversationId: string): SocialRoom | undefined {
     return this.snapshot?.rooms.find((room) => conversationIdFor(this.ownerId() ?? '', room) === conversationId)
   }
 
   private async poll(): Promise<void> {
     if (this.stopped) return
-    try { await this.refresh() } catch { /* Next poll retries. */ }
+    // A tab left open in the background must not keep downloading.
+    if (!document.hidden) try { await this.refresh() } catch { /* Next poll retries. */ }
     if (!this.stopped) this.timer = setTimeout(() => void this.poll(), POLL_MS)
   }
 
@@ -65,26 +102,48 @@ export class WebSocial {
     this.onChange()
   }
 
-  /** Load a room's history once, then only what changed since the room's last revision. */
+  /**
+   * Load a room's recent history once; after that, fetch only messages newer
+   * than the last one seen plus replies still in progress, never whole pages
+   * again. Images come as refs and are fetched once, when shown.
+   */
   private async syncRoom(room: SocialRoom): Promise<void> {
-    const state: RoomState = this.rooms.get(room.id) ?? { messages: new Map(), loaded: false }
+    const state: RoomState = this.rooms.get(room.id) ?? { messages: new Map(), loaded: false, cursor: { time: '1970-01-01T00:00:00.000Z', id: '' } }
     this.rooms.set(room.id, state)
     if (state.loaded && room.revision && state.revision === room.revision) return
-    let before: string | undefined
-    for (let pages = 0; pages < (state.loaded ? 1 : 10); pages++) {
-      const page = await this.action({ action: 'messages', roomId: room.id, ...(before ? { before } : {}) })
-      const batch = page.messages ?? []
-      let known = false
-      for (const message of [...batch, ...(page.updates ?? [])]) {
-        if (state.messages.has(message.id) && JSON.stringify(state.messages.get(message.id)) === JSON.stringify(message)) known = true
-        state.messages.set(message.id, message)
-        this.sending.delete(`${conversationIdFor(this.ownerId() ?? '', room)}:${message.id}`)
+    const revision = room.revision
+    if (!state.loaded) {
+      let before: string | undefined
+      for (let pages = 0; pages < 10; pages++) {
+        const page = await this.action({ action: 'messages', roomId: room.id, attachments: 'ref', ...(before ? { before } : {}) })
+        const batch = page.messages ?? []
+        this.take(room, state, batch)
+        if (!page.hasMore || !batch.length) break
+        before = batch[0].id
       }
-      if (!page.hasMore || !batch.length || (state.loaded && known)) break
-      before = batch[0].id
+    } else {
+      let after = overlapCursor(state.cursor)
+      let pending = [...state.messages.values()].filter((message) => message.status === 'pending' || message.status === 'running').map((message) => message.id).slice(-200)
+      for (let pages = 0; pages < 10; pages++) {
+        const page = await this.action({ action: 'messages', roomId: room.id, after, pending, attachments: 'ref' })
+        const batch = page.messages ?? []
+        this.take(room, state, [...batch, ...(page.updates ?? [])])
+        const last = batch.at(-1)
+        if (!page.hasMore || !last) break
+        after = { time: last.createdAt, id: last.id }
+        pending = []
+      }
     }
     state.loaded = true
-    state.revision = room.revision
+    state.revision = revision
+  }
+
+  private take(room: SocialRoom, state: RoomState, messages: SocialMessage[]): void {
+    for (const message of messages) {
+      state.messages.set(message.id, message)
+      this.sending.delete(`${conversationIdFor(this.ownerId() ?? '', room)}:${message.id}`)
+      if (message.createdAt > state.cursor.time || (message.createdAt === state.cursor.time && message.id > state.cursor.id)) state.cursor = { time: message.createdAt, id: message.id }
+    }
   }
 
   action(input: SocialAction | Record<string, unknown>): Promise<SocialResult> {
@@ -114,7 +173,7 @@ export class WebSocial {
           const chat: ChatMessage = {
             id: messageId, conversationId: id, topicId: TOPIC_ID, authorId: message.authorId === ownerId ? 'user' : message.authorId,
             authorName: message.authorName, text: message.content, kind: 'message', createdAt: at,
-            ...this.images(messageId, message.images)
+            ...this.images(room.id, messageId, message.images)
           }
           byId.set(messageId, chat)
           own.push(chat)
@@ -126,7 +185,7 @@ export class WebSocial {
         if (message.reply || message.replyImages?.length) {
           own.push({
             id: `${messageId}:reply`, conversationId: id, topicId: TOPIC_ID, authorId: message.agentId ?? 'system', authorName: message.agentName || '',
-            text: message.reply ?? '', kind: 'message', createdAt: at, ...this.images(`${messageId}:reply`, message.replyImages),
+            text: message.reply ?? '', kind: 'message', createdAt: at, ...this.images(room.id, `${messageId}:reply`, message.replyImages),
             ...(message.status === 'failed' ? { error: message.reply } : {})
           })
         }
@@ -147,13 +206,15 @@ export class WebSocial {
     return { conversations, messages }
   }
 
-  private images(id: string, images?: SocialImage[]): { attachments?: MessageAttachment[] } {
+  private images(roomId: string, id: string, images?: SocialMessageImage[]): { attachments?: MessageAttachment[] } {
     if (!images?.length) return {}
     return {
       attachments: images.map((image, index) => {
         const attachmentId = `${id}:image:${index}`
-        this.attachments.set(attachmentId, `data:${image.mimeType};base64,${image.base64}`)
-        return { id: attachmentId, kind: 'image', name: image.name, mimeType: image.mimeType, size: Math.floor(image.base64.length * 3 / 4) }
+        if (image.base64 === undefined) this.imageRefs.set(attachmentId, { roomId, ref: image.ref })
+        else this.attachments.set(attachmentId, `data:${image.mimeType};base64,${image.base64}`)
+        const size = image.base64 === undefined ? image.size : Math.floor(image.base64.length * 3 / 4)
+        return { id: attachmentId, kind: 'image', name: image.name, mimeType: image.mimeType, size }
       })
     }
   }

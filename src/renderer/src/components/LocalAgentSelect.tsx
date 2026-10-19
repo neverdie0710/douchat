@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { LocalAgent } from '../../../shared/types'
 import { agentIcons } from '../agentIcons'
 import { t } from '../preferences'
-import { RemoteMark } from './RemoteMark'
+import { RemoteMark, agentServer } from './RemoteMark'
 
 export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAgent[]; value: string; onChange: (id: string) => void }) {
   const [open, setOpen] = useState(false)
@@ -40,11 +40,11 @@ export function LocalAgentSelect({ agents, value, onChange }: { agents: LocalAge
     }
   }}>
     <button ref={trigger} type="button" className="agent-select-trigger" aria-label={t('Agent')} aria-haspopup="listbox" aria-expanded={open} disabled={!agents.length} onClick={() => setOpen(!open)}>
-      {selected && icon(selected)}<span>{selected?.name || t('Select an agent')}</span>{selected?.remote && <small className="agent-select-host">{selected.remote.host}</small>}<ChevronDown size={16} />
+      {selected && icon(selected)}<span>{selected?.name || t('Select an agent')}</span>{selected && agentServer(selected) && <small className="agent-select-host">{agentServer(selected)}</small>}<ChevronDown size={16} />
     </button>
     {open && <div className="agent-select-options" role="listbox" aria-label={t('Agent')}>
       {agents.map((agent) => <button type="button" role="option" aria-selected={agent.id === value} key={agent.id} onClick={() => { onChange(agent.id); setOpen(false); trigger.current?.focus({ preventScroll: true }) }}>
-        {icon(agent)}<span>{agent.name}</span>{agent.remote && <small className="agent-select-host">{t('Remote')} · {agent.remote.host}</small>}{agent.id === value && <Check size={16} />}
+        {icon(agent)}<span>{agent.name}</span>{agentServer(agent) && <small className="agent-select-host">{agentServer(agent)}</small>}{agent.id === value && <Check size={16} />}
       </button>)}
     </div>}
   </div>

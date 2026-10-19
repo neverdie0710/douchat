@@ -1,6 +1,10 @@
 export interface LocalModel { id: string; name: string }
 export interface LocalModelList { models: LocalModel[]; source: 'agent' | 'manual'; configurable: boolean }
 export const configurableLocalAgents = ['codex', 'claude', 'opencode', 'cursor', 'grok', 'gemini', 'kimi', 'hermes', 'omp', 'openclaw']
+/** The CLI an agent runs: itself on this computer, or the adapter of one on a server. */
+export function localAgentAdapter(agent: { id: string; remote?: { adapter: string }; remoteAgent?: { adapter: string } }): string {
+  return agent.remote?.adapter ?? agent.remoteAgent?.adapter ?? agent.id
+}
 export function localModelId(value?: string): string | undefined {
   if (!value || value === 'default') return undefined
   const model = value.trim()

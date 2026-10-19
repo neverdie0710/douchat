@@ -26,4 +26,17 @@ describe('web app addresses', () => {
     expect(readRoute('/app/settings/nope')).toEqual({ view: 'chats', settingsTab: 'profile' })
     expect(routePath({ view: 'contacts' }, '')).toBe('/contacts')
   })
+
+  it('addresses Discover pages, and sends older settings links for them there', () => {
+    expect(readRoute('/app/discover')).toEqual({ view: 'discover' })
+    expect(readRoute('/app/discover/connectors')).toEqual({ view: 'discover', discoverPage: 'connectors' })
+    expect(readRoute('/app/discover/nope')).toEqual({ view: 'discover' })
+    expect(readRoute('/app/settings/automation')).toEqual({ view: 'discover', discoverPage: 'automation' })
+    expect(readRoute('/app/settings/connectors')).toEqual({ view: 'discover', discoverPage: 'connectors' })
+    expect(routePath({ view: 'discover', discoverPage: 'automation' }, '/app')).toBe('/app/automation')
+    expect(routePath({ view: 'discover', discoverPage: 'connectors' }, '')).toBe('/connectors')
+    expect(readRoute('/app/automation')).toEqual({ view: 'discover', discoverPage: 'automation' })
+    expect(readRoute('/app/connectors')).toEqual({ view: 'discover', discoverPage: 'connectors' })
+    expect(routePath({ view: 'discover' }, '')).toBe('/discover')
+  })
 })

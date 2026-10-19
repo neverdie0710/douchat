@@ -59,7 +59,14 @@
 .connany-reader { margin-top: 14px; min-width: 0; }
 .connany-reader select { max-width: 100%; margin: 10px 0; padding: 7px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 .connany-reader pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 11px; background: var(--surface); padding: 10px; border-radius: 8px; }
-.connany-error { color: #bd493a; font-size: 13px; padding: 12px 0; }
+.connany-error { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; padding: 8px 8px 8px 14px; border-radius: 10px; background: color-mix(in srgb, #bd493a 8%, transparent); color: #bd493a; font-size: 13px; }
+.connany-error > button:first-of-type { margin-left: auto; }
+.connany-error > button[aria-label] { display: grid; place-items: center; padding: 7px; }
+/* The list never loaded: say so in the middle of the page, with one way forward. */
+.connany-load-error { display: grid; justify-items: center; gap: 10px; min-height: 45vh; place-content: center; color: var(--muted); text-align: center; }
+.connany-load-error strong { color: var(--ink); font-size: 15px; }
+.connany-load-error p { max-width: 360px; margin: 0; font-size: 13px; line-height: 1.6; }
+.connany-load-error button { margin-top: 6px; }
 .connany-notice { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 9px; margin: 18px 0; flex-wrap: wrap; }
 .connany-spinner { animation: connany-spin 1.3s linear infinite; }
 @keyframes connany-spin { to { transform: rotate(360deg); } }
