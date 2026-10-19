@@ -17,16 +17,29 @@ export function NativeDialog(props: Props): ReactElement | null {
   return window.douchat?.platform === 'web' ? <InlineDialog {...props} /> : <WindowDialog {...props} />
 }
 
-function InlineDialog({ children, onClose, width: _width, height: _height, layoutKey: _layoutKey, ...props }: Props): ReactElement {
+/** Open in-page dialogs, oldest first. Each sits above the ones opened before it, like windows do. */
+const inlineStack: symbol[] = []
+
+function InlineDialog({ children, onClose, width: _width, height: _height, layoutKey: _layoutKey, style, ...props }: Props): ReactElement {
   const close = useRef(onClose)
   close.current = onClose
+  const [token] = useState(() => Symbol('inline-dialog'))
+  const [depth, setDepth] = useState(1)
+  useLayoutEffect(() => {
+    // Registered on mount (not in render, which React may repeat), before the first paint.
+    inlineStack.push(token)
+    setDepth(inlineStack.length)
+    return () => { inlineStack.splice(inlineStack.indexOf(token), 1) }
+  }, [token])
   useEffect(() => {
-    const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); close.current() } }
+    // Escape closes only the topmost dialog.
+    const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape' && !event.defaultPrevented && inlineStack.at(-1) === token) { event.preventDefault(); close.current() } }
     document.addEventListener('keydown', keydown)
     return () => document.removeEventListener('keydown', keydown)
-  }, [])
+  }, [token])
   // Inside the app's root, so the desktop's dialog styles (scoped to .messenger) apply unchanged.
-  return createPortal(<div {...props}>{children}</div>, document.querySelector('.app-shell.messenger') ?? document.body)
+  // Above every page layer (the settings backdrop is 36), then by opening order.
+  return createPortal(<div {...props} style={{ ...style, zIndex: 100 + depth }}>{children}</div>, document.querySelector('.app-shell.messenger') ?? document.body)
 }
 
 function WindowDialog({ children, onClose, width: _width, height: _height, layoutKey, className = '', ...props }: Props): ReactElement | null {
