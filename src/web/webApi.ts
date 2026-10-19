@@ -19,6 +19,7 @@ import type { UserMemoryDocument } from '../shared/userMemory'
 import { ensureBuiltInContact, greetNewChat, isCloudAgent, mergeDuplicateBuiltIns, sendToCloudAgent } from './cloudChat'
 import { DESKTOP_PRESENCE_STALE_MS, DESKTOP_RPC, DESKTOP_RPC_TIMEOUT_MS, decodeRpcValue, encodeRpcValue, type DesktopPresence, type DesktopRpcCall, type DesktopRpcMethod } from '../shared/desktopRpc'
 import { createCloudAgent, createGroup, deleteAgent as deleteCloudAgent, updateAgent as updateCloudAgent } from './agents'
+import { sha256 } from './insecureContext'
 import { siteOrigin } from './site'
 import { WebSocial } from './webSocial'
 import { canRunCloudGroup, runCloudGroupRound, sendToCloudGroup } from './cloudGroup'
@@ -134,7 +135,7 @@ export function createWebApi(): DouchatApi {
   async function beginLogin(silent: boolean): Promise<void> {
     const verifier = randomToken(48)
     const state = randomToken(32)
-    const challenge = base64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))))
+    const challenge = base64Url(await sha256(verifier))
     sessionStorage.setItem(LOGIN_KEY, JSON.stringify({ state, verifier }))
     sessionStorage.setItem(RETURN_KEY, `${location.pathname}${location.hash}`)
     const login = new URL('/desktop-auth', siteOrigin())

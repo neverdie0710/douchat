@@ -4,6 +4,7 @@ import { greetingMessageId, systemAdminWelcome } from '../shared/welcome'
 import type { SyncRecord } from '../shared/cloudSync'
 import { supportedInterfaceLanguage } from '../shared/language'
 import type { AgentConfig, BuiltInAgentManifest, ChatMessage, Conversation, DesktopAuthUser, Topic } from '../shared/types'
+import { sha256 } from './insecureContext'
 import type { WebSync } from './webSync'
 import { addressesEveryone, mentionedMembers } from '../shared/bot/mentions'
 import { agentManagementPrompt, agentManagementTools, isSystemAdmin, runAgentManagementTool } from './cloudTools'
@@ -26,8 +27,7 @@ export function isCloudAgent(agent: AgentConfig | undefined): agent is AgentConf
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return [...await sha256(value)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 /**
