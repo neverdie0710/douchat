@@ -554,6 +554,7 @@ const translations: Record<string, string> = {
   'Checking connected email': '正在查看已连接的邮箱', 'Checked connected email': '已查看已连接的邮箱', 'Could not check connected email': '未能查看已连接的邮箱',
   'Using a connected tool': '正在使用已连接工具', 'Completed a tool action': '已完成工具操作', 'Tool action failed': '工具操作失败',
   'Leave group': '退出群聊', 'Leave this group? Your agents will also leave.': '确定退出群聊？你带入群内的智能体也会一并退出。',
+  'Back': '返回',
   'Share with support': '分享给客服', 'Share': '分享', 'Revoke': '撤销', 'Revoked': '已撤销', 'Access active': '有效',
   'Douchat support will be able to read this conversation, including its messages and member names, until access expires or you revoke it. Each time they open it is counted below.': '分享后，Douchat 客服可以查看此会话的消息和成员名称，直到授权到期或你撤销为止。客服每次查看都会记录在下方。',
   'Describe the problem (optional)': '描述遇到的问题（可选）', 'Access duration': '授权时长', '24 hours': '24 小时', '3 days': '3 天', '7 days': '7 天',

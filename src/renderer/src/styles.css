@@ -7194,3 +7194,83 @@ html.native-dialog-window,
 .overlay-scroll-thumb { position: absolute; top: 0; left: -4px; z-index: 6; width: 3px; border-radius: 999px; background: rgba(0, 0, 0, 0.22); opacity: 0; pointer-events: none; transition: opacity 260ms; }
 .overlay-scroll-thumb.visible { opacity: 1; transition-duration: 80ms; }
 [data-theme='dark'] .overlay-scroll-thumb { background: rgba(255, 255, 255, 0.26); }
+
+/* ─────────────────────── web app on a phone ─────────────────────── */
+/* One screen at a time: the list, or the chat/contact opened from it, with
+   the sections in a bottom bar on list screens. Only the web app opts in
+   (App.tsx adds .compact); the desktop app keeps its layout at any width. */
+.messenger.app-shell.compact {
+  --compact-bar: calc(56px + env(safe-area-inset-bottom));
+  display: block;
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+.messenger.app-shell.compact > :is(.sidebar, .chat-stage, .workspace, .social-workspace) {
+  position: absolute;
+  inset: 0 0 var(--compact-bar) 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  border: 0;
+}
+.messenger.app-shell.compact.detail-open > :is(.chat-stage, .workspace, .social-workspace) { inset: 0; }
+.messenger.app-shell.compact:not(.detail-open) > :is(.chat-stage, .workspace, .social-workspace),
+.messenger.app-shell.compact.detail-open > .sidebar { display: none; }
+
+.messenger.app-shell.compact .app-rail {
+  position: absolute;
+  z-index: 20;
+  inset: auto 0 0 0;
+  height: var(--compact-bar);
+  flex-direction: row;
+  justify-content: space-around;
+  align-items: center;
+  padding: 0 12px env(safe-area-inset-bottom) !important;
+  border-right: 0;
+  border-top: 1px solid var(--hairline);
+}
+.messenger.app-shell.compact.detail-open .app-rail { display: none; }
+.messenger.app-shell.compact .app-rail > * { margin: 0 !important; }
+/* Chats, contacts, settings, me: evenly spread like a phone tab bar. */
+.messenger.app-shell.compact .app-rail { justify-content: space-evenly; }
+.messenger.app-shell.compact .rail-spacer { display: none; }
+.messenger.app-shell.compact .rail-profile { order: 3; width: 30px; height: 30px; }
+
+.messenger.app-shell.compact .compact-back {
+  position: absolute;
+  z-index: 35;
+  top: 10px;
+  left: 6px;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+}
+.messenger.app-shell.compact .workspace-header { padding-left: 48px; }
+.messenger.app-shell.compact .contact-profile-scroll { padding-top: 52px; }
+
+/* Chat details cover the chat instead of sliding in beside it. */
+.messenger.app-shell.compact .chat-details-layer.is-open { position: fixed; z-index: 30; inset: 0; }
+.messenger.app-shell.compact .chat-details-layer.is-open .inspector-rail { width: 100%; max-width: none; padding-top: 52px; }
+
+/* Dialogs take the whole screen. */
+.messenger.app-shell.compact .modal-backdrop { align-items: stretch; padding: 0; }
+.messenger.app-shell.compact .modal-backdrop > :is(section, form, div) {
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  border-radius: 0 !important;
+}
+.messenger.app-shell.compact .settings-modal { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: auto minmax(0, 1fr); }
+.messenger.app-shell.compact .settings-modal .settings-tabs { display: flex; flex-direction: row; gap: 4px; overflow-x: auto; padding: 8px 12px; }
+.messenger.app-shell.compact .settings-modal .settings-tabs button { flex: 0 0 auto; width: auto; padding: 0 12px; }
+.messenger.app-shell.compact .settings-modal .settings-tabs button span { display: inline; }
+.messenger.app-shell.compact .settings-modal .settings-modal-title { display: none; }

@@ -67,17 +67,23 @@ export function routePath(route: WebRoute, base = routeBase()): string {
 }
 
 /**
- * Record the page in the address bar. Arriving at a chat from the bare chat
- * list (the app opening its first chat) replaces that entry instead of
- * adding one, so Back leaves the app rather than stepping through it.
+ * Record the page in the address bar. On a wide screen, arriving at a chat
+ * from the bare chat list (the app opening its first chat) replaces that
+ * entry, so Back leaves the app rather than stepping through it. On a phone
+ * the list and the chat are separate screens, so opening a chat adds an entry
+ * and Back returns to the list.
  */
-export function showRoute(route: WebRoute): void {
+export function showRoute(route: WebRoute, options: { separateScreens?: boolean; awaitingChat?: boolean } = {}): void {
   const path = routePath(route)
   if (path === window.location.pathname) return
   const current = readRoute()
   // The address still names a chat the inbox has not loaded yet; keep it.
-  if (current.conversationId && !route.conversationId && current.view === route.view && !route.settingsTab && !current.settingsTab) return
-  // Opening the first chat, or rewriting an older full-id link to its code, is the same page.
-  const settling = (!current.conversationId || current.conversationId === route.conversationId) && !current.settingsTab && current.view === route.view && Boolean(route.conversationId)
-  window.history[settling ? 'replaceState' : 'pushState'](null, '', path)
+  if (options.awaitingChat && current.conversationId && !route.conversationId) return
+  // Rewriting an older full-id link to its code is the same page.
+  const same = current.conversationId === route.conversationId && !current.settingsTab && current.view === route.view
+  const firstChat = !options.separateScreens && !current.conversationId && !current.settingsTab && current.view === route.view && Boolean(route.conversationId)
+  window.history[same || firstChat ? 'replaceState' : 'pushState'](null, '', path)
 }
+
+/** A phone-sized web page: one screen at a time, sections in a bottom bar. */
+export const COMPACT_LAYOUT_QUERY = '(max-width: 768px)'

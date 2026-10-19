@@ -8,7 +8,7 @@ import { messageSendError, MessageQueue, type QueuedMessage } from './messageQue
 import type { SocialSnapshot } from '../../shared/social'
 import { AddFriendModal } from './components/AddFriendModal'
 import { SocialWorkspace } from './components/SocialWorkspace'
-import { X } from 'lucide-react'
+import { ChevronLeft, X } from 'lucide-react'
 import { resolveInterfaceLanguage, t, tr, usePreferences } from './preferences'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -26,7 +26,7 @@ import type {
 } from '../../shared/types'
 import { SettingsPanel, type SettingsTab } from './components/SettingsPanel'
 import { AppRail, type AppView } from './components/AppRail'
-import { readRoute, resolveConversation, showRoute, usesWebRoutes } from './webRoute'
+import { COMPACT_LAYOUT_QUERY, readRoute, resolveConversation, showRoute, usesWebRoutes } from './webRoute'
 import { BotInbox } from './components/BotInbox'
 import { MemberProfilePopover, type ProfileAnchor } from './components/MemberProfilePopover'
 import { ContactCard, SelfProfileCard } from './components/ContactCard'
@@ -84,9 +84,26 @@ function WorkspaceApp(): ReactElement {
   }
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(initialRoute?.settingsTab ?? 'profile')
   // The web app mirrors the page in its address, and follows Back/Forward.
+  // On a phone the list and the open chat (or contact) are separate screens.
+  const compact = useCompactLayout()
+  const [detailOpen, setDetailOpen] = useState(Boolean(initialRoute?.conversationId))
+  /** The open chat added a history entry, so Back (or the back button) returns to the list. */
+  const detailPushed = useRef(false)
+  const openDetail = (): void => {
+    if (!compact || detailOpen) return
+    detailPushed.current = true
+    setDetailOpen(true)
+  }
+  const closeDetail = (): void => {
+    if (detailPushed.current) { detailPushed.current = false; window.history.back(); return }
+    setDetailOpen(false)
+  }
   useEffect(() => {
-    if (usesWebRoutes()) showRoute({ view, conversationId: view === 'chats' ? activeId || undefined : undefined, settingsTab: settingsOpen ? settingsTab : undefined })
-  }, [view, activeId, settingsOpen, settingsTab])
+    if (!usesWebRoutes()) return
+    const showsChat = view === 'chats' && (!compact || detailOpen)
+    showRoute({ view, conversationId: showsChat ? activeId || undefined : undefined, settingsTab: settingsOpen ? settingsTab : undefined },
+      { separateScreens: compact, awaitingChat: Boolean(routedConversation.current) })
+  }, [view, activeId, settingsOpen, settingsTab, compact, detailOpen])
   useEffect(() => {
     if (!usesWebRoutes()) return
     const follow = () => {
@@ -96,6 +113,11 @@ function WorkspaceApp(): ReactElement {
       if (routed) setActiveId(routed)
       updateSettingsOpen(Boolean(route.settingsTab))
       if (route.settingsTab) setSettingsTab(route.settingsTab)
+      if (!route.settingsTab) {
+        // Back from a chat on a phone is back to the list.
+        if (!route.conversationId) detailPushed.current = false
+        if (route.view === 'chats') setDetailOpen(Boolean(route.conversationId))
+      }
     }
     window.addEventListener('popstate', follow)
     return () => window.removeEventListener('popstate', follow)
@@ -423,6 +445,7 @@ function WorkspaceApp(): ReactElement {
       setActiveId(conversationId)
       setShowInspector(false)
       setView('chats')
+      openDetail()
     } catch (error) {
       fail(error, 'Chat could not be opened')
       throw error
@@ -476,7 +499,7 @@ function WorkspaceApp(): ReactElement {
 
   return (
     <div
-      className={`app-shell messenger with-rail ${detachedId ? 'detached-chat' : ''} ${view === 'chats' && showInspector ? 'with-inspector' : ''}`}
+      className={`app-shell messenger with-rail ${detachedId ? 'detached-chat' : ''} ${view === 'chats' && showInspector ? 'with-inspector' : ''}${compact ? ` compact view-${view}${detailOpen ? ' detail-open' : ''}` : ''}`}
       onCompositionStartCapture={() => { imeComposing.current = true }}
       onCompositionEndCapture={() => { imeComposing.current = false }}
       onKeyDownCapture={(event) => {
@@ -495,12 +518,16 @@ function WorkspaceApp(): ReactElement {
         onSelect={(next) => {
           setSettingsOpen(false)
           setView(next)
+          detailPushed.current = false
+          setDetailOpen(false)
         }}
         onOpenSettings={(profile) => {
           if (profile) setSettingsTab('profile')
           setSettingsOpen(true)
         }}
       />
+
+      {compact && detailOpen && <button type="button" className="compact-back" onClick={() => showInspector ? setShowInspector(false) : closeDetail()} aria-label={t('Back')} title={t('Back')}><ChevronLeft size={22} /></button>}
 
       {view === 'contacts' ? (
         <>
@@ -509,7 +536,7 @@ function WorkspaceApp(): ReactElement {
             selected={contact}
             social={socialSnapshot}
             socialError={socialError}
-            onSelect={setContact}
+            onSelect={(next) => { setContact(next); openDetail() }}
           />
           {contact && !['bot', 'group', 'friend'].includes(contact.kind) ? <SocialWorkspace
             key={`${authState.user.id}:${contact.kind}:${contact.id}`} embedded
@@ -770,4 +797,17 @@ function ToastNotice({ message }: { message: string }): ReactElement {
     }
   }, [message])
   return <div ref={ref} className="toast" popover="manual" role="status">{message}</div>
+}
+
+/** A phone-sized web page (the desktop app keeps its own layout at any width). */
+function useCompactLayout(): boolean {
+  const [compact, setCompact] = useState(() => usesWebRoutes() && Boolean(window.matchMedia?.(COMPACT_LAYOUT_QUERY).matches))
+  useEffect(() => {
+    if (!usesWebRoutes() || !window.matchMedia) return
+    const media = window.matchMedia(COMPACT_LAYOUT_QUERY)
+    const update = () => setCompact(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  return compact
 }
