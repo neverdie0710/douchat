@@ -3,6 +3,7 @@ import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shar
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, RemoteConnection } from '../../shared/types'
 import { recordTiming, timedRemote } from '../diagnostics'
+import { hostInstallCommand } from '../../shared/hostInstall'
 import type { DesktopAuth } from '../desktopAuth'
 import type { DouchatStore } from '../store'
 import type { ConnectionManager, DaemonBackend } from '../connectionManager'
@@ -12,7 +13,6 @@ import { canonicalJson, sha256Hex, signCommand, type SignedCommand } from './own
 import type { RelayBackend } from './daemonRelay'
 import { approvalDecision, RemoteApprovals, REMOTE_APPROVAL_PREFIX, type RemoteApprovalContext } from './remoteApprovals'
 
-const ENROLLMENT_PREFIX = 'dch1_'
 const WATCH_BACKOFF = [1_000, 5_000, 15_000, 60_000]
 const HOST_LIST_TTL_MS = 5_000
 /** Hosts this new run owner tasks (host/src/executor.ts). */
@@ -75,24 +75,11 @@ export interface RemoteExecutionBridge {
   isDaemonAgent(agentId: string): boolean
 }
 
-/** The one-time install payload for a host that follows the service, as the web app makes it. The ticket is a credential: never log it. */
-export function enrollmentToken(input: { serviceUrl: string; ticket: string; hostId: string; ownerId: string; exp: number }): string {
-  const body = { v: 2, trust: 'service', serviceUrl: input.serviceUrl, ticket: input.ticket, hostId: input.hostId, ownerId: input.ownerId, exp: input.exp }
-  return ENROLLMENT_PREFIX + Buffer.from(JSON.stringify(body), 'utf8').toString('base64url')
-}
 /** Short, comparable fingerprint of the owner device key, also printed by douchat-host setup. */
 export function deviceFingerprint(publicKey: string): string {
   const hex = createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex').slice(0, 16)
   return hex.match(/.{4}/g)!.join('-')
 }
-/** The install command. The token only contains base64url characters and the base is a validated URL, so single quotes are enough. */
-export function installCommand(token: string, downloadBase: string): string {
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(downloadBase).hostname)
-  const direct = local ? " --noproxy 'localhost,127.0.0.1,::1'" : ''
-  return `curl -fsSL${direct} '${downloadBase}/install.sh' | DOUCHAT_HOST_URL='${downloadBase}' DOUCHAT_ENROLL='${token}' sh`
-}
-/** Production releases are on the CDN; other services (local testing) serve them at <service>/host. */
-export const PRODUCTION_HOST_DOWNLOAD = 'https://cdn.douchat.ai/host'
 /** A local service can advertise its production origin via VITE_APP_URL.
  * Keep local enrollment on the service that actually issued the ticket. */
 export function enrollmentServiceUrl(configuredUrl: string, advertisedUrl?: string): string {
@@ -101,15 +88,6 @@ export function enrollmentServiceUrl(configuredUrl: string, advertisedUrl?: stri
   return local ? configured.origin : new URL(advertisedUrl || configuredUrl).origin
 }
 
-/** Where install.sh and the host bundle are served, unless overridden. */
-export function hostDownloadBase(serviceUrl: string, override = process.env.DOUCHAT_HOST_DOWNLOAD_URL): string {
-  const fallback = new URL(serviceUrl).origin === 'https://douchat.ai' ? PRODUCTION_HOST_DOWNLOAD : `${serviceUrl.replace(/\/+$/, '')}/host`
-  const base = new URL(override?.trim() || fallback)
-  if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))
-    throw new Error('The douchat-host download address must use HTTPS.')
-  if (/['\s\\]/.test(base.href)) throw new Error('Invalid douchat-host download address.')
-  return base.href.replace(/\/+$/, '')
-}
 export const UNINSTALL_COMMAND = '"$HOME/.douchat-host/bin/douchat-host" uninstall --purge'
 
 /**
@@ -204,10 +182,9 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
   async createEnrollment(): Promise<DaemonEnrollment> {
     const identity = this.identity()
     const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number; trust?: string }>({ action: 'host-enroll-ticket', trust: 'service' }, undefined, identity)
-    if (ticket.trust !== 'service' || !/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
+    if (ticket.trust !== 'service' || !/^hst_[0-9a-f-]{36}$/.test(ticket.hostId)) throw new Error('The Douchat service returned an invalid install ticket.')
     const serviceUrl = enrollmentServiceUrl(this.url, ticket.serviceUrl)
-    const token = enrollmentToken({ serviceUrl, ticket: ticket.ticket, hostId: ticket.hostId, ownerId: identity.id, exp: ticket.expiresAt })
-    const enrollment: DaemonEnrollment = { id: ticket.hostId, hostId: ticket.hostId, installCommand: installCommand(token, hostDownloadBase(serviceUrl)), uninstallCommand: UNINSTALL_COMMAND, fingerprint: '', expiresAt: ticket.expiresAt }
+    const enrollment: DaemonEnrollment = { id: ticket.hostId, hostId: ticket.hostId, installCommand: hostInstallCommand(serviceUrl, ticket.ticket), uninstallCommand: UNINSTALL_COMMAND, fingerprint: '', expiresAt: ticket.expiresAt }
     for (const [id, item] of this.enrollments) if (item.enrollment.expiresAt <= Date.now()) { item.abort.abort(); this.enrollments.delete(id) }
     this.enrollments.set(enrollment.id, { enrollment, ownerId: identity.id, serviceUrl, abort: new AbortController() })
     return enrollment

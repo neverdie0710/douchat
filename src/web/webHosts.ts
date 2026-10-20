@@ -3,6 +3,7 @@ import type { SyncRecord } from '../shared/cloudSync'
 import type { AgentConfig, ConnectionTestReport, ConnectionView, Conversation, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteAgentAdapter, Topic } from '../shared/types'
 import { agentId, deleteAgent } from './agents'
 import type { SocialCall } from './hostChat'
+import { hostInstallCommand } from '../shared/hostInstall'
 import { siteOrigin } from './site'
 import type { WebSync } from './webSync'
 
@@ -19,7 +20,6 @@ import type { WebSync } from './webSync'
 export const WEB_HOST_PREFIX = 'svc_'
 const ENROLL_PREFIX = 'web-enroll:'
 const PRODUCTION_ORIGIN = 'https://douchat.ai'
-const PRODUCTION_DOWNLOAD = 'https://cdn.douchat.ai/host'
 const UNINSTALL_COMMAND = '"$HOME/.douchat-host/bin/douchat-host" uninstall --purge'
 const AGENT_COLORS = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
 const ADAPTERS = new Set<RemoteAgentAdapter>(['codex', 'claude'])
@@ -45,16 +45,6 @@ function serviceUrl(ticketUrl: string): string {
   if (import.meta.env.DEV) return `http://localhost:${new URL(siteOrigin()).port || '3004'}`
   return new URL(ticketUrl || PRODUCTION_ORIGIN).origin
 }
-const downloadBase = (service: string) => service === PRODUCTION_ORIGIN ? PRODUCTION_DOWNLOAD : `${service}/host`
-
-/** The same install command as the desktop's (daemonClient.ts installCommand). */
-function installCommand(token: string, base: string): string {
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(base).hostname)
-  const direct = local ? " --noproxy 'localhost,127.0.0.1,::1'" : ''
-  return `curl -fsSL${direct} '${base}/install.sh' | DOUCHAT_HOST_URL='${base}' DOUCHAT_ENROLL='${token}' sh`
-}
-const base64Url = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-
 export class WebHosts {
   /** `ticketHostId` is what the install command registered; `hostId` the host it ended up as (a reused one). */
   private enrollments = new Map<string, { ticketHostId: string; hostId: string; expiresAt: number; abort: AbortController }>()
@@ -103,10 +93,9 @@ export class WebHosts {
     const ticket = await this.call<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number; trust?: string }>({ action: 'host-enroll-ticket', trust: 'service' })
     if (ticket.trust !== 'service' || !/^hst_[0-9a-f-]{36}$/.test(ticket.hostId)) throw new Error('The Douchat service returned an invalid install ticket.')
     const service = serviceUrl(ticket.serviceUrl)
-    const token = 'dch1_' + base64Url(JSON.stringify({ v: 2, trust: 'service', serviceUrl: service, ticket: ticket.ticket, hostId: ticket.hostId, ownerId: this.ownerId(), exp: ticket.expiresAt }))
     const id = ENROLL_PREFIX + ticket.hostId
     this.enrollments.set(id, { ticketHostId: ticket.hostId, hostId: ticket.hostId, expiresAt: ticket.expiresAt, abort: new AbortController() })
-    return { id, hostId: ticket.hostId, installCommand: installCommand(token, downloadBase(service)), uninstallCommand: UNINSTALL_COMMAND, expiresAt: ticket.expiresAt, fingerprint: '' }
+    return { id, hostId: ticket.hostId, installCommand: hostInstallCommand(service, ticket.ticket), uninstallCommand: UNINSTALL_COMMAND, expiresAt: ticket.expiresAt, fingerprint: '' }
   }
 
   isEnrollment(id: string): boolean { return id.startsWith(ENROLL_PREFIX) }

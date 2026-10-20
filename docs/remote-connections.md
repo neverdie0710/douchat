@@ -330,10 +330,13 @@ sequenceDiagram
 Douchat「设置 → 连接 → Host → 添加」（桌面和网页相同）生成安装命令：
 
 ```sh
-curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_<base64url>' sh
+curl -fsSL https://douchat.ai/h/7KQ2-M9XP-4TCE | sh
 ```
 
-- `<base>` 默认是 `<serviceUrl>/host`，即由 douchat-tanstack 的 `public/host/` 提供静态文件；桌面端可用环境变量 `DOUCHAT_HOST_DOWNLOAD_URL` 改为 CDN，必须是 HTTPS（localhost 允许 HTTP）。
+- `7KQ2-M9XP-4TCE` 是安装码，即一次性票据本身：12 位 Crockford base32（60 位随机），15 分钟内有效，host 注册时用掉，服务端只存哈希。本地联调时地址是 `http://localhost:<port>/h/<code>`，并加 `--noproxy '*'`。
+- `GET /h/<code>`（douchat-tanstack `hostInstallScript`，按 IP 限流，`no-store`）返回一段引导脚本。脚本以环境变量导出 `DOUCHAT_HOST_URL` 和 `DOUCHAT_ENROLL`，再下载执行正式的 `<base>/install.sh`，下载内容的校验仍由它完成。安装码无效、已用或过期时，脚本只打印原因并以 1 退出。读取引导脚本不会用掉安装码。
+- `<base>` 由服务端决定：douchat.ai 用 `https://cdn.douchat.ai/host`，其他服务（本地联调）用 `<serviceUrl>/host`。`sh` 前设置的 `DOUCHAT_HOST_HOME`、`DOUCHAT_HOST_SERVICE` 等变量照常传给 install.sh。
+- 旧版桌面生成的 owner 模式票据仍是 `det_…`，安装命令沿用下面的长格式：`curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_<base64url>' sh`。
 - `DOUCHAT_ENROLL` 为 v2：`trust: 'service'`、`serviceUrl`、一次性 `ticket`（15 分钟，服务端只存哈希）、`hostId`、`ownerId`、`exp`，不含设备公钥。通过环境变量传入，不写日志。旧版桌面生成的 v1 令牌带主人设备公钥及指纹，B 以它作为信任锚（owner 模式），douchat-host 仍然接受。
 - 在已连接本账号的服务器上再次运行安装命令时，B 用现有注册调用 `adopt-ticket`：新票据并入原 host（状态 `merged`），若票据是 service 模式，原 host 也切换为 service。桌面「在所有设备上使用…」就是为 owner 模式的 host 生成这样一条命令：原 host 和上面的 agent 都保留，之后改为由 B 自己执行。
 
@@ -734,7 +737,7 @@ export interface RemoteTransport {
 | `src/main/connectionStore.ts`（新） | `connections.json` 原子读写；迁移计划、阶段标记与孤立引用恢复 |
 | `src/main/remote/sshTransport.ts` | 由现有 4 个 remote* 文件重组，SSH 传输实现 |
 | `src/main/remote/daemonRelay.ts`（新） | 守护进程传输：签名 `relay.open`，把脚本、stdin、eof/kill 打包成帧发往中继，按 seq/ack 取回 out/err/exit；对 `localAgentConnection` 暴露与 ssh 子进程相同的流接口 |
-| `src/main/remote/daemonClient.ts`（新） | 注册令牌与安装命令（`installCommand`、`hostDownloadBase`）、等待上线、保存/取消注册（取消时签名吊销）、主机在线状态缓存、签名封装 |
+| `src/main/remote/daemonClient.ts`（新） | 安装命令（`src/shared/hostInstall.ts`）、等待上线、保存/取消注册（取消时签名吊销）、主机在线状态缓存、签名封装 |
 | `src/main/remote/ownerSigning.ts`（新） | 设备密钥安全存储、签名 envelope；B 端用公钥校验并以 `seen.json` 防重放 |
 | `src/main/remoteWorkspace.ts`（新） | 远端目录浏览、校验、黑名单（SSH 与 douchat-host 共用） |
 | `src/main/remoteValidate.ts` | `validateConnection`、新旧 spec 兼容 |
