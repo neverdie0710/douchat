@@ -3,6 +3,7 @@ import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shar
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, RemoteConnection } from '../../shared/types'
 import { DEVICE_IDENTITY_REQUIRED } from '../../shared/ownerSignature'
+import { recordTiming, timedRemote } from '../diagnostics'
 import type { DesktopAuth } from '../desktopAuth'
 import type { DouchatStore } from '../store'
 import type { ConnectionManager, DaemonBackend } from '../connectionManager'
@@ -640,13 +641,17 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
    * owner-signed cancel.
    */
   async runOnHost(config: AgentConfig, prompt: string, signal: AbortSignal | undefined, options: LocalRunOptions): Promise<LocalAgentReply> {
-    const { taskId } = await this.request<{ taskId: string }>({ action: 'host-task-create', localId: config.id, clientTaskId: `desktop:${randomUUID()}`,
-      prompt, origin: 'desktop', target: { kind: 'none' } }, signal)
+    const { taskId } = await timedRemote('host-task.create', { agentId: config.id }, () => this.request<{ taskId: string }>({ action: 'host-task-create', localId: config.id, clientTaskId: `desktop:${randomUUID()}`,
+      prompt, origin: 'desktop', target: { kind: 'none' } }, signal))
     const started = Date.now()
+    const context = { taskId, agentId: config.id }
+    let claimed = false
+    let progressed = false
     let cursor: string | undefined
     let state: OwnerTaskState | undefined
     for (;;) {
       if (signal?.aborted) {
+        recordTiming('host-task.complete', started, { ...context, outcome: 'stopped' })
         if (state?.hostId && state.claimHash && state.bindingRevision !== undefined) {
           const serviceUrl = (await this.connections.store.list()).find(item => item.kind === 'daemon' && item.daemon?.hostId === state!.hostId)?.daemon?.serviceUrl
           await this.request({ action: 'task-cancel', hostId: state.hostId,
@@ -659,6 +664,9 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
         throw error
       })
       cursor = state.cursor
+      if (!claimed && state.status !== 'pending') { claimed = true; recordTiming('host-task.claimed', started, context) }
+      if (!progressed && state.progress?.text) { progressed = true; recordTiming('host-task.first-progress', started, context) }
+      if (state.status === 'succeeded' || state.status === 'failed') recordTiming('host-task.complete', started, { ...context, outcome: state.status })
       if (state.status === 'succeeded') return { text: state.reply ?? '', images: [] }
       if (state.status === 'failed') throw new Error(state.reply || 'The server could not complete this request.')
       const elapsedSeconds = Math.floor((Date.now() - started) / 1000)

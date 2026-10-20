@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import type { RemoteAgentSpec } from '../../shared/types'
 import type { SignedCommand } from './ownerSigning'
+import { recordTiming, timedRemote } from '../diagnostics'
 
 /**
  * Desktop half of the douchat-host relay (douchat-tanstack relay.ts). A relay
@@ -58,6 +59,7 @@ export class RelayStream extends EventEmitter {
   readonly openedAt = Date.now()
   offlineSince?: number
   closedRounds = 0
+  private firstOutput = false
 
   constructor(private readonly hub: RelayHub, readonly id: string, readonly hostLabel: string) { super() }
 
@@ -81,6 +83,11 @@ export class RelayStream extends EventEmitter {
   /** Delivers one frame from the host; the terminal ones end the stream. */
   deliver(frame: RelayFrame): void {
     if (this.ended) return
+    if (!this.firstOutput && (frame.type === 'out' || frame.type === 'err')) {
+      this.firstOutput = true
+      recordTiming('relay.first-output', this.openedAt, { streamId: this.id })
+    }
+    if (frame.type === 'exit' || frame.type === 'error') recordTiming('relay.stream-complete', this.openedAt, { streamId: this.id, outcome: frame.type })
     this.emit('frame', frame)
     if (frame.type === 'exit' || frame.type === 'error') this.finish()
   }
@@ -133,6 +140,7 @@ export class RelayStream extends EventEmitter {
         } catch (error) {
           // A slow host makes the service refuse more frames for a moment; anything else ends the stream.
           if (/对端处理较慢|fetch failed|timed out|aborted|ECONN|could not be reached/i.test(errorText(error)) && failures < 40) {
+            recordTiming('relay.send-retry', Date.now(), { streamId: this.id, retry: failures + 1, backoffMs: BACKOFF[Math.min(failures, BACKOFF.length - 1)] })
             await sleep(BACKOFF[Math.min(failures++, BACKOFF.length - 1)])
             continue
           }
@@ -157,7 +165,10 @@ class RelayHub {
 
   call<T>(body: object, signal?: AbortSignal): Promise<T> {
     if (!backend) throw new Error('Sign in to Douchat to use douchat-host connections.')
-    return backend.request<T>(body, signal)
+    const request = body as { action?: string; streamId?: string }
+    // The long poll waits by design; its length says nothing about latency.
+    if (request.action === 'relay-recv') return backend.request<T>(body, signal)
+    return timedRemote(`relay.${request.action}`, { streamId: request.streamId }, () => backend!.request<T>(body, signal))
   }
 
   async open(spec: RemoteAgentSpec, payload: { kind: 'exec'; script: string } | { kind: 'listen'; socketPath: string }, signal?: AbortSignal): Promise<RelayStream> {
@@ -213,6 +224,7 @@ class RelayHub {
           failingSince = undefined
         } catch (error) {
           if (poll.signal.aborted) continue
+          recordTiming('relay.recv-retry', Date.now(), { retry: failures + 1, backoffMs: BACKOFF[Math.min(failures, BACKOFF.length - 1)] })
           failingSince ??= Date.now()
           if (Date.now() - failingSince > SERVICE_TIMEOUT_MS || !backend) {
             this.failAll(new Error(`Lost the connection to the Douchat service: ${errorText(error)}`))

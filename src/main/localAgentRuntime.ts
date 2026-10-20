@@ -23,6 +23,7 @@ import type { RemoteAgentSpec } from '../shared/types'
 import { RemoteRun, outboxPrompt } from './remoteFileChannel'
 import { assertArgvPrompt, remotePrompt } from './remoteTransport'
 import { openSshTransport } from './remote/sshTransport'
+import { recordTiming, timedRemote } from './diagnostics'
 import { PROMPT_ARG, customRemoteArguments, markPromptArguments, type PromptChannel, type RemoteArg, type RemoteWorkspaceRef } from './remoteScript'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
@@ -512,6 +513,7 @@ async function executeRemoteAgent(
   config: AgentConfig, agent: LocalAgent, input: RemoteAgentSpec, prompt: string,
   signal: AbortSignal | undefined, inputImages: LocalAgentImage[], options: LocalRunOptions
 ): Promise<LocalAgentReply> {
+  const totalStarted = Date.now()
   const transport = await openSshTransport(input, signal)
   const spec = transport.spec
   signal?.throwIfAborted()
@@ -546,10 +548,10 @@ async function executeRemoteAgent(
     let geminiStream: GeminiStream | undefined
     const execute = async (accountLogin: boolean): Promise<string> => {
       signal?.throwIfAborted()
-      const child = await transport.spawn({
+      const child = await timedRemote('agent.spawn', { runId: run.id, transport: spec.transport }, () => transport.spawn({
         runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args, channel,
         environment: adapter === 'gemini' ? 'gemini' : adapter === 'claude' && accountLogin ? 'claude-account' : undefined
-      })
+      }))
       if (signal?.aborted) { killLocalProcess(child); signal.throwIfAborted() }
       return new Promise<string>((resolve, reject) => {
         let stdout = ''
@@ -623,6 +625,7 @@ async function executeRemoteAgent(
     const reply = files.length && !text && !images.length ? { text: '', images } : localAgentReply(agent.name, text, images)
     return files.length ? { ...reply, files: files.map(file => ({ name: file.name, data: file.data })) } : reply
   } finally {
+    recordTiming('execution.one-shot', totalStarted, { runId: run.id, agentId: config.id, transport: spec.transport })
     await run.dispose(true)
   }
 }
@@ -770,13 +773,13 @@ function createConnection(config: AgentConfig, plan: ConnectionPlan, signal: Abo
         resolveRun(run)
         await run.prepare(signal)
         signal?.throwIfAborted()
-        await connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
+        await timedRemote('agent.handshake', { runId: run.id, agentId: config.id, transport: spec.transport }, () => connection.connect(spec.executable, run.workspace, {}, config.model, false, workspace, Boolean(options.onApproval), spec.args, config.thinkingLevel, {
           cwd: run.workspace,
           spawn: agentArgs => transport.spawn({
             runId: run.id, workspace: run.workspaceRef, executable: spec.executable, args: agentArgs, channel: 'stdin',
             environment: kind === 'claude' && accountLogin ? 'claude-account' : undefined
           })
-        })
+        }))
         return { agent, env, directory: cwd, run }
       }
       resolveRun(undefined)
@@ -849,19 +852,34 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
   const connectingTimer = setInterval(() => options.onProgress?.({ phase: 'connecting', elapsedSeconds: Math.floor((Date.now() - connectingAt) / 1000), silentSeconds: 0 }), 15_000)
   let inputDirectory: string | undefined
   try {
-    const { agent, env, directory, run } = await current.ready
+    const { agent, env, directory, run } = remoteSpec
+      ? await timedRemote('session.ready', { agentId: config.id, transport: remoteSpec.transport }, () => current.ready)
+      : await current.ready
     clearInterval(connectingTimer)
     signal?.throwIfAborted()
     if (run) {
+      const turnStarted = Date.now()
+      const context = { runId: run.id, agentId: config.id, turnId: randomUUID() }
+      recordTiming('turn.start', connectingAt, context)
       await run.beginTurn(signal)
-      const paths = await run.uploadImages(images, signal)
+      const paths = await timedRemote('turn.upload', context, () => run.uploadImages(images, signal))
       const base = current.connection.hasHistory ? options.continuationPrompt ?? prompt : prompt
       const withImages = paths.length ? `${base}\n\nInspect these attached image files on this server before answering:\n${paths.join('\n')}` : base
-      const reply = await current.connection.turn(remotePrompt(`${withImages}\n\n${outboxPrompt(run)}`), signal, options.onProgress, options.onApproval)
+      let firstProgress = false
+      const modelStarted = Date.now()
+      const reply = await timedRemote('turn.model', context, () => current.connection.turn(remotePrompt(`${withImages}\n\n${outboxPrompt(run)}`), signal, progress => {
+        if (!firstProgress && progress.phase === 'working') {
+          firstProgress = true
+          recordTiming('turn.first-progress', modelStarted, context)
+        }
+        options.onProgress?.(progress)
+      }, options.onApproval))
       if (kind === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
-      const outputImages = kind === 'codex' ? await run.codexImages(current.connection.thread, signal) : []
-      const files = await run.outboxFiles(signal)
+      const outputImages = kind === 'codex' ? await timedRemote('turn.images', context, () => run.codexImages(current.connection.thread, signal)) : []
+      const files = await timedRemote('turn.outbox', context, () => run.outboxFiles(signal))
       const result = files.length && !reply && !outputImages.length ? { text: '', images: outputImages } : localAgentReply(agent.name, reply, outputImages)
+      recordTiming('turn.complete', turnStarted, context)
+      recordTiming('execution.complete', connectingAt, context)
       return files.length ? { ...result, files: files.map(file => ({ name: file.name, data: file.data })) } : result
     }
     // In a user's project folder, keep inputs in a removable hidden folder.
