@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, RemoteConnection } from '../../shared/types'
+import { DEVICE_IDENTITY_REQUIRED } from '../../shared/ownerSignature'
 import type { DesktopAuth } from '../desktopAuth'
 import type { DouchatStore } from '../store'
 import type { ConnectionManager, DaemonBackend } from '../connectionManager'
@@ -200,7 +201,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     const identity = this.identity()
     const deviceId = this.auth.getDeviceId()
     const devicePublicKey = this.auth.getDevicePublicKey()
-    if (!deviceId || !devicePublicKey) throw new Error('请重新登录 Douchat 以启用设备身份。')
+    if (!deviceId || !devicePublicKey) throw new Error(DEVICE_IDENTITY_REQUIRED)
     const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number }>({ action: 'host-enroll-ticket' }, undefined, identity)
     if (!/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
     const serviceUrl = enrollmentServiceUrl(this.url, ticket.serviceUrl)

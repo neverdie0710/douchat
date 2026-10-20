@@ -7,7 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
  * against its local trust anchor before applying anything.
  */
 export { canonicalJson, ownerSignedBytes, OWNER_SIGNATURE_DOMAIN, SIGNATURE_LIFETIME_MS, type OwnerEnvelope, type SignedCommand } from '../../shared/ownerSignature'
-import { canonicalJson, ownerSignedBytes, SIGNATURE_LIFETIME_MS, type OwnerEnvelope, type SignedCommand } from '../../shared/ownerSignature'
+import { canonicalJson, DEVICE_IDENTITY_REQUIRED, ownerSignedBytes, SIGNATURE_LIFETIME_MS, type OwnerEnvelope, type SignedCommand } from '../../shared/ownerSignature'
 
 export const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -20,7 +20,7 @@ export interface OwnerSigner {
 /** Signs one owner command for one host (or '' for a desktop executor). */
 export function signCommand<T extends Record<string, unknown>>(signer: OwnerSigner, input: { serviceUrl: string; ownerId: string; hostId: string; method: string; payload: T; now?: number }): SignedCommand<T> {
   const deviceId = signer.getDeviceId()
-  if (!deviceId) throw new Error('请重新登录 Douchat 以启用设备身份。')
+  if (!deviceId) throw new Error(DEVICE_IDENTITY_REQUIRED)
   // Round-trip so the signed payload is exactly what will be serialized.
   const payload = JSON.parse(JSON.stringify(input.payload)) as T
   const issuedAt = input.now ?? Date.now()

@@ -1,6 +1,7 @@
 import { Bot, Check, Copy, ExternalLink, Download, Monitor, MoreHorizontal, Plus, RefreshCw, ScanSearch, Server, X } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
 import type { ConnectionStatus, ConnectionTestReport, ConnectionView, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteConnectionInput } from '../../../shared/types'
+import { DEVICE_IDENTITY_REQUIRED } from '../../../shared/ownerSignature'
 import { messageSendError } from '../messageQueue'
 import { t, tr } from '../preferences'
 import { agentIcons } from '../agentIcons'
@@ -12,8 +13,6 @@ const ADAPTER_NAMES: Record<string, string> = {
   kimi: 'Kimi', openclaw: 'OpenClaw', fastclaw: 'FastClaw', hermes: 'Hermes', omp: 'OMP'
 }
 const STEP_NAMES: Record<string, string> = { ssh: 'SSH login and host key', shell: 'Shell and base64', environment: 'Login PATH and home folder', workspace: 'Private folder on the server', forwarding: 'Socket forwarding', host: 'douchat-host online' }
-/** Part of the main process's error when the session has no device key. */
-const DEVICE_IDENTITY_ERROR = '设备身份'
 const UNINSTALL_COMMAND = '"$HOME/.douchat-host/bin/douchat-host" uninstall --purge'
 // 'peer' is the other way in to the same account: the desktop app from the
 // web, and the web app from the desktop. It explains rather than lists.
@@ -271,6 +270,22 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const [signingIn, setSigningIn] = useState(false)
+  // Signing in again registers the device key; the install command is then created again.
+  const awaitingSignIn = useRef(false)
+  useEffect(() => window.douchat.onAuthState(state => {
+    if (!awaitingSignIn.current) return
+    // Signing out first reports signed-out; only the outcome of the new login counts.
+    if (state.status === 'signed-in') { awaitingSignIn.current = false; setSigningIn(false); setAttempt(value => value + 1) }
+    else if (state.status === 'error') { awaitingSignIn.current = false; setSigningIn(false); setError(state.error) }
+  }), [])
+  const signInAgain = (): void => {
+    awaitingSignIn.current = true
+    setSigningIn(true)
+    void window.douchat.signOut().then(() => window.douchat.startLogin()).then(state => {
+      if (state.status === 'error') { awaitingSignIn.current = false; setSigningIn(false); setError(state.error) }
+    }, cause => { awaitingSignIn.current = false; setSigningIn(false); setError(messageSendError(cause)) })
+  }
   const done = useRef(false)
   useEffect(() => {
     let active = true
@@ -327,7 +342,7 @@ function DaemonEnrollDialog({ onClose, onSaved }: { onClose: () => void; onSaved
       </fieldset>}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}
       {/* The device key is registered to an account only at sign-in, so signing in again is the fix. */}
-      {error.includes(DEVICE_IDENTITY_ERROR) && <p className="settings-note">{t('Hosts only trust this computer once its device key is registered to this account, which happens when you sign in.')} <button type="button" className="local-settings-link" onClick={() => void window.douchat.signOut().then(() => window.douchat.startLogin())}>{t('Sign in again')}</button></p>}
+      {(error.includes(DEVICE_IDENTITY_REQUIRED) || signingIn) && <p className="settings-note">{t('Hosts only trust this computer once its device key is registered to this account, which happens when you sign in.')} <button type="button" className="local-settings-link" disabled={signingIn} onClick={signInAgain}>{t(signingIn ? 'Waiting for sign-in…' : 'Sign in again')}</button></p>}
       <footer><span /><button type="button" className="secondary-button" onClick={onClose}>{t('Cancel')}</button>{host && <button type="submit" className="primary-button" disabled={busy}>{t(busy ? 'Saving…' : 'Save')}</button>}</footer>
     </form>
   </NativeDialog>

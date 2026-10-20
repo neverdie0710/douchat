@@ -3,6 +3,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ConnectionView, LocalAgent } from '../../../shared/types'
+import { DEVICE_IDENTITY_REQUIRED } from '../../../shared/ownerSignature'
 vi.mock('./NativeDialog', () => ({ NativeDialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
 vi.mock('../preferences', () => ({ t: (text: string) => text, tr: (text: string, values: Record<string, unknown>) => text.replace(/\{(\w+)\}/g, (_, key) => String(values[key])) }))
 import { ConnectionsPanel } from './ConnectionsPanel'
@@ -21,7 +22,8 @@ beforeEach(() => {
     discoverRemoteAgents: vi.fn(async () => [{ adapter: 'codex', executable: '/usr/bin/codex', version: '1.0' }, { adapter: 'claude', executable: '/usr/bin/claude' }]),
     addDiscoveredAgents: vi.fn(async () => []), copyText: vi.fn(async () => {}),
     createDaemonEnrollment: vi.fn(async () => ({ id: 'enroll-test', installCommand: 'curl https://example.com/install.sh | sh', uninstallCommand: 'douchat-host uninstall', fingerprint: 'test-fingerprint' })),
-    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {})
+    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {}),
+    onAuthState: vi.fn(() => () => {}), signOut: vi.fn(async () => ({ status: 'signed-out' })), startLogin: vi.fn(async () => ({ status: 'waiting' }))
   }
   Object.defineProperty(window, 'douchat', { configurable: true, value: api })
 })
@@ -107,6 +109,26 @@ it('copies enrollment commands through the desktop bridge and reports success an
   await act(async () => uninstall.click())
   expect(api.copyText).toHaveBeenLastCalledWith('douchat-host uninstall')
   expect(uninstall.textContent).toBe('Copied')
+  expect(container.querySelector('[role=alert]')).toBeNull()
+})
+
+it('signs in again when the device key is missing, then creates the install command', async () => {
+  api.createDaemonEnrollment.mockRejectedValueOnce(new Error(DEVICE_IDENTITY_REQUIRED))
+  await render()
+  await act(async () => button('Host').click())
+  await act(async () => button('Add').click())
+  expect(container.querySelector('[role=alert]')?.textContent).toBe(DEVICE_IDENTITY_REQUIRED)
+  await act(async () => button('Sign in again').click())
+  expect(api.signOut).toHaveBeenCalledOnce()
+  expect(api.startLogin).toHaveBeenCalledOnce()
+  expect(button('Waiting for sign-in…').disabled).toBe(true)
+  const listener = api.onAuthState.mock.calls[0][0]
+  // Signing out is reported first; it must not end the wait.
+  await act(async () => listener({ status: 'signed-out' }))
+  expect(api.createDaemonEnrollment).toHaveBeenCalledOnce()
+  await act(async () => listener({ status: 'signed-in', user: { id: 'u1' } }))
+  expect(api.createDaemonEnrollment).toHaveBeenCalledTimes(2)
+  expect(container.textContent).toContain('curl https://example.com/install.sh | sh')
   expect(container.querySelector('[role=alert]')).toBeNull()
 })
 
