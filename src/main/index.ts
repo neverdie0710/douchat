@@ -860,6 +860,23 @@ app.whenReady().then(async () => {
     return listLocalAgentModels(localAgentId)
   })
   ipcMain.handle('douchat:detect-local-agents', async () => { resetShellPath(); return checkLocalAgentUpdates(await detectLocalAgents()) })
+  ipcMain.handle('douchat:list-host-agents', async () => {
+    if (!daemon) return []
+    const hosted = await daemon.hostAgents().catch(() => [])
+    // Earlier desktops added agents found on a host only to this computer's list, so the
+    // same CLI could show up twice. One no contact uses, and that the host already has, goes.
+    const used = new Set(store.accountAgents.map(agent => agent.localAgentId))
+    const service = new Map((await connectionRegistry().list()).flatMap(item => item.kind === 'daemon' && item.daemon?.trust === 'service' ? [[item.id, item.daemon.hostId] as const] : []))
+    let removed = false
+    for (const agent of await detectLocalAgents({ version: async () => undefined })) {
+      const hostId = agent.remoteAgent && service.get(agent.remoteAgent.connectionId)
+      if (!hostId || used.has(agent.id) || !hosted.some(item => item.daemon?.hostId === hostId && item.command === agent.remoteAgent!.executable)) continue
+      await removeCustomLocalAgent(agent.id).catch(() => undefined)
+      removed = true
+    }
+    if (removed) connectionChanged()
+    return hosted
+  })
   ipcMain.handle('douchat:open-local-agent-terminal', (event, id: unknown) => {
     if (!isDouchatRenderer(event.sender) || id !== 'claude') throw new Error('Invalid local agent terminal request')
     return openLocalAgentTerminal(id, {
@@ -1006,12 +1023,25 @@ app.whenReady().then(async () => {
     if (!Array.isArray(chosen) || !chosen.length || chosen.length > 11) throw new Error('Choose agents to add.')
     // Only what discovery found on this server can be added this way.
     const found = await connections.discover(connectionId, AbortSignal.timeout(120_000))
-    for (const item of chosen as Array<{ adapter?: unknown; executable?: unknown; name?: unknown }>) {
+    const matches = (chosen as Array<{ adapter?: unknown; executable?: unknown; name?: unknown }>).map(item => {
       const match = found.find(agent => agent.adapter === item?.adapter && agent.executable === item?.executable)
       if (!match) throw new Error('This agent was not found on the server. Scan again.')
+      return { ...match, name: typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 80) : match.adapter }
+    })
+    // A host that follows the account keeps its agents in its own configuration,
+    // each with a contact, exactly as the web app adds them: every device sees the same ones.
+    const connection = await connectionRegistry().get(connectionId)
+    if (connection?.kind === 'daemon' && connection.daemon?.trust === 'service') {
+      if (!daemon) throw new Error('Sign in to Douchat to use douchat-host connections.')
+      await daemon.addHostAgents(connection, matches, ({ name, localAgentId }) => store.createAgent({ name, localAgentId, localAgentName: name, role: '', instructions: '', color: '#14B8A6', provider: 'local', model: 'default' }))
+      push()
+      connectionChanged()
+      return [...await checkLocalAgentUpdates(await detectLocalAgents()), ...await daemon.hostAgents().catch(() => [])]
+    }
+    for (const match of matches) {
       // Already added from an earlier scan: keep the one there is.
       if (await hasRemoteAgent(connectionId, match.executable)) continue
-      await addCustomLocalAgent({ name: typeof item.name === 'string' && item.name.trim() ? item.name : match.adapter, command: match.executable,
+      await addCustomLocalAgent({ name: match.name, command: match.executable,
         remoteAgent: { connectionId, adapter: match.adapter, executable: match.executable, args: [] } })
     }
     connectionChanged()

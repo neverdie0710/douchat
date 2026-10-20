@@ -83,7 +83,7 @@ export class WebHosts {
       if (!agent?.localAgentId) return []
       const connectionId = WEB_HOST_PREFIX + host.id
       return [{ id: agent.localAgentId, name: agent.name, command: config.adapter, args: config.args, installed: true, discovered: true, version: host.name ?? 'douchat-host',
-        chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, connectionId, connectionName: host.name ?? 'douchat-host',
+        chatSupported: true, status: 'ready', authentication: 'unchecked', custom: true, hosted: true, connectionId, connectionName: host.name ?? 'douchat-host',
         remoteAgent: { connectionId, adapter: config.adapter as RemoteAgentAdapter, executable: config.executable, args: config.args },
         daemon: { connectionId, hostId: host.id, label: host.name ?? 'douchat-host' } } satisfies LocalAgent]
     }))
@@ -154,6 +154,9 @@ export class WebHosts {
     if (!host) throw new Error('This server was removed. Add it again.')
     const now = Date.now()
     const existing = sync.all<AgentConfig>('agent')
+    // Already on the host (added here or on another device): keep the one there is.
+    const configured = new Set((host.agents ?? []).filter(entry => sync.get<AgentConfig>('agent', entry.localId)).map(entry => entry.executable))
+    agents = agents.filter(item => !configured.has(item.executable))
     const created = agents.filter(item => ADAPTERS.has(item.adapter)).map((item, index): AgentConfig => ({
       id: agentId(item.name), ownerId, name: item.name.trim().slice(0, 80) || item.adapter, role: '', instructions: '', labels: '',
       color: AGENT_COLORS[(existing.length + index) % AGENT_COLORS.length], avatar: '', avatarEmoji: normalizeAgentEmoji(''), avatarSeed: crypto.randomUUID(),

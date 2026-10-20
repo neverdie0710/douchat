@@ -102,10 +102,24 @@ export function createWebApi(): DouchatApi {
   const connectionListeners = new Set<() => void>()
   /** After a change to web-added hosts: the panel reloads and chats see new agents. */
   const hostsChanged = () => { void hostAgents.refresh(true); for (const listener of connectionListeners) listener() }
-  /** The desktop's connections when it is online, plus the hosts added here. */
+  /** The desktop's connections when it is online, plus the hosts that follow the account. A host
+   * the desktop also lists is shown once, as the account's: it works here without the desktop. */
   async function connections() {
     const [desktopList, own] = await Promise.all([desktopOnline() ? desktop<import('../shared/types').ConnectionView[]>('listConnections', []).catch(() => []) : [], webHosts.list()])
-    return [...desktopList, ...own]
+    const shared = new Set(own.map(item => item.daemon?.hostId))
+    return [...desktopList.filter(item => !(item.kind === 'daemon' && shared.has(item.daemon?.hostId))), ...own]
+  }
+  /** The desktop's agents (when online) and those configured on hosts, each once. An agent the
+   * desktop registered for a host that already has the same CLI is the same agent twice. */
+  async function localAgents() {
+    const [desktopAgents, desktopConnections, hosted] = await Promise.all([
+      desktopOnline() ? desktop<import('../shared/types').LocalAgent[]>('detectLocalAgents', []).catch(() => []) : [],
+      desktopOnline() ? desktop<import('../shared/types').ConnectionView[]>('listConnections', []).catch(() => []) : [],
+      webHosts.localAgents()
+    ])
+    const hostOf = new Map(desktopConnections.flatMap(item => item.daemon ? [[item.id, item.daemon.hostId] as const] : []))
+    return [...desktopAgents.filter(agent => !hosted.some(item => item.id === agent.id
+      || (agent.remoteAgent && item.daemon?.hostId === hostOf.get(agent.remoteAgent.connectionId) && item.command === agent.remoteAgent.executable))), ...hosted]
   }
   /** Web-added hosts are handled here; everything else by the desktop that added it. */
   const onConnection = <T>(id: string, local: () => Promise<T>, method: DesktopRpcMethod, args: unknown[]): Promise<T> =>
@@ -804,7 +818,7 @@ export function createWebApi(): DouchatApi {
     onConnectionsChanged: (listener) => { connectionListeners.add(listener); return () => { connectionListeners.delete(listener) } },
     onConnanyChanged: () => () => undefined,
     // The desktop's settings and memory when it is online; empty but usable otherwise.
-    detectLocalAgents: async () => [...(desktopOnline() ? await desktop<import('../shared/types').LocalAgent[]>('detectLocalAgents', []).catch(() => []) : []), ...await webHosts.localAgents()],
+    detectLocalAgents: () => localAgents(),
     listSshHosts: viaDesktop('listSshHosts', async () => []),
     listConnections: () => connections(),
     // Adding a server from the web makes one that follows the service and runs its agents itself.

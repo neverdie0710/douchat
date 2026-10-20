@@ -347,7 +347,7 @@ curl -fsSL https://douchat.ai/h/7KQ2-M9XP-4TCE | sh
 3. 下载 `manifest.json`（`version`、`sha256`）和 `douchat-host.mjs`，核对摘要并运行 `version` 自检，放入 `versions/<v>/`，原子切换 `current`，生成 `bin/douchat-host` 包装脚本，只保留当前和上一个版本。
 4. 有 `DOUCHAT_ENROLL` 时执行 `setup`（v1 令牌要求核对指纹）和 `service install`；没有令牌但已注册时视为升级，重启服务。
 
-A 的向导显示安装命令，轮询到主机上线后让用户命名，保存为 `kind: 'daemon'` 的连接。之后与 SSH 连接一样「扫描」B 上的 CLI 并添加 agent。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
+A 的向导显示安装命令，轮询到主机上线后让用户命名，保存为 `kind: 'daemon'` 的连接。之后「扫描」B 上的 CLI 并添加 agent。service 模式的 host 上，桌面和网页添加 agent 的方式相同：每个 agent 建一个联系人，绑定到 host，并写进 host 的 `host.agents` 配置；host 上已有同一可执行文件时不再重复添加。这些 agent 不进桌面的 `local-agents.json`，各端都从 host 配置（`executor-list`）读取，所以列表一致。旧版桌面只登记到 `local-agents.json` 的条目，若没有联系人在用、host 上又已有同一 CLI，会在下次检测时删除。网页在桌面在线时合并两边的连接和 agent，同一 host、同一 agent 只显示一次。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
 
 发布：`npm run build:host` 在 `host/dist/` 生成 `latest.txt` 和 `<version>/` 下的 `douchat-host.mjs`、`install.sh`、`manifest.json`，根目录另有 `install.sh` 和 `latest.txt`；`npm run publish:host:local` 另外复制到 `../douchat-tanstack/public/host/`（已加入 `.gitignore`，仅供本地联调）。生产分发见第 11 节。
 

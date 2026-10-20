@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
-import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, RemoteConnection } from '../../shared/types'
+import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteAgentAdapter, RemoteConnection } from '../../shared/types'
 import { recordTiming, timedRemote } from '../diagnostics'
 import { hostInstallCommand } from '../../shared/hostInstall'
 import type { DesktopAuth } from '../desktopAuth'
@@ -601,6 +601,58 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
       const agent = typeof entry.localId === 'string' ? this.store.agent(entry.localId) : undefined
       return !ids.has(entry.localId) && Boolean(agent) && !cachedRemoteAgentLabel(agent!.localAgentId)
     }) }
+  }
+
+  /** Hosts that follow the account and their agent configuration, as every app sees them. */
+  private async serviceHosts(): Promise<{ id: string; name?: string | null; status?: string; trustMode?: string; agentsRevision?: number; agents?: Record<string, unknown>[] }[]> {
+    const { hosts } = await this.request<{ hosts: { id: string; name?: string | null; status?: string; trustMode?: string; agentsRevision?: number; agents?: Record<string, unknown>[] }[] }>({ action: 'executor-list' })
+    return hosts.filter(host => (host.status === undefined || host.status === 'active') && host.trustMode === 'service')
+  }
+
+  /**
+   * Agents configured on hosts that follow the account, with their contact's
+   * local agent id: the same list the web app shows (webHosts.localAgents).
+   * Their ids are not in this computer's registry; they are added, changed and
+   * removed through the host configuration and their contact.
+   */
+  async hostAgents(): Promise<LocalAgent[]> {
+    const connections = await this.connections.store.list()
+    return (await this.serviceHosts()).flatMap(host => (host.agents ?? []).flatMap(entry => {
+      const agent = typeof entry.localId === 'string' ? this.store.agent(entry.localId) : undefined
+      if (!agent?.localAgentId || typeof entry.adapter !== 'string' || typeof entry.executable !== 'string') return []
+      const connection = connections.find(item => item.kind === 'daemon' && item.daemon?.hostId === host.id)
+      const label = connection?.name || host.name || this.executorLabel(host.id)
+      const connectionId = connection?.id ?? ''
+      const args = Array.isArray(entry.args) ? entry.args.filter((arg): arg is string => typeof arg === 'string') : []
+      return [{ id: agent.localAgentId, name: agent.name, command: entry.executable, args, installed: true, discovered: true, version: label, chatSupported: true,
+        status: 'ready', authentication: 'unchecked', custom: true, hosted: true, connectionId, connectionName: label,
+        remoteAgent: { connectionId, adapter: entry.adapter as RemoteAgentAdapter, executable: entry.executable, args },
+        daemon: { connectionId, hostId: host.id, label } } satisfies LocalAgent]
+    }))
+  }
+
+  /**
+   * Adds agents found on a host that follows the account the way the web app
+   * does (webHosts.addAgents): each becomes a contact, bound to the host and
+   * entered in its configuration, so every device has the same agents.
+   */
+  async addHostAgents(connection: RemoteConnection, agents: { adapter: RemoteAgentAdapter; executable: string; name: string }[], create: (input: { name: string; localAgentId: string }) => AgentConfig): Promise<void> {
+    const daemon = this.ownDaemon(connection)
+    const host = (await this.serviceHosts()).find(item => item.id === daemon.hostId)
+    if (!host) throw new Error('This server was removed. Add it again.')
+    const configured = host.agents ?? []
+    // Already on the host (added here or on another device): keep the one there is.
+    const fresh = agents.filter(item => !configured.some(entry => entry.executable === item.executable && this.store.agent(String(entry.localId))))
+    if (!fresh.length) return
+    const created = fresh.map(item => ({ item, agent: create({ name: item.name, localAgentId: `custom:${randomUUID()}` }) }))
+    for (const { agent } of created)
+      await this.request({ action: 'executor-bind', payload: { executor: `host:${host.id}`, localId: agent.id, expectedBindingRevision: 0, configRevision: 1, permissionsRevision: 1, executionTargetId: `daemon:${host.id}` } })
+    const current = (await this.serviceHosts()).find(item => item.id === host.id) ?? host
+    await this.request({ action: 'host-agents-sync', hostId: host.id, payload: { expectedAgentsRevision: current.agentsRevision ?? 0, agents: [
+      ...(current.agents ?? []),
+      ...created.map(({ item, agent }) => ({ localId: agent.id, configRevision: 1, permissionsRevision: 1, name: agent.name, role: '', instructions: '', adapter: item.adapter, executable: item.executable, args: [] }))
+    ] } })
+    this.hostCache = undefined
   }
 
   /** Turning host execution on needs a host that runs owner tasks (douchat-host 0.2.0 or later). */

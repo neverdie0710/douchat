@@ -66,6 +66,7 @@ const api: DouchatApi = {
   listLocalAgentModels: (agentId: string) => ipcRenderer.invoke('douchat:list-local-agent-models', agentId),
   listRuntimeModels: (localAgentId: string) => ipcRenderer.invoke('douchat:list-runtime-models', localAgentId),
   detectLocalAgents: () => ipcRenderer.invoke('douchat:detect-local-agents'),
+  listHostAgents: () => ipcRenderer.invoke('douchat:list-host-agents'),
   openLocalAgentTerminal: (id: 'claude') => ipcRenderer.invoke('douchat:open-local-agent-terminal', id),
   addCustomLocalAgent: (input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:add-custom-local-agent', input),
   updateLocalAgent: (id: string, input: CustomLocalAgentInput) => ipcRenderer.invoke('douchat:update-local-agent', id, input),

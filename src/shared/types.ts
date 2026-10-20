@@ -45,6 +45,9 @@ export interface LocalAgent {
   unavailable?: 'disabled' | 'missing'
   /** Present for agents bound to a douchat-host daemon: they never run on this computer. */
   daemon?: { connectionId: string; hostId: string; label: string }
+  /** Configured on a douchat-host that follows the account, with its own contact, on every device.
+   * Not in this computer's registry: it is changed or removed through that contact. */
+  hosted?: boolean
 }
 
 /** Where an agent's commands run. A saved workspace path is only meaningful on
@@ -828,6 +831,8 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   /** Models of a detected local agent runtime, before any contact uses it. */
   listRuntimeModels: (localAgentId: string) => Promise<import('./localModels').LocalModelList>
   detectLocalAgents: () => Promise<LocalAgent[]>
+  /** Desktop only: agents configured on hosts that follow the account (the web app lists them among its local agents). */
+  listHostAgents?: () => Promise<LocalAgent[]>
   maintainLocalAgent: (id: string) => Promise<boolean>
   openLocalAgentTerminal: (id: 'claude') => Promise<{ terminal: 'termany' | 'system' }>
   addCustomLocalAgent: (input: CustomLocalAgentInput) => Promise<LocalAgent[]>
