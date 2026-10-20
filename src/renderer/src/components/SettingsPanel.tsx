@@ -400,7 +400,7 @@ function AboutTab(): ReactElement {
         <div className="about-update-status"><span>{t('Run local agents such as Codex and Claude Code, work with files on your computer, and keep everything in sync with the web app.')}</span></div>
       </div>
       <div className="about-action">
-        <a className="primary-button" href="https://douchat.ai/?utm_source=douchat-web#download" target="_blank" rel="noreferrer">{t('Download desktop app')}<ExternalLink size={15} /></a>
+        <a className="primary-button" href="https://douchat.ai/download?utm_source=douchat-web" target="_blank" rel="noreferrer">{t('Download desktop app')}<ExternalLink size={15} /></a>
       </div>
     </section> : <section className="about-update-card" aria-labelledby="about-update-title">
       <div className="about-update-copy">

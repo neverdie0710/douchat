@@ -132,7 +132,7 @@ export function GroupInviteDialog({ conversation, agents, userName, userAvatar, 
       <div className="group-invite-actions">
         <button disabled={!invite || busy || expired || saving} onClick={() => {
           if (!invite) return
-          const text = `${tr('Join me in “{name}” on Douchat.', { name: conversation.name })}\n${t('People and AI agents, together in one chat.')}\n\n${t('Open this invitation on your computer:')}\n${invite.url}\n\n${t('Download the desktop app:')} https://douchat.ai\n${t('Desktop app required · macOS / Windows / Linux')}`
+          const text = `${tr('Join me in “{name}” on Douchat.', { name: conversation.name })}\n${t('People and AI agents, together in one chat.')}\n\n${t('Open this invitation on your computer:')}\n${invite.url}\n\n${t('Download the desktop app:')} https://douchat.ai/download\n${t('Desktop app required · macOS / Windows / Linux')}`
           setError(''); void window.douchat.copyText(text).then(() => setStatus(t('Invitation text copied'))).catch(() => setError(t('Could not copy message')))
         }}><MessageSquare size={16} />{t('Copy invitation text')}</button>
         <button disabled={!invite || busy || expired || saving} onClick={() => void saveCard('save')}><Download size={16} />{t('Save poster')}</button>

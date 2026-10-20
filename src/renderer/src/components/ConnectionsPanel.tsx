@@ -22,7 +22,7 @@ const development = import.meta.env.DEV
 const WEB_APP_URL = development ? 'http://app.localhost:5276' : 'https://app.douchat.ai'
 /** Brings the installed desktop app forward through the scheme it registers. */
 const DESKTOP_APP_LINK = development ? 'douchat-dev://open' : 'douchat://open'
-const DESKTOP_DOWNLOAD_URL = 'https://douchat.ai/?utm_source=douchat-web#download'
+const DESKTOP_DOWNLOAD_URL = 'https://douchat.ai/download?utm_source=douchat-web'
 const tabOf = (item: ConnectionView): ConnectionTab => item.kind === 'daemon' ? 'daemon' : 'ssh'
 
 export function statusText(status: ConnectionStatus): string {

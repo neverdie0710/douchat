@@ -548,6 +548,11 @@ export function createWebApi(): DouchatApi {
     let result: SocialResult
     switch (input.action) {
       case 'group-invite': {
+        // A group not shared yet becomes a shared room on the desktop that runs its agents.
+        if (!social.roomOf(input.conversationId)) {
+          if (desktopOnline()) return desktop('socialAction', [input])
+          throw new Error('Open the Douchat desktop app once to share this group, then invite from here.')
+        }
         const target = room(input.conversationId)
         result = await social.action({ action: 'group-invite', roomId: target.id, regenerate: Boolean(input.regenerate) } as Record<string, unknown>)
         if (!result.invite) throw new Error('Invitation could not be created')
@@ -850,6 +855,15 @@ export function createWebApi(): DouchatApi {
     copyText: (text) => navigator.clipboard.writeText(text),
     // The browser clipboard takes PNG. Handing it the blob as a promise keeps the
     // click's user activation, which Safari requires, while the data is decoded.
+    copyInvitationImage: (dataUrl) => navigator.clipboard.write([new ClipboardItem({ 'image/png': fetch(dataUrl).then((response) => response.blob()) })]),
+    // A download stands in for the desktop's save dialog.
+    saveInvitationImage: async (dataUrl) => {
+      const link = document.createElement('a')
+      link.href = dataUrl
+      link.download = 'douchat-invitation.png'
+      link.click()
+      return true
+    },
     copyImageData: (dataUrl) => navigator.clipboard.write([new ClipboardItem({ 'image/png': fetch(dataUrl).then((response) => response.blob()) })]),
     resizeDialog: async () => true,
     reportDiagnostic: () => undefined,

@@ -214,6 +214,18 @@ function WorkspaceApp(): ReactElement {
   useEffect(() => {
     if (agentIds) void window.douchat.listHostAgents?.().then(setHostAgents, () => { /* Keep the last known list. */ })
   }, [agentIds])
+  // The web app reads the desktop app's agents through it, so the list is
+  // empty until it is online: read it again whenever it comes online.
+  useEffect(() => {
+    if (!window.douchat.desktopAvailability) return
+    let online = window.douchat.desktopAvailability() === 'online'
+    const timer = setInterval(() => {
+      const now = window.douchat.desktopAvailability?.() === 'online'
+      if (now && !online) void scanAgents()
+      online = now
+    }, 3000)
+    return () => clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     void window.douchat.getAuthState().then(setAuthState)
