@@ -2490,6 +2490,14 @@ export class DouchatRuntime {
           const workspace = context === 'controller' || toolsDisabled || hostRun ? {} : this.memberWorkspace(conversationId, sessionKey, config, remote?.target)
           const workspaceDirectory = workspace.local
           const remoteWorkspace = workspace.remote
+          // Start the agent on its server while the skill bridge below is set up: launching it does not
+          // need the bridge, only the prompt does. Same options as the turn, so the turn picks it up.
+          if (remote && context !== 'controller' && !toolsDisabled && !sessionKey.startsWith('social-task:') && !sessionKey.startsWith('handoff-summary:')) {
+            void this.localExecutor.prepare?.(config, {
+              sessionKey, workspaceDirectory, remoteWorkspace,
+              onApproval: remote.adapter === 'codex' || remote.adapter === 'claude' ? async () => { throw new Error('No turn is running') } : undefined
+            }).catch(() => { /* The turn reports any real failure. */ })
+          }
           let bridgeUnavailable = false
           let connectorTools: AgentTool[] = []
           if (context !== 'controller' && !toolsDisabled && !hostRun && this.connectors.createLocalTools) {

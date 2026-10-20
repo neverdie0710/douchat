@@ -875,8 +875,15 @@ async function runConnectedAgent(config: AgentConfig, prompt: string, signal: Ab
         options.onProgress?.(progress)
       }, options.onApproval))
       if (kind === 'claude' && options.claudeAccountLogin) workspace?.rememberAccountLogin()
-      const outputImages = kind === 'codex' ? await timedRemote('turn.images', context, () => run.codexImages(current.connection.thread, signal)) : []
-      const files = await timedRemote('turn.outbox', context, () => run.outboxFiles(signal))
+      const [imageResult, fileResult] = await timedRemote('turn.attachments', context, () => Promise.allSettled([
+        kind === 'codex' ? timedRemote('turn.images', context, () => run.codexImages(current.connection.thread, signal)) : Promise.resolve([]),
+        timedRemote('turn.outbox', context, () => run.outboxFiles(signal))
+      ]))
+      // Both reads must finish before failure handling can tear down the session.
+      if (imageResult.status === 'rejected') throw imageResult.reason
+      if (fileResult.status === 'rejected') throw fileResult.reason
+      const outputImages = imageResult.value
+      const files = fileResult.value
       const result = files.length && !reply && !outputImages.length ? { text: '', images: outputImages } : localAgentReply(agent.name, reply, outputImages)
       recordTiming('turn.complete', turnStarted, context)
       recordTiming('execution.complete', connectingAt, context)

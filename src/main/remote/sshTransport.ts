@@ -3,7 +3,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core'
 import type { RemoteAgentSpec, RemoteDirectoryListing } from '../../shared/types'
 import { closeRemoteConnections, probeRemoteAgent, remoteCheck, remoteExec, remoteLaunch, spawnLaunch, type RemoteExecOptions, type RemoteExecResult } from '../remoteTransport'
 import {
-  cleanupScript, clearOutboxScript, framesScript, killScript, launchScript, markerScript, prepareScript, runFileScript, uploadScript,
+  beginTurnScript, cleanupScript, framesScript, killScript, launchScript, prepareScript, runFileScript, uploadScript,
   type FramesScriptOptions, type LaunchScriptOptions, type RemoteWorkspaceRef
 } from '../remoteScript'
 import { listRemoteDirectories, resolveRemoteWorkspace } from '../remoteWorkspace'
@@ -54,8 +54,7 @@ class SshTransport implements RemoteTransport {
     if (output.toString('utf8').trim() !== String(data.byteLength)) throw new Error('Remote upload was incomplete')
   }
   async beginTurn(runId: string, signal?: AbortSignal): Promise<void> {
-    await timedRemote('turn.marker', { runId, transport: this.kind }, () => this.check(markerScript(runId), { signal, timeoutMs: 15_000 }))
-    await timedRemote('turn.clear-outbox', { runId, transport: this.kind }, () => this.check(clearOutboxScript(runId), { signal, timeoutMs: 15_000 }))
+    await timedRemote('turn.prepare', { runId, transport: this.kind }, () => this.check(beginTurnScript(runId), { signal, timeoutMs: 15_000 }))
   }
   frames(options: FramesScriptOptions, signal: AbortSignal | undefined, maxStdout: number): Promise<RemoteExecResult> {
     return timedRemote('files.scan', { transport: this.kind }, () => this.exec(framesScript(options), { signal, timeoutMs: options.listOnly ? 30_000 : 120_000, maxStdout }))

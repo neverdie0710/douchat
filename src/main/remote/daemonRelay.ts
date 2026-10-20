@@ -53,6 +53,7 @@ export class RelayStream extends EventEmitter {
   private sendSeq = 0
   private queue: { type: string; data?: Buffer }[] = []
   private sending = false
+  private pumpScheduled = false
   private batch?: { seq: number; type: string; data?: Buffer }[]
   /** The kill still goes out after the stream ended here. */
   private flushAfterEnd = false
@@ -68,7 +69,14 @@ export class RelayStream extends EventEmitter {
     const last = this.queue[this.queue.length - 1]
     if (type === 'in' && data && last?.type === 'in' && last.data && last.data.length + data.length <= MAX_FRAME_BYTES) last.data = Buffer.concat([last.data, data])
     else this.queue.push({ type, data })
-    void this.pump()
+    // Writes made in the same tick (a protocol message, then EOF) go out as one send.
+    if (!this.pumpScheduled) {
+      this.pumpScheduled = true
+      queueMicrotask(() => {
+        this.pumpScheduled = false
+        void this.pump()
+      })
+    }
   }
 
   /** Ends the stream here; the host is told to stop unless it already finished. */
@@ -87,7 +95,9 @@ export class RelayStream extends EventEmitter {
       this.firstOutput = true
       recordTiming('relay.first-output', this.openedAt, { streamId: this.id })
     }
-    if (frame.type === 'exit' || frame.type === 'error') recordTiming('relay.stream-complete', this.openedAt, { streamId: this.id, outcome: frame.type })
+    if (frame.type === 'exit' || frame.type === 'error') recordTiming('relay.stream-complete', this.openedAt, {
+      streamId: this.id, outcome: frame.type, code: frame.extra?.code, signal: frame.extra?.signal
+    })
     this.emit('frame', frame)
     if (frame.type === 'exit' || frame.type === 'error') this.finish()
   }
@@ -319,6 +329,7 @@ export class RelayProcess extends EventEmitter {
       else if (frame.type === 'exit') {
         const code = typeof frame.extra?.code === 'number' ? frame.extra.code : null
         const signal = typeof frame.extra?.signal === 'string' ? frame.extra.signal as NodeJS.Signals : null
+        if (signal) this.stderr.write(`Remote process was terminated by ${signal}.\n`)
         // A remote process killed by a signal looks like ssh's exit status 255.
         this.end(code ?? (signal ? 255 : null), null)
       } else if (frame.type === 'error') {
