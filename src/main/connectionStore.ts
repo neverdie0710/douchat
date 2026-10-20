@@ -42,7 +42,7 @@ function validDaemon(value: unknown): RemoteConnection['daemon'] | undefined {
   } catch { return undefined }
   const text = (field: unknown) => typeof field === 'string' ? field.replace(/[\0-\x1f\x7f]/g, '').slice(0, 40) : undefined
   const info = item.info && typeof item.info === 'object' ? { os: text(item.info.os), arch: text(item.info.arch), version: text(item.info.version) } : undefined
-  return { hostId: item.hostId, serviceUrl, ownerId: item.ownerId, ...(info ? { info } : {}) }
+  return { hostId: item.hostId, serviceUrl, ownerId: item.ownerId, ...(info ? { info } : {}), ...(item.hostExecution === true ? { hostExecution: true } : {}) }
 }
 
 /** Structural validation; the identity file is resolved separately in main. */
@@ -153,7 +153,8 @@ export class ConnectionStore {
       const existing = connections.find(item => item.kind === 'daemon' && item.daemon?.hostId === daemon.hostId)
       if (existing) {
         existing.name = name
-        existing.daemon = daemon
+        // Re-enrolling or renaming keeps where its agents run.
+        existing.daemon = { ...daemon, ...(existing.daemon?.hostExecution ? { hostExecution: true } : {}) }
         return existing
       }
       if (connections.length >= 64) throw new Error('Up to 64 connections can be saved.')
@@ -168,6 +169,17 @@ export class ConnectionStore {
       const connection = connections.find(item => item.id === id)
       if (!connection) throw new Error('Connection not found')
       connection.enabled = enabled
+      return connection
+    })
+  }
+
+  /** Whether a douchat-host runs its agents itself rather than this computer driving them. */
+  setHostExecution(id: string, hostExecution: boolean): Promise<RemoteConnection> {
+    return this.mutate(connections => {
+      const connection = connections.find(item => item.id === id)
+      if (connection?.kind !== 'daemon' || !connection.daemon) throw new Error('Only douchat-host connections can run agents on the server.')
+      if (hostExecution) connection.daemon.hostExecution = true
+      else delete connection.daemon.hostExecution
       return connection
     })
   }

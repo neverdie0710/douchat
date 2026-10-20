@@ -222,9 +222,20 @@ SSH 的测试连接依次检查免密认证与 host key、`/bin/sh` 和 `base64`
 
 ## 6. 守护进程连接
 
-### 6.1 当前实现：douchat-host 只做中继（对标 SSH）
+### 6.1 当前实现：douchat-host 中继，或由 B 自己执行
 
-> 2026-10 起采用本节方案，替代下文 6.4–6.8 描述的「B 自主领取并执行任务」模式。那部分设计和服务端代码保留（桌面端 `HOST_EXECUTION = false` 关闭），作为以后支持「A 离线时 B 仍可应答」的备选，当前版本不启用。
+> 2026-10 起默认采用本节的中继方案。连接菜单里打开「在服务器上运行智能体」后，改用 6.1.1 的主人任务：B 自己领取并运行，桌面离线时网页版也能用。
+
+#### 6.1.1 主人任务（host 执行模式）
+
+`RemoteConnection.daemon.hostExecution` 打开后，这台 host 上的 agent 不再由 A 经中继驱动，而是由 B 上的 `host/src/executor.ts` 用桌面同一套 `runLocalAgent` 在本机运行 CLI（douchat-host ≥ 0.2.0，heartbeat 声明 `owner-tasks`）。
+
+- **谁调度**：发起方组好提示词。桌面走 `runtime.ts` 原有流程，执行器换成 `hostAwareExecutor`（`daemonClient.runOnHost`）；网页在桌面离线时走 `src/web/hostChat.ts`，群聊复用 `runGroupConversation`（`cloudGroup.ts`）。服务端不做调度。
+- **协议**（douchat-tanstack `social/ownerTasks.ts`）：`host-task-create` 写一行 `social_message`（`id = ot:<hash>`、`roomId = ownertask:<ownerId>`、`status = pending`），同一 `clientTaskId` 幂等；B 经 `tasks` / `claim` / `heartbeat` / `progress` / `approval-request` / `complete` 处理，租约、取消冻结、绑定变更与房间任务共用 `social_task_execution`；发起方用 `host-task-wait` 长轮询。单聊任务带 `target`，`complete` 时服务端把回复写进 sync 并删掉对应 `request`，标签页关闭也能收到。房间任务列表排除 `ownertask:`。
+- **信任边界**：可执行文件、参数、身份、权限只来自主人签名的 `host.agents` 配置，B 用 `trust.json` 验签，并用签名时间下限防止旧配置回滚；任务只提供提示词。可执行文件须为绝对路径，或在 B 用户登录 PATH 上找到的命令名。审批（`otherTools`、共享房间里非主人的调用）和取消都要主人设备签名，B 再核对 taskId、requestId、paramsHash、bindingRevision、claimHash。
+- **网页审批**：网页登录时用 WebCrypto 生成 Ed25519 设备密钥（`src/web/webDevice.ts`，IndexedDB，不可导出），与桌面相同的登录证明绑定为 `desktop_device`。桌面在「设置 → 连接 → Host → 受信任的设备」核对指纹后签 `host.devices` 把它加入各 host 的信任列表，之后网页即可签审批和停止。
+- **限制**：B 执行时没有桌面的记忆、技能桥、connectors 和定时任务；每轮都是 transient 会话，靠提示词里的历史续接；网页群聊的后续轮次仍依赖标签页开着。
+
 
 守护进程连接和 SSH 连接只有传输方式不同。SSH 下 A 通过 `ssh` 进程连到 B；守护进程下，A 和 B 都以出站 HTTPS 连到 douchat-tanstack，由它中转字节流。提示词组装、记忆读写、技能桥、审批、回复后处理、工作区和续接全部仍在 A，走与 SSH 完全相同的代码（`remoteExec`、`SshTransport.spawn`、`openBridge`、`RemoteRun`），B 只执行 A 下发的远程脚本并转发 stdio。
 

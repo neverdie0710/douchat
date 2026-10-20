@@ -61,7 +61,7 @@ import { LocalComputerProvider } from './computer'
 import { DouchatRuntime } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, agentsOnConnection, hasRemoteAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, setConnectionAccount, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, agentsOnConnection, hasRemoteAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, setConnectionAccount, setHostBindingLookup, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { ConnectionManager } from './connectionManager'
 import { migrateConnections, skippedMigrationAgents } from './connectionStore'
 import { migrateWorkspaceTargets } from './workspaceMigration'
@@ -71,7 +71,8 @@ import { checkLocalAgentUpdates } from './localAgentUpdates'
 import { resetShellPath } from './shellPath'
 import { DesktopAuth } from './desktopAuth'
 import { DeviceIdentity } from './deviceIdentity'
-import { DaemonClient } from './remote/daemonClient'
+import { DaemonClient, hostAwareExecutor } from './remote/daemonClient'
+import { desktopAgentExecutor } from './desktopAgentExecutor'
 import { rendererSocialSnapshot } from './social'
 import { chatApiBaseUrl, desktopAuthScheme, isDesktopAuthUrl, isDesktopCreditsUrl, parseDesktopGroupUrl, normalizeWebAppUrl, parseDesktopConnectorsUrl, DEVELOPMENT_APP_SCHEME } from './authProtocol'
 import { DesktopUpdater, type UpdateDriver } from './updater'
@@ -668,7 +669,9 @@ app.whenReady().then(async () => {
         .resize({ width: 256, height: 256, quality: 'best' })
         .toDataURL()
     }
-  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: (id, hooks) => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [])], prepare: () => CONNECTORS_ENABLED ? connany.prepareForTurn() : Promise.resolve(), createLocalTools: (id, hooks) => CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [] })
+  }, { revision: () => connany.revision(), snapshot: () => emailConnectors.snapshot(), createTools: (id, hooks) => [...emailConnectors.createTools(id), ...(CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [])], prepare: () => CONNECTORS_ENABLED ? connany.prepareForTurn() : Promise.resolve(), createLocalTools: (id, hooks) => CONNECTORS_ENABLED ? connany.createTools(id, hooks) : [] },
+  // Agents a douchat-host runs itself go to it as owner tasks (remote/daemonClient.ts).
+  hostAwareExecutor(desktopAgentExecutor, () => daemon))
   runtime.notifyChangesWith(scheduleBroadcast)
   imChannels = new IMChannelManager(join(app.getPath('userData'), 'im-channels'), {
     encrypt: value => {
@@ -748,6 +751,7 @@ app.whenReady().then(async () => {
   // computer like SSH agents, with the relay carrying their scripts (remote/daemonRelay.ts).
   daemon = new DaemonClient(webAppUrl, auth, store, connections, () => runtime.remoteChanged())
   connections.setDaemonBackend(daemon)
+  setHostBindingLookup(agentId => daemon?.hostBinding(agentId))
   configureDaemonRelay(daemon.relayBackend())
   if (socialAccountId) daemon.start()
   ipcMain.handle('douchat:social-snapshot', (event) => {
@@ -909,6 +913,8 @@ app.whenReady().then(async () => {
   // ─── Server connections ────────────────────────────────────────────────────
   // Every handler validates in main; renderer checks are only hints.
   const connectionChanged = (): void => notifyWindows(BrowserWindow.getAllWindows(), 'douchat:connections-changed')
+  // Hosts added from the web app appear here once the daemon client brings them in.
+  if (daemon) daemon.onConnectionsImported = () => { connectionChanged(); scheduleBroadcast() }
   connections.onStatus(connectionChanged)
   const connectionRequest = (event: Electron.IpcMainInvokeEvent, id?: unknown): string => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid connection request')
@@ -942,6 +948,32 @@ app.whenReady().then(async () => {
     daemon?.scheduleSync()
     connectionChanged(); scheduleBroadcast()
     return connections.list()
+  })
+  ipcMain.handle('douchat:set-connection-host-execution', async (event, id: unknown, enabled: unknown) => {
+    const connectionId = connectionRequest(event, id)
+    if (typeof enabled !== 'boolean') throw new Error('Invalid connection request')
+    const connection = await connectionRegistry().get(connectionId)
+    if (connection?.kind !== 'daemon') throw new Error('Only douchat-host connections can run agents on the server.')
+    if (enabled) await daemon!.requireHostExecution(connection)
+    // Running turns belong to the old place; nothing moves mid-turn.
+    await stopAgentsOn(connectionId)
+    await connections.setHostExecution(connectionId, enabled)
+    cancelLocalModelQueries()
+    daemon?.scheduleSync()
+    connectionChanged(); scheduleBroadcast()
+    return connections.list()
+  })
+  ipcMain.handle('douchat:list-trusted-devices', async (event) => {
+    connectionRequest(event)
+    if (!daemon) throw new Error('Sign in to Douchat first.')
+    return daemon.listDevices()
+  })
+  ipcMain.handle('douchat:set-device-trusted', async (event, deviceId: unknown, trusted: unknown) => {
+    connectionRequest(event)
+    if (typeof deviceId !== 'string' || !/^dev_[0-9a-f-]{36}$/.test(deviceId) || typeof trusted !== 'boolean') throw new Error('Invalid device request')
+    if (!daemon) throw new Error('Sign in to Douchat first.')
+    await daemon.trustDevice(deviceId, trusted)
+    return daemon.listDevices()
   })
   ipcMain.handle('douchat:remove-connection', async (event, id: unknown, mode: unknown) => {
     const connectionId = connectionRequest(event, id)

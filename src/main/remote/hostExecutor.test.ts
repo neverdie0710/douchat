@@ -1,0 +1,180 @@
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
+import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import { Executor, OWNER_TASK_CAPABILITY, parseAgentConfig, resolveProgram, type AgentRunner } from '../../../host/src/executor'
+import type { HostClient } from '../../../host/src/client'
+import type { SeenRequests, TrustState } from '../../../host/src/state'
+import { signCommand } from './ownerSigning'
+
+const ORIGIN = 'https://douchat.test'
+const OWNER = 'owner-1'
+const HOST = 'hst_00000000-0000-4000-8000-000000000000'
+
+function device() {
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+  const id = `dev_${crypto.randomUUID()}`
+  const x = (publicKey.export({ format: 'jwk' }) as { x: string }).x
+  const signer = {
+    getDeviceId: () => id,
+    getDevicePublicKey: () => x,
+    signAsDevice: (message: string) => sign(null, Buffer.from(message, 'utf8'), privateKey).toString('base64url')
+  }
+  return {
+    id, publicKey: x,
+    sign: <T extends Record<string, unknown>>(method: string, payload: T) =>
+      signCommand(signer as never, { serviceUrl: ORIGIN, ownerId: OWNER, hostId: HOST, method, payload })
+  }
+}
+
+function program(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'douchat-exec-'))
+  const path = join(dir, 'claude')
+  writeFileSync(path, '#!/bin/sh\n')
+  chmodSync(path, 0o755)
+  return path
+}
+
+const memorySeen = (): SeenRequests => {
+  const seen = new Set<string>()
+  return { has: (id: string) => seen.has(id), add: (id: string) => { seen.add(id) } } as unknown as SeenRequests
+}
+const claimHash = (claim: string) => createHash('sha256').update(`claim:${claim}`).digest('hex')
+
+/** A scripted host channel: what the service would answer, recording every call. */
+function fakeService(agentsSigned: unknown, permissions?: Record<string, unknown>) {
+  const calls: Record<string, any>[] = []
+  let pending = [{ id: 'ot:task-1', kind: 'owner', localId: 'agent-1' }]
+  const approvals: { id: string; status: string; signed: unknown }[] = []
+  const client = {
+    call: vi.fn(async (body: Record<string, any>) => {
+      calls.push(body)
+      switch (body.action) {
+        case 'agents':
+          return { agents: agentsSigned, agentsRevision: 1, bindings: [{ localId: 'agent-1', executor: `host:${HOST}`, state: 'enabled', configRevision: 3, permissionsRevision: 3, appliedConfigRevision: 0, appliedPermissionsRevision: 0 }] }
+        case 'tasks': { const tasks = pending; pending = []; return { tasks } }
+        case 'claim': return { task: { id: body.id, claim: 'claim-1', localId: 'agent-1', prompt: 'hello', bindingRevision: 2 } }
+        case 'approval-request': return { approvalId: `${body.taskId}:approval:${body.requestId}`, status: 'x-approval' }
+        case 'watch': return { cursor: '1', approvals: approvals.splice(0) }
+        default: return {}
+      }
+    })
+  } as unknown as HostClient
+  return { client, calls, approvals, permissions }
+}
+
+describe('douchat-host executor', () => {
+  it('runs absolute paths or command names found on the login PATH, nothing else', async () => {
+    const executable = program()
+    expect(await resolveProgram(executable, async () => undefined)).toBe(executable)
+    expect(await resolveProgram('claude', async () => executable)).toBe(executable)
+    await expect(resolveProgram('claude', async () => undefined)).rejects.toThrow(/not installed/)
+    await expect(resolveProgram('../bin/claude', async () => executable)).rejects.toThrow(/not installed/)
+  })
+
+  it('rejects configurations without the required fields', () => {
+    expect(() => parseAgentConfig({ localId: 'a' })).toThrow()
+    expect(parseAgentConfig({ localId: 'a', configRevision: 1, permissionsRevision: 1, adapter: 'codex', executable: '/bin/codex', args: [] }).adapter).toBe('codex')
+  })
+
+  it('runs only owner-signed configurations and reports results', async () => {
+    const owner = device()
+    const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
+    const executable = program()
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: 'dev', instructions: '', adapter: 'claude', executable, args: ['--x'] }
+    const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
+    const run = vi.fn<AgentRunner>(async () => ({ text: 'done', images: [] }))
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    await executor.refreshAgents()
+    expect(service.calls.find(call => call.action === 'config-applied')).toMatchObject({ localId: 'agent-1', configRevision: 3 })
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(call => call.action === 'complete')).toBe(true))
+    const [agent, prompt, , options] = run.mock.calls[0]
+    expect(agent.localAgentId).toBe('claude')
+    expect(prompt.endsWith('hello')).toBe(true)
+    expect(options.agentOverride).toMatchObject({ id: 'claude', path: executable, args: ['--x'] })
+    expect(options.agentOverride?.remote).toBeUndefined()
+    expect(service.calls.find(call => call.action === 'complete')).toMatchObject({ id: 'ot:task-1', claim: 'claim-1', reply: 'done' })
+  })
+
+  it('refuses a configuration signed by an untrusted device', async () => {
+    const owner = device()
+    const stranger = device()
+    const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
+    const service = fakeService(stranger.sign('host.agents', { expectedAgentsRevision: 0, agents: [] }))
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run: vi.fn(), workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    await expect(executor.refreshAgents()).rejects.toThrow(/does not trust/)
+  })
+
+  it('fails the task when the signed program is missing on the server', async () => {
+    const owner = device()
+    const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'codex', executable: '/nonexistent/codex', args: [] }
+    const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
+    const run = vi.fn<AgentRunner>()
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    await executor.refreshAgents()
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(call => call.action === 'complete')).toBe(true))
+    expect(run).not.toHaveBeenCalled()
+    expect(service.calls.find(call => call.action === 'complete')).toMatchObject({ failed: true })
+  })
+
+  it('asks the owner and accepts only a matching signed approval', async () => {
+    const owner = device()
+    const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
+    const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
+    let approved: Promise<void> | undefined
+    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => {
+      approved = options.onApproval!({ message: 'Run rm -rf build', details: '{}' }, signal)
+      await approved
+      return { text: 'ran', images: [] }
+    })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    await executor.refreshAgents()
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(call => call.action === 'approval-request')).toBe(true))
+    const request = service.calls.find(call => call.action === 'approval-request')!
+    const approvalId = `${request.taskId}:approval:${request.requestId}`
+    const answer = (signer: ReturnType<typeof device>, paramsHash = request.paramsHash) => ({
+      id: approvalId, status: 'x-allowed',
+      signed: signer.sign('task.approval', { approvalId, taskId: request.taskId, requestId: request.requestId, paramsHash, bindingRevision: 2, claimHash: claimHash('claim-1'), decision: 'allow', scope: 'once' })
+    })
+    // Neither a stranger's signature nor an answer for other parameters counts.
+    service.approvals.push(answer(device()), answer(owner, 'f'.repeat(64)))
+    ;(executor as unknown as { decide(item: unknown): void }).decide(service.approvals[0])
+    ;(executor as unknown as { decide(item: unknown): void }).decide(service.approvals[1])
+    expect(service.calls.some(call => call.action === 'complete')).toBe(false)
+    ;(executor as unknown as { decide(item: unknown): void }).decide(answer(owner))
+    await vi.waitFor(() => expect(service.calls.find(call => call.action === 'complete')).toMatchObject({ reply: 'ran' }))
+  })
+
+  it('follows the service on a web-added host and answers discovery', async () => {
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
+    // Unsigned: a payload exactly as the service stores it for a web-added host.
+    const service = fakeService({ payload: { expectedAgentsRevision: 0, agents: [config] } })
+    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => { await options.onApproval!({ message: 'Run ls', details: '{}' }, signal); return { text: 'ok', images: [] } })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0',
+      resolveCommand: async (command) => command === 'claude' ? config.executable : undefined, readVersion: async () => '2.1.0', log: () => undefined, serviceTrusted: true })
+    await executor.refreshAgents()
+    expect(service.calls.find(call => call.action === 'config-applied')).toMatchObject({ localId: 'agent-1' })
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(call => call.action === 'approval-request')).toBe(true))
+    const request = service.calls.find(call => call.action === 'approval-request')!
+    const approvalId = `${request.taskId}:approval:${request.requestId}`
+    ;(executor as unknown as { decide(item: unknown): void }).decide({ id: approvalId, status: 'x-allowed', signed: { payload: { approvalId, taskId: request.taskId, requestId: request.requestId, paramsHash: request.paramsHash, bindingRevision: 2, claimHash: claimHash('claim-1'), decision: 'allow' } } })
+    await vi.waitFor(() => expect(service.calls.find(call => call.action === 'complete')).toMatchObject({ reply: 'ok' }))
+    expect(await executor.discover()).toEqual([{ adapter: 'claude', executable: config.executable, version: '2.1.0' }])
+  })
+
+  it('advertises owner tasks in its heartbeat', async () => {
+    const service = fakeService(null)
+    const stop = new AbortController()
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 1, devices: [] }), seen: memorySeen(), run: vi.fn(), workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined,
+      sleep: async () => { stop.abort() } })
+    await executor.run(stop.signal)
+    expect(service.calls.find(call => call.action === 'heartbeat')).toMatchObject({ capabilities: [OWNER_TASK_CAPABILITY], version: '0.2.0' })
+  })
+})

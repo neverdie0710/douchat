@@ -118,14 +118,17 @@ it('opens on how to reach agents when there are no connections, per platform', a
   expect(button('Add')).toBeUndefined()
 })
 
-it('on the web, shows only the desktop app while it is offline', async () => {
+it('on the web, offers the desktop app and douchat-host servers while the desktop is offline', async () => {
   api.listConnections.mockResolvedValue([])
   Object.assign(api, { platform: 'web', desktopAvailability: vi.fn(() => 'offline') })
   await render()
   expect(container.querySelector('[role=status]')?.textContent).toContain('The desktop app is offline')
   expect([...container.querySelectorAll<HTMLAnchorElement>('a.connection-peer-link')].map(link => link.textContent)).toEqual(['Open desktop app', 'Download desktop app'])
-  expect(container.querySelector('[role=tablist]')).toBeNull()
+  // SSH needs the desktop's keys; a douchat-host can be added here.
+  expect([...container.querySelectorAll('[role=tab]')].map(tab => tab.textContent)).toEqual(['Desktop app', 'Host'])
   expect(button('Add')).toBeUndefined()
+  await act(async () => { button('Host')!.click() })
+  expect(button('Add')).toBeDefined()
 })
 
 it('on the web, offers only to open the desktop app while it is online', async () => {
@@ -135,5 +138,5 @@ it('on the web, offers only to open the desktop app while it is online', async (
   const links = [...container.querySelectorAll<HTMLAnchorElement>('a.connection-peer-link')]
   expect(links.map(link => link.textContent)).toEqual(['Open desktop app'])
   expect(links[0].getAttribute('href')).toBe('douchat-dev://open')
-  expect(container.querySelector('[role=tablist]')).toBeNull()
+  expect([...container.querySelectorAll('[role=tab]')].map(tab => tab.textContent)).toEqual(['Desktop app', 'Host'])
 })

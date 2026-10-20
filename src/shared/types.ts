@@ -147,7 +147,13 @@ export interface RemoteAgentBinding {
 export type RemoteConnectionKind = 'ssh' | 'daemon'
 
 /** A douchat-host enrolled for one Douchat account (remote-connections.md 6.3). */
-export interface DaemonConnectionTarget { hostId: string; serviceUrl: string; ownerId: string; info?: { os?: string; arch?: string; version?: string } }
+export interface TrustedDeviceView { id: string; fingerprint: string; createdAt: number; current: boolean; trusted: boolean }
+
+export interface DaemonConnectionTarget {
+  hostId: string; serviceUrl: string; ownerId: string; info?: { os?: string; arch?: string; version?: string }
+  /** Agents on it run on the server itself (owner tasks), so they answer while this computer is off. */
+  hostExecution?: boolean
+}
 
 /** A server Douchat can run agents on. Stored in main only; no keys or passwords. */
 export interface RemoteConnection {
@@ -831,6 +837,12 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   /** `mode` applies to agents still on this connection. */
   removeConnection: (id: string, mode: 'disable-agents' | 'delete-agents') => Promise<ConnectionView[]>
   setConnectionEnabled: (id: string, enabled: boolean) => Promise<ConnectionView[]>
+  /** douchat-host only: run its agents on the server so they answer while this computer is off. */
+  setConnectionHostExecution: (id: string, enabled: boolean) => Promise<ConnectionView[]>
+  /** Devices signed in to this account, and whether this computer's douchat-hosts trust each. */
+  listTrustedDevices: () => Promise<TrustedDeviceView[]>
+  /** Lets another device (a browser) approve and stop what agents on these servers do. */
+  setDeviceTrusted: (deviceId: string, trusted: boolean) => Promise<TrustedDeviceView[]>
   testConnection: (id: string) => Promise<ConnectionTestReport>
   discoverRemoteAgents: (id: string) => Promise<DiscoveredRemoteAgent[]>
   /** Adds the chosen discovered agents as remote agents on this connection. */
