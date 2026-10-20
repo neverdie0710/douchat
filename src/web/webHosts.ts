@@ -75,7 +75,7 @@ export class WebHosts {
       const enabled = !agents.length || list.bindings.some(binding => binding.executor === `host:${host.id}` && binding.state === 'enabled')
       return {
         id: WEB_HOST_PREFIX + host.id, name: host.name || [host.info.os, host.info.arch].filter(Boolean).join(' ') || 'douchat-host', kind: 'daemon', enabled, targetRevision: 0,
-        daemon: { hostId: host.id, serviceUrl: '', ownerId: this.ownerId() ?? '', info: host.info, hostExecution: true },
+        daemon: { hostId: host.id, serviceUrl: '', ownerId: this.ownerId() ?? '', info: host.info, hostExecution: true, trust: 'service' },
         createdAt: host.createdAt,
         status: !enabled ? { state: 'disabled' } : host.online ? { state: 'connected', agents: agents.length } : { state: 'error', message: 'douchat-host is offline. Check that its service is running on the server.' },
         agentIds: agents.map(agent => agent.localAgentId!).filter(Boolean),

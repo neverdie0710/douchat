@@ -94,7 +94,7 @@ async function setup(args: string[]): Promise<void> {
     }
   } else if (existing && !args.includes('--force'))
     die(`Already registered as ${existing.hostId} with another Douchat account or service. Run "douchat-host uninstall" first, or set DOUCHAT_HOST_FORCE=1 to replace it.`)
-  if (enrollment.v === 2) console.log('Added from the Douchat web app: this server follows your Douchat account.')
+  if (enrollment.v === 2) console.log('This server follows your Douchat account, so every Douchat app you sign in to can use it.')
   else console.log(`Owner device fingerprint: ${enrollment.fingerprint}`)
   if (enrollment.v === 1 && !args.includes('--yes') && process.env.DOUCHAT_HOST_YES !== '1') {
     const confirmed = askTerminal('Does this match the fingerprint shown in Douchat? [y/N] ')
@@ -312,7 +312,7 @@ function status(): void {
     `service:  ${state.serviceUrl}`,
     `owner:    ${state.ownerName ?? state.ownerId}`,
     `token:    expires ${new Date(state.tokenExpiresAt).toISOString()}`,
-    state.trustMode === 'service' ? 'trust:    follows the Douchat service (added from the web app)' : `devices:  revision ${trust.revision}; ${trust.devices.map(device => deviceFingerprint(device.publicKey)).join(', ')}`,
+    state.trustMode === 'service' ? 'trust:    follows your Douchat account' : `devices:  revision ${trust.revision}; ${trust.devices.map(device => deviceFingerprint(device.publicKey)).join(', ')}`,
     `version:  ${HOST_VERSION} (node ${process.versions.node})`,
     `process:  ${serviceStatus()}`
   ].join('\n'))

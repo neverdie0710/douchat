@@ -3,7 +3,6 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { ConnectionView, LocalAgent } from '../../../shared/types'
-import { DEVICE_IDENTITY_REQUIRED } from '../../../shared/ownerSignature'
 vi.mock('./NativeDialog', () => ({ NativeDialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }))
 vi.mock('../preferences', () => ({ t: (text: string) => text, tr: (text: string, values: Record<string, unknown>) => text.replace(/\{(\w+)\}/g, (_, key) => String(values[key])) }))
 import { ConnectionsPanel } from './ConnectionsPanel'
@@ -22,8 +21,7 @@ beforeEach(() => {
     discoverRemoteAgents: vi.fn(async () => [{ adapter: 'codex', executable: '/usr/bin/codex', version: '1.0' }, { adapter: 'claude', executable: '/usr/bin/claude' }]),
     addDiscoveredAgents: vi.fn(async () => []), copyText: vi.fn(async () => {}),
     createDaemonEnrollment: vi.fn(async () => ({ id: 'enroll-test', installCommand: 'curl https://example.com/install.sh | sh', uninstallCommand: 'douchat-host uninstall', fingerprint: 'test-fingerprint' })),
-    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {}),
-    onAuthState: vi.fn(() => () => {}), signOut: vi.fn(async () => ({ status: 'signed-out' })), startLogin: vi.fn(async () => ({ status: 'waiting' }))
+    waitDaemonEnrollment: vi.fn(() => new Promise(() => {})), cancelDaemonEnrollment: vi.fn(async () => {})
   }
   Object.defineProperty(window, 'douchat', { configurable: true, value: api })
 })
@@ -112,24 +110,27 @@ it('copies enrollment commands through the desktop bridge and reports success an
   expect(container.querySelector('[role=alert]')).toBeNull()
 })
 
-it('signs in again when the device key is missing, then creates the install command', async () => {
-  api.createDaemonEnrollment.mockRejectedValueOnce(new Error(DEVICE_IDENTITY_REQUIRED))
+it('switches a server that trusts only this computer over to the account, keeping its agents', async () => {
+  const daemon = { hostId: 'hst_00000000-0000-4000-8000-000000000001', serviceUrl: 'https://douchat.ai', ownerId: 'u1' }
+  const box = view({ kind: 'daemon', ssh: undefined, daemon, agentIds: ['custom:a'] })
+  api.listConnections.mockResolvedValue([box])
+  api.waitDaemonEnrollment.mockResolvedValueOnce({ hostId: daemon.hostId, info: { os: 'linux' } })
+  api.completeDaemonEnrollment = vi.fn(async () => [{ ...box, daemon: { ...daemon, hostExecution: true, trust: 'service' } }])
   await render()
   await act(async () => button('Host').click())
-  await act(async () => button('Add').click())
-  expect(container.querySelector('[role=alert]')?.textContent).toBe(DEVICE_IDENTITY_REQUIRED)
-  await act(async () => button('Sign in again').click())
-  expect(api.signOut).toHaveBeenCalledOnce()
-  expect(api.startLogin).toHaveBeenCalledOnce()
-  expect(button('Waiting for sign-in…').disabled).toBe(true)
-  const listener = api.onAuthState.mock.calls[0][0]
-  // Signing out is reported first; it must not end the wait.
-  await act(async () => listener({ status: 'signed-out' }))
-  expect(api.createDaemonEnrollment).toHaveBeenCalledOnce()
-  await act(async () => listener({ status: 'signed-in', user: { id: 'u1' } }))
-  expect(api.createDaemonEnrollment).toHaveBeenCalledTimes(2)
-  expect(container.textContent).toContain('curl https://example.com/install.sh | sh')
-  expect(container.querySelector('[role=alert]')).toBeNull()
+  await act(async () => button('More Box').click())
+  await act(async () => button('Use on all devices…').click())
+  expect(container.textContent).toContain('Use {name} on all devices'.replace('{name}', 'Box'))
+  expect(container.textContent).toContain('douchat-host now follows your Douchat account')
+  // Same server: no new name to choose, and its agents are kept rather than scanned again.
+  expect(container.querySelector('input[placeholder="dev-box"]')).toBeNull()
+  await act(async () => button('Save').click())
+  expect(api.completeDaemonEnrollment).toHaveBeenCalledWith('enroll-test', { name: 'Box' })
+  expect(api.discoverRemoteAgents).not.toHaveBeenCalled()
+  // Once it follows the account it cannot go back to being driven from this computer.
+  await act(async () => button('More Box').click())
+  expect([...container.querySelectorAll<HTMLButtonElement>('[role=menuitemcheckbox]')].find(item => item.textContent?.trim() === 'Run agents on the server')?.disabled).toBe(true)
+  expect(button('Use on all devices…')).toBeUndefined()
 })
 
 it('opens on how to reach agents when there are no connections, per platform', async () => {

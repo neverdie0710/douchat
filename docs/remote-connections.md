@@ -224,7 +224,7 @@ SSH 的测试连接依次检查免密认证与 host key、`/bin/sh` 和 `base64`
 
 ### 6.1 当前实现：douchat-host 中继，或由 B 自己执行
 
-> 2026-10 起默认采用本节的中继方案。连接菜单里打开「在服务器上运行智能体」后，改用 6.1.1 的主人任务：B 自己领取并运行，桌面离线时网页版也能用。
+> 2026-10 起，桌面和网页添加的 host 都跟随账号（`trust_mode = 'service'`），一律走 6.1.1 的主人任务：B 自己领取并运行，所有登录的设备都能用。中继要求主人设备签名，只剩旧版桌面添加的 owner 模式 host 在用；这类 host 在连接菜单里可以打开或关闭「在服务器上运行智能体」，也可以用「在所有设备上使用…」切换到 service 模式（见 6.3）。
 
 #### 6.1.1 主人任务（host 执行模式）
 
@@ -232,7 +232,8 @@ SSH 的测试连接依次检查免密认证与 host key、`/bin/sh` 和 `base64`
 
 - **谁调度**：发起方组好提示词。桌面走 `runtime.ts` 原有流程，执行器换成 `hostAwareExecutor`（`daemonClient.runOnHost`）；网页在桌面离线时走 `src/web/hostChat.ts`，群聊复用 `runGroupConversation`（`cloudGroup.ts`）。服务端不做调度。
 - **协议**（douchat-tanstack `social/ownerTasks.ts`）：`host-task-create` 写一行 `social_message`（`id = ot:<hash>`、`roomId = ownertask:<ownerId>`、`status = pending`），同一 `clientTaskId` 幂等；B 经 `tasks` / `claim` / `heartbeat` / `progress` / `approval-request` / `complete` 处理，租约、取消冻结、绑定变更与房间任务共用 `social_task_execution`；发起方用 `host-task-wait` 长轮询。单聊任务带 `target`，`complete` 时服务端把回复写进 sync 并删掉对应 `request`，标签页关闭也能收到。房间任务列表排除 `ownertask:`。
-- **信任边界**：可执行文件、参数、身份、权限只来自主人签名的 `host.agents` 配置，B 用 `trust.json` 验签，并用签名时间下限防止旧配置回滚；任务只提供提示词。可执行文件须为绝对路径，或在 B 用户登录 PATH 上找到的命令名。审批（`otherTools`、共享房间里非主人的调用）和取消都要主人设备签名，B 再核对 taskId、requestId、paramsHash、bindingRevision、claimHash。
+- **信任方式**：service 模式的 host 跟随服务。绑定、`host.agents` 配置、审批、停止和吊销都由主人的登录会话授权，服务端不验设备签名，B 也不再验签。owner 模式的 host 照旧只认主人设备签名，规则见下一条。桌面把 service 模式记为 `daemon.trust = 'service'`，这类连接固定由 host 执行，不能切回中继。
+- **信任边界（owner 模式）**：可执行文件、参数、身份、权限只来自主人签名的 `host.agents` 配置，B 用 `trust.json` 验签，并用签名时间下限防止旧配置回滚；任务只提供提示词。可执行文件须为绝对路径，或在 B 用户登录 PATH 上找到的命令名。审批（`otherTools`、共享房间里非主人的调用）和取消都要主人设备签名，B 再核对 taskId、requestId、paramsHash、bindingRevision、claimHash。
 - **网页审批**：网页登录时用 WebCrypto 生成 Ed25519 设备密钥（`src/web/webDevice.ts`，IndexedDB，不可导出），与桌面相同的登录证明绑定为 `desktop_device`。桌面在「设置 → 连接 → Host → 受信任的设备」核对指纹后签 `host.devices` 把它加入各 host 的信任列表，之后网页即可签审批和停止。
 - **限制**：B 执行时没有桌面的记忆、技能桥、connectors 和定时任务；每轮都是 transient 会话，靠提示词里的历史续接；网页群聊的后续轮次仍依赖标签页开着。
 
@@ -326,23 +327,24 @@ sequenceDiagram
 
 ### 6.3 注册与安装
 
-Douchat「设置 → 连接 → douchat-host → 添加」生成安装命令：
+Douchat「设置 → 连接 → Host → 添加」（桌面和网页相同）生成安装命令：
 
 ```sh
 curl -fsSL '<base>/install.sh' | DOUCHAT_HOST_URL='<base>' DOUCHAT_ENROLL='dch1_<base64url>' sh
 ```
 
 - `<base>` 默认是 `<serviceUrl>/host`，即由 douchat-tanstack 的 `public/host/` 提供静态文件；桌面端可用环境变量 `DOUCHAT_HOST_DOWNLOAD_URL` 改为 CDN，必须是 HTTPS（localhost 允许 HTTP）。
-- `DOUCHAT_ENROLL` 含协议版本、`serviceUrl`、一次性 `ticket`（15 分钟，服务端只存哈希）、`hostId`、`ownerId`、主人设备公钥及指纹、`exp`。通过环境变量传入，不写日志。B 以令牌里的公钥作为信任锚，不采用服务端响应里的设备列表。
+- `DOUCHAT_ENROLL` 为 v2：`trust: 'service'`、`serviceUrl`、一次性 `ticket`（15 分钟，服务端只存哈希）、`hostId`、`ownerId`、`exp`，不含设备公钥。通过环境变量传入，不写日志。旧版桌面生成的 v1 令牌带主人设备公钥及指纹，B 以它作为信任锚（owner 模式），douchat-host 仍然接受。
+- 在已连接本账号的服务器上再次运行安装命令时，B 用现有注册调用 `adopt-ticket`：新票据并入原 host（状态 `merged`），若票据是 service 模式，原 host 也切换为 service。桌面「在所有设备上使用…」就是为 owner 模式的 host 生成这样一条命令：原 host 和上面的 agent 都保留，之后改为由 B 自己执行。
 
 `install.sh`（POSIX sh）步骤：
 
 1. 拒绝 root；识别 Linux / macOS 与 x64 / arm64。
 2. 找 Node.js 20+：优先私有 runtime，其次系统 `node`，都没有则从 `DOUCHAT_NODE_MIRROR`（默认 `https://nodejs.org/dist`）下载固定版本并校验 SHA256。
 3. 下载 `manifest.json`（`version`、`sha256`）和 `douchat-host.mjs`，核对摘要并运行 `version` 自检，放入 `versions/<v>/`，原子切换 `current`，生成 `bin/douchat-host` 包装脚本，只保留当前和上一个版本。
-4. 有 `DOUCHAT_ENROLL` 时执行 `setup --force`（询问指纹）和 `service install`；没有令牌但已注册时视为升级，重启服务。
+4. 有 `DOUCHAT_ENROLL` 时执行 `setup`（v1 令牌要求核对指纹）和 `service install`；没有令牌但已注册时视为升级，重启服务。
 
-A 的向导显示安装命令和设备指纹，轮询到主机上线后让用户命名并选择是否允许共享，保存为 `kind: 'daemon'` 的连接。之后与 SSH 连接一样「扫描」B 上的 CLI 并添加 agent。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
+A 的向导显示安装命令，轮询到主机上线后让用户命名，保存为 `kind: 'daemon'` 的连接。之后与 SSH 连接一样「扫描」B 上的 CLI 并添加 agent。关闭向导而未保存时，A 签名吊销该主机，未使用的票据和已注册的主机都不会遗留。
 
 发布：`npm run build:host` 在 `host/dist/` 生成 `latest.txt` 和 `<version>/` 下的 `douchat-host.mjs`、`install.sh`、`manifest.json`，根目录另有 `install.sh` 和 `latest.txt`；`npm run publish:host:local` 另外复制到 `../douchat-tanstack/public/host/`（已加入 `.gitignore`，仅供本地联调）。生产分发见第 11 节。
 

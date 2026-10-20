@@ -153,6 +153,9 @@ export interface DaemonConnectionTarget {
   hostId: string; serviceUrl: string; ownerId: string; info?: { os?: string; arch?: string; version?: string }
   /** Agents on it run on the server itself (owner tasks), so they answer while this computer is off. */
   hostExecution?: boolean
+  /** It follows the Douchat service rather than this computer's device key, so every signed-in app can use it.
+   * Such a host cannot be relayed (that needs a device signature), so it always runs its agents itself. */
+  trust?: 'service'
 }
 
 /** A server Douchat can run agents on. Stored in main only; no keys or passwords. */

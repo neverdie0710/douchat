@@ -6,12 +6,12 @@ import { deviceFingerprint, enrollmentServiceUrl, enrollmentToken, hostAgentConf
 
 const publicKey = (generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' }) as { x: string }).x
 
-it('builds a one-time install command carrying the owner device key', () => {
-  const token = enrollmentToken({ serviceUrl: 'https://douchat.ai', ticket: 'det_abcdefghijklmnopqrstuvwxyz', hostId: 'hst_00000000-0000-4000-8000-000000000000', devicePublicKey: publicKey, deviceId: 'dev_1', ownerId: 'u1', exp: 123 })
+it('builds a one-time install command for a host that follows the account, without a device key', () => {
+  const token = enrollmentToken({ serviceUrl: 'https://douchat.ai', ticket: 'det_abcdefghijklmnopqrstuvwxyz', hostId: 'hst_00000000-0000-4000-8000-000000000000', ownerId: 'u1', exp: 123 })
   expect(token).toMatch(/^dch1_[A-Za-z0-9_-]+$/)
   const body = JSON.parse(Buffer.from(token.slice(5), 'base64url').toString('utf8'))
-  expect(body).toEqual({ v: 1, serviceUrl: 'https://douchat.ai', ticket: 'det_abcdefghijklmnopqrstuvwxyz', hostId: 'hst_00000000-0000-4000-8000-000000000000', ownerId: 'u1',
-    devicePublicKey: publicKey, deviceId: 'dev_1', fingerprint: deviceFingerprint(publicKey), exp: 123 })
+  // The same payload the web app makes (src/web/webHosts.ts); douchat-host accepts v2 only with trust 'service'.
+  expect(body).toEqual({ v: 2, trust: 'service', serviceUrl: 'https://douchat.ai', ticket: 'det_abcdefghijklmnopqrstuvwxyz', hostId: 'hst_00000000-0000-4000-8000-000000000000', ownerId: 'u1', exp: 123 })
   expect(installCommand(token, 'https://cdn.douchat.ai/host')).toBe(
     `curl -fsSL 'https://cdn.douchat.ai/host/install.sh' | DOUCHAT_HOST_URL='https://cdn.douchat.ai/host' DOUCHAT_ENROLL='${token}' sh`)
 })

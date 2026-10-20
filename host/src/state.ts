@@ -23,7 +23,7 @@ export interface HostState {
   /** Raw Ed25519 public key in base64url, as registered with the service. */
   signPublicKey: string
   enrolledAt: number
-  /** 'service': added from the web app; it follows the Douchat service instead of owner-device signatures. */
+  /** 'service': it follows the Douchat service (the owner's session) instead of owner-device signatures. */
   trustMode?: 'owner' | 'service'
 }
 

@@ -2,7 +2,6 @@ import { createHash, randomUUID } from 'node:crypto'
 import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, RemoteConnection } from '../../shared/types'
-import { DEVICE_IDENTITY_REQUIRED } from '../../shared/ownerSignature'
 import { recordTiming, timedRemote } from '../diagnostics'
 import type { DesktopAuth } from '../desktopAuth'
 import type { DouchatStore } from '../store'
@@ -76,10 +75,9 @@ export interface RemoteExecutionBridge {
   isDaemonAgent(agentId: string): boolean
 }
 
-/** The one-time install payload. The ticket is a credential: never log it. */
-export function enrollmentToken(input: { serviceUrl: string; ticket: string; hostId: string; devicePublicKey: string; deviceId: string; ownerId: string; exp: number }): string {
-  const body = { v: 1, serviceUrl: input.serviceUrl, ticket: input.ticket, hostId: input.hostId, ownerId: input.ownerId,
-    devicePublicKey: input.devicePublicKey, deviceId: input.deviceId, fingerprint: deviceFingerprint(input.devicePublicKey), exp: input.exp }
+/** The one-time install payload for a host that follows the service, as the web app makes it. The ticket is a credential: never log it. */
+export function enrollmentToken(input: { serviceUrl: string; ticket: string; hostId: string; ownerId: string; exp: number }): string {
+  const body = { v: 2, trust: 'service', serviceUrl: input.serviceUrl, ticket: input.ticket, hostId: input.hostId, ownerId: input.ownerId, exp: input.exp }
   return ENROLLMENT_PREFIX + Buffer.from(JSON.stringify(body), 'utf8').toString('base64url')
 }
 /** Short, comparable fingerprint of the owner device key, also printed by douchat-host setup. */
@@ -198,16 +196,18 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
 
   // ───────────────────────────── enrollment ─────────────────────────────
 
+  /**
+   * A host added here follows the service like one added from the web app, so
+   * every signed-in app can use it. Run on a server already connected to this
+   * account, the command switches that host over instead of adding another.
+   */
   async createEnrollment(): Promise<DaemonEnrollment> {
     const identity = this.identity()
-    const deviceId = this.auth.getDeviceId()
-    const devicePublicKey = this.auth.getDevicePublicKey()
-    if (!deviceId || !devicePublicKey) throw new Error(DEVICE_IDENTITY_REQUIRED)
-    const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number }>({ action: 'host-enroll-ticket' }, undefined, identity)
-    if (!/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
+    const ticket = await this.request<{ hostId: string; ticket: string; serviceUrl: string; expiresAt: number; trust?: string }>({ action: 'host-enroll-ticket', trust: 'service' }, undefined, identity)
+    if (ticket.trust !== 'service' || !/^hst_[0-9a-f-]{36}$/.test(ticket.hostId) || !/^det_[A-Za-z0-9_-]{20,}$/.test(ticket.ticket)) throw new Error('The Douchat service returned an invalid install ticket.')
     const serviceUrl = enrollmentServiceUrl(this.url, ticket.serviceUrl)
-    const token = enrollmentToken({ serviceUrl, ticket: ticket.ticket, hostId: ticket.hostId, devicePublicKey, deviceId, ownerId: identity.id, exp: ticket.expiresAt })
-    const enrollment: DaemonEnrollment = { id: ticket.hostId, hostId: ticket.hostId, installCommand: installCommand(token, hostDownloadBase(serviceUrl)), uninstallCommand: UNINSTALL_COMMAND, fingerprint: deviceFingerprint(devicePublicKey), expiresAt: ticket.expiresAt }
+    const token = enrollmentToken({ serviceUrl, ticket: ticket.ticket, hostId: ticket.hostId, ownerId: identity.id, exp: ticket.expiresAt })
+    const enrollment: DaemonEnrollment = { id: ticket.hostId, hostId: ticket.hostId, installCommand: installCommand(token, hostDownloadBase(serviceUrl)), uninstallCommand: UNINSTALL_COMMAND, fingerprint: '', expiresAt: ticket.expiresAt }
     for (const [id, item] of this.enrollments) if (item.enrollment.expiresAt <= Date.now()) { item.abort.abort(); this.enrollments.delete(id) }
     this.enrollments.set(enrollment.id, { enrollment, ownerId: identity.id, serviceUrl, abort: new AbortController() })
     return enrollment
@@ -260,10 +260,10 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     const item = this.enrollments.get(id)
     if (!item?.result) throw new Error('Wait for the server to connect first.')
     if (this.identity().id !== item.ownerId) throw new Error('The account changed. Try again.')
-    // A host that follows the service (added from the web) runs its agents itself.
+    // A host that follows the service runs its agents itself.
     const host = (await this.hosts(true)).find(entry => entry.id === item.result!.hostId)
     const saved = await this.connections.saveDaemon({ name: String(input?.name ?? ''),
-      daemon: { hostId: item.result.hostId, serviceUrl: item.serviceUrl, ownerId: item.ownerId, info: item.result.info, ...(host?.trustMode === 'service' ? { hostExecution: true } : {}) } })
+      daemon: { hostId: item.result.hostId, serviceUrl: item.serviceUrl, ownerId: item.ownerId, info: item.result.info, ...(host?.trustMode === 'service' ? { hostExecution: true, trust: 'service' as const } : {}) } })
     this.enrollments.delete(id)
     this.scheduleSync()
     return saved
@@ -598,13 +598,16 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
    * shows up here too, as a connection that runs its agents on the server.
    * A host removed here is revoked, so it is not brought back.
    */
+  /** Brings in hosts added from other apps, and marks saved ones that now follow the service (an install command was run again on them). */
   private async importAccountHosts(ownerId: string): Promise<void> {
-    const known = new Set((await this.connections.store.list()).flatMap(item => item.kind === 'daemon' && item.daemon ? [item.daemon.hostId] : []))
+    const saved = new Map((await this.connections.store.list()).flatMap(item => item.kind === 'daemon' && item.daemon ? [[item.daemon.hostId, item] as const] : []))
     let added = false
     for (const host of await this.hosts(true)) {
-      if (host.status !== 'active' || host.trustMode !== 'service' || known.has(host.id)) continue
-      await this.connections.saveDaemon({ name: host.name || [host.info?.os, host.info?.arch].filter(Boolean).join(' ') || 'douchat-host',
-        daemon: { hostId: host.id, serviceUrl: this.url, ownerId, info: host.info ?? {}, hostExecution: true } })
+      if (host.status !== 'active' || host.trustMode !== 'service') continue
+      const existing = saved.get(host.id)
+      if (existing?.daemon?.trust === 'service') continue
+      await this.connections.saveDaemon({ name: existing?.name || host.name || [host.info?.os, host.info?.arch].filter(Boolean).join(' ') || 'douchat-host',
+        daemon: { ...existing?.daemon, hostId: host.id, serviceUrl: existing?.daemon?.serviceUrl ?? this.url, ownerId, info: host.info ?? existing?.daemon?.info ?? {}, hostExecution: true, trust: 'service' } })
       added = true
     }
     if (added) this.onConnectionsImported?.()
