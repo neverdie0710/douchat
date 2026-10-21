@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { callChannel, HostClient, UnauthorizedError } from './client'
 import { Relay, type OpenRequest } from './relay'
 import { Executor } from './executor'
-import { disposeLocalAgentSessions, runLocalAgent } from '../../src/main/localAgentRuntime'
+import { disposeLocalAgentSessions, releaseLocalAgentSession, runLocalAgent } from '../../src/main/localAgentRuntime'
 import { configureLocalWorkspaces } from '../../src/main/localWorkspaces'
 import { resolveExecutable } from '../../src/main/shellPath'
 import { executableVersion } from '../../src/main/localAgents'
@@ -210,6 +210,7 @@ async function run(): Promise<void> {
     resolveCommand: resolveExecutable,
     readVersion: executableVersion,
     dispose: disposeLocalAgentSessions,
+    release: releaseLocalAgentSession,
     workRoot: join(HOST_HOME, 'work'),
     sessionRoot: join(data, 'local-workspaces', 'sessions'),
     configFloor

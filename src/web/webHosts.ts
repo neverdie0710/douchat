@@ -1,6 +1,6 @@
 import { normalizeAgentEmoji } from '../shared/avatar'
 import type { SyncRecord } from '../shared/cloudSync'
-import type { AgentConfig, ConnectionTestReport, ConnectionView, Conversation, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteAgentAdapter, Topic } from '../shared/types'
+import { REMOTE_AGENT_ADAPTERS, type AgentConfig, type ConnectionTestReport, type ConnectionView, type Conversation, type DaemonEnrollment, type DaemonEnrollmentResult, type DiscoveredRemoteAgent, type LocalAgent, type RemoteAgentAdapter, type Topic } from '../shared/types'
 import { agentId, deleteAgent } from './agents'
 import type { SocialCall } from './hostChat'
 import { hostInstallCommand } from '../shared/hostInstall'
@@ -22,10 +22,11 @@ const ENROLL_PREFIX = 'web-enroll:'
 const PRODUCTION_ORIGIN = 'https://douchat.ai'
 const UNINSTALL_COMMAND = '"$HOME/.douchat-host/bin/douchat-host" uninstall --purge'
 const AGENT_COLORS = ['#14B8A6', '#FF5DA8', '#7C6CF2', '#F59E42', '#3B82F6', '#84A737']
-const ADAPTERS = new Set<RemoteAgentAdapter>(['codex', 'claude'])
+/** Every adapter a host runs, including user-registered commands. */
+const ADAPTERS = new Set<RemoteAgentAdapter>(REMOTE_AGENT_ADAPTERS)
 const record = (value: unknown) => value as SyncRecord
 
-interface HostConfig { localId: string; configRevision: number; permissionsRevision: number; name: string; role: string; instructions: string; adapter: string; executable: string; args: string[] }
+interface HostConfig { localId: string; configRevision: number; permissionsRevision: number; name: string; role: string; instructions: string; adapter: string; executable: string; args: string[]; model?: string; thinkingLevel?: string }
 interface ListedHost {
   id: string; name: string | null; status: string; trustMode: string; online: boolean; lastSeenAt: number | null
   /** Set when the install command ran on a server already connected to this account. */
@@ -144,7 +145,7 @@ export class WebHosts {
    * binding to the host and an entry in the host's configuration, which the
    * host applies before it takes that agent's tasks.
    */
-  async addAgents(connectionId: string, agents: { adapter: RemoteAgentAdapter; executable: string; name: string }[]): Promise<LocalAgent[]> {
+  async addAgents(connectionId: string, agents: { adapter: RemoteAgentAdapter; executable: string; name: string; args?: string[] }[]): Promise<LocalAgent[]> {
     const sync = this.sync()
     const ownerId = this.ownerId()
     if (!sync || !ownerId) throw new Error('Sign in first.')
@@ -171,10 +172,24 @@ export class WebHosts {
     }
     const configs: HostConfig[] = [...(host.agents ?? []), ...created.map((agent, index) => ({
       localId: agent.id, configRevision: 1, permissionsRevision: 1, name: agent.name, role: '', instructions: '',
-      adapter: agents[index].adapter, executable: agents[index].executable, args: []
+      adapter: agents[index].adapter, executable: agents[index].executable, args: (agents[index].args ?? []).slice(0, 50)
     }))]
     await this.call({ action: 'host-agents-sync', hostId, payload: { expectedAgentsRevision: host.agentsRevision ?? 0, agents: configs } })
     return this.localAgents()
+  }
+
+  /** An agent's profile edited here reaches the host it runs on (name, role, instructions, model). */
+  async agentChanged(agent: AgentConfig): Promise<void> {
+    const list = await this.load()
+    for (const host of list.hosts) {
+      const entry = host.trustMode === 'service' && host.status === 'active' ? host.agents?.find(item => item.localId === agent.id) : undefined
+      if (!entry) continue
+      const next = { ...entry, name: agent.name, role: agent.role, instructions: agent.instructions, configRevision: entry.configRevision + 1,
+        ...(agent.model && agent.model !== 'default' ? { model: agent.model } : {}), ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}) }
+      if (agent.model === 'default') delete (next as { model?: string }).model
+      await this.call({ action: 'host-agents-sync', hostId: host.id, payload: { expectedAgentsRevision: host.agentsRevision ?? 0,
+        agents: (host.agents ?? []).map(item => item.localId === agent.id ? next : item) } })
+    }
   }
 
   async setEnabled(connectionId: string, enabled: boolean): Promise<void> {

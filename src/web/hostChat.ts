@@ -15,13 +15,15 @@ export type SocialCall = <T>(body: Record<string, unknown>) => Promise<T>
 
 interface ExecutorList {
   bindings: { localId: string; executor: string; state: string; ready: boolean }[]
-  hosts: { id: string; online: boolean; capabilities: string[]; trustMode?: string }[]
+  hosts: { id: string; name?: string | null; online: boolean; capabilities: string[]; trustMode?: string }[]
 }
 export interface HostTaskState {
   cursor: string
   taskId: string
   status: 'pending' | 'running' | 'succeeded' | 'failed' | string
   reply?: string
+  /** What a finished task delivered; each opens with host-task-attachment. */
+  attachments?: { id: string; index: number; kind: 'image' | 'file'; name: string; mimeType?: string; size: number }[]
   progress: { phase?: string; detail?: string; text?: string; at?: number } | null
   approvals: ({ id: string } & Record<string, unknown>)[]
   hostId?: string
@@ -41,13 +43,13 @@ export class HostAgents {
   constructor(private readonly call: SocialCall, private readonly changed: () => void) {}
 
   /** The host running this agent, when it takes owner tasks. */
-  host(agentId: string | undefined): { hostId: string; online: boolean } | undefined {
+  host(agentId: string | undefined): { hostId: string; name: string; online: boolean } | undefined {
     const binding = this.list?.bindings.find(item => item.localId === agentId && item.state === 'enabled' && item.executor.startsWith('host:'))
     if (!binding) return undefined
     const hostId = binding.executor.slice('host:'.length)
     const host = this.list!.hosts.find(item => item.id === hostId)
     if (!host?.capabilities.includes(OWNER_TASK_CAPABILITY)) return undefined
-    return { hostId, online: host.online }
+    return { hostId, name: host.name || 'Server', online: host.online }
   }
 
   /** A host added from the web app: it takes unsigned approvals and cancels from the service. */
@@ -86,7 +88,7 @@ export function hostActivity(base: ConversationActivityState, state: HostTaskSta
 }
 
 /** Queues a prompt for an agent's host and waits until it finished. Retrying with the same clientTaskId follows the same task. */
-export async function runHostTask(call: SocialCall, input: { localId: string; clientTaskId: string; prompt: string; target: Record<string, unknown> },
+export async function runHostTask(call: SocialCall, input: { localId: string; clientTaskId: string; prompt: string; target: Record<string, unknown>; continuation?: string; sessionKey?: string; workspace?: string },
   onState: (state: HostTaskState) => void): Promise<HostTaskState> {
   const { taskId } = await call<{ taskId: string }>({ action: 'host-task-create', origin: 'web', ...input })
   let cursor: string | undefined
@@ -99,13 +101,13 @@ export async function runHostTask(call: SocialCall, input: { localId: string; cl
 }
 
 /** A group member's turn on its host: the reply text, or an error when it failed. */
-export async function runHostTurn(call: SocialCall, agent: AgentConfig, prompt: string, onState: (state: HostTaskState) => void = () => undefined): Promise<string> {
-  const state = await runHostTask(call, { localId: agent.id, clientTaskId: `web:${crypto.randomUUID()}`, prompt, target: { kind: 'none' } }, onState)
+export async function runHostTurn(call: SocialCall, agent: AgentConfig, prompt: string, onState: (state: HostTaskState) => void = () => undefined, workspace?: string): Promise<string> {
+  const state = await runHostTask(call, { localId: agent.id, clientTaskId: `web:${crypto.randomUUID()}`, prompt, target: { kind: 'none' }, ...(workspace ? { workspace } : {}) }, onState)
   if (state.status !== 'succeeded') throw new Error(state.reply || `${agent.name} could not answer on its server.`)
   return state.reply ?? ''
 }
 
-const SERVER_NOTE = 'You are running on your server, not on the human\'s computer. You cannot access the human\'s local files, desktop or browser, and paths you see refer to the server. Do not create douchat-file: or file: links; describe where results are on the server, or include short results in your reply.'
+const SERVER_NOTE = 'You are running on your server, not on the human\'s computer. You cannot access the human\'s local files, desktop or browser, and paths you see refer to the server. Do not create douchat-file: or file: links; deliver files through the outbox folder named at the end of this request.'
 
 /** The direct-chat prompt: the topic so far, newest message last. The host adds the agent's signed identity. */
 function directPrompt(agent: AgentConfig, user: DesktopAuthUser, turns: ChatTurn[]): string {
@@ -153,17 +155,27 @@ export async function sendToHostAgent(params: {
   const replyId = `${message.id}:host-reply`
   let state: HostTaskState
   try {
+    const workspace = conversation.hostWorkspaces?.[agent.id]?.path
     state = await runHostTask(call, {
       localId: agent.id, clientTaskId: message.id,
       prompt: directPrompt(agent, user, chatHistory(sync, conversation.id, topicId, agent.id, topic?.contextReset)),
+      // The host keeps this chat's native session; a reset starts a new one.
+      sessionKey: `direct:${conversation.id}:${topicId}:${topic?.contextReset?.id ?? ''}`,
+      continuation: [SERVER_NOTE, `${user.name}: ${text}`, `Reply to ${user.name}'s latest message as ${agent.name}.`].join('\n\n'),
+      ...(workspace ? { workspace } : {}),
       target: { kind: 'direct', conversationId: conversation.id, topicId, replyMessageId: replyId, ...(messageId ? { requestId: messageId } : {}), authorName: agent.name, ...version }
     }, onState)
   } catch (error) {
     state = { cursor: '', taskId: '', status: 'failed', reply: error instanceof Error ? error.message : 'The server could not be reached. Try again.', progress: null, approvals: [] }
   }
   const at = Date.now()
+  // The same record the service writes, so whichever lands first is complete.
+  const images = (state.attachments ?? []).filter(item => item.kind === 'image' && item.mimeType)
+  const files = (state.attachments ?? []).filter(item => item.kind === 'file')
   const answer: ChatMessage = state.status === 'succeeded'
-    ? { id: replyId, conversationId: conversation.id, topicId, authorId: agent.id, authorName: agent.name, text: state.reply ?? '', kind: 'message', createdAt: at, ...version }
+    ? { id: replyId, conversationId: conversation.id, topicId, authorId: agent.id, authorName: agent.name, kind: 'message', createdAt: at, ...version,
+      text: (state.reply ?? '') + (files.length ? `\n\n${files.map(file => `📎 ${file.name}`).join('\n')}` : ''),
+      ...(images.length ? { attachments: images.map(item => ({ id: item.id, kind: 'image' as const, name: item.name, mimeType: item.mimeType as NonNullable<ChatMessage['attachments']>[number]['mimeType'], size: item.size })) } : {}) }
     : { id: replyId, conversationId: conversation.id, topicId, authorId: 'system', authorName: 'Douchat', kind: 'system', text: state.reply || 'The server could not complete this request.', createdAt: at, ...version }
   await sync.mutate([{ kind: 'message', id: replyId, apply: (current) => current ?? answer as unknown as SyncRecord }, touch(at)])
 }

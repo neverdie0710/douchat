@@ -2487,7 +2487,8 @@ export class DouchatRuntime {
         try {
           // A folder on this computer is meaningless to an agent on a server, and the other way around.
           // A host-run agent works in its own folder on the server, chosen by the host.
-          const workspace = context === 'controller' || toolsDisabled || hostRun ? {} : this.memberWorkspace(conversationId, sessionKey, config, remote?.target)
+          // A host-run agent's folder for this chat is one on its server, checked again by the host.
+          const workspace = context === 'controller' || toolsDisabled ? {} : this.memberWorkspace(conversationId, sessionKey, config, hostRun ? hostTarget(hostRun.hostId) : remote?.target)
           const workspaceDirectory = workspace.local
           const remoteWorkspace = workspace.remote
           // Start the agent on its server while the skill bridge below is set up: launching it does not
@@ -2562,6 +2563,9 @@ export class DouchatRuntime {
             workspaceDirectory,
             remoteWorkspace,
             transient: context === 'controller' || sessionKey.startsWith('social-task:') || sessionKey.startsWith('handoff-summary:'),
+            // The host keeps this conversation's native session until its context is reset.
+            ...(hostRun && context !== 'controller' && !sessionKey.startsWith('social-task:') && !sessionKey.startsWith('handoff-summary:')
+              ? { hostSession: `${sessionKey}:${this.store.conversation(conversationId)?.topics.find(item => item.id === topicId)?.contextReset?.id ?? ''}` } : {}),
             imageToolsAllowed: context !== 'controller' && !toolsDisabled,
             continuationPrompt: promptParts.join('\n\n'),
             onApproval: (remote ? remote.adapter === 'codex' || remote.adapter === 'claude' : config.localAgentId === 'codex' || config.localAgentId === 'claude') && context !== 'controller' && !toolsDisabled
@@ -2600,7 +2604,7 @@ export class DouchatRuntime {
             }
           }), abort, timeoutMs ?? (context === 'controller' ? CONTROLLER_REPLY_TIMEOUT_MS : LOCAL_REPLY_TIMEOUT_MS))
           const attachments = await Promise.all(reply.images.map((image) => this.store.saveImageAttachment(image, config.ownerId)))
-          if (remote) {
+          if (remote || hostRun) {
             // Local file links from a server are not trustworthy; outbox bytes are saved by the store.
             reply.text = plainRemoteLinks(reply.text)
             for (const file of reply.files ?? []) {
@@ -4341,8 +4345,11 @@ export class DouchatRuntime {
 
 /** A douchat-host runs this agent itself; files stay on the server. */
 function hostAgentPrompt(host: string): string {
-  return `You are running on the server ${host}, not on the human's computer. You cannot access the human's local files, desktop, browser or applications, and paths you see refer to the server. Do not create douchat-file: or file: links. Describe where results are on the server, or include short results directly in your reply.`
+  return `You are running on the server ${host}, not on the human's computer. You cannot access the human's local files, desktop, browser or applications, and paths you see refer to the server. Do not create douchat-file: or file: links. Deliver files through the outbox folder named at the end of this request.`
 }
+
+/** Where an agent its douchat-host runs works: folders chosen for it belong to that server. */
+export const hostTarget = (hostId: string): ExecutionTarget => ({ executionTargetId: `daemon:${hostId}`, targetRevision: 0 })
 
 /** Remote agents cannot see the human's computer; they must not claim otherwise. */
 function remoteAgentPrompt(host: string): string {

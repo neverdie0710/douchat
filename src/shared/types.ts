@@ -337,6 +337,9 @@ export interface Conversation {
   workspacePath?: string
   /** Folder per member, each bound to the computer or server it was chosen on. */
   agentWorkspaces?: Record<string, AgentWorkspaceBinding>
+  /** Folders chosen for agents their douchat-host runs. They are on that server,
+   * which every device of the account uses, so unlike agentWorkspaces they sync. */
+  hostWorkspaces?: Record<string, AgentWorkspaceBinding>
   allowedFolders?: string[]
   savedToContacts?: boolean
   muted?: boolean
@@ -854,7 +857,7 @@ export interface DouchatApi extends AccountDataApi, DesktopDeviceApi {
   testConnection: (id: string) => Promise<ConnectionTestReport>
   discoverRemoteAgents: (id: string) => Promise<DiscoveredRemoteAgent[]>
   /** Adds the chosen discovered agents as remote agents on this connection. */
-  addDiscoveredAgents: (id: string, agents: Array<{ adapter: RemoteAgentAdapter; executable: string; name: string }>) => Promise<LocalAgent[]>
+  addDiscoveredAgents: (id: string, agents: Array<{ adapter: RemoteAgentAdapter; executable: string; name: string; args?: string[] }>) => Promise<LocalAgent[]>
   openConnectionTerminal: (id: string) => Promise<void>
   /** Starts adding a daemon connection; returns the one-time install command. */
   createDaemonEnrollment: () => Promise<DaemonEnrollment>

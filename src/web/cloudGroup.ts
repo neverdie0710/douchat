@@ -85,7 +85,7 @@ export async function runCloudGroupRound(params: {
     .sort((a, b) => a.createdAt - b.createdAt).slice(-60).map(asGroupMessage)
   // A host adds the agent's signed identity itself.
   const complete = async (agent: AgentConfig, content: string) => onHost(agent.id)
-    ? runHostTurn(hosts!.call, agent, content, state => hosts!.onState?.(conversation.id, agent, state))
+    ? runHostTurn(hosts!.call, agent, content, state => hosts!.onState?.(conversation.id, agent, state), conversation.hostWorkspaces?.[agent.id]?.path)
     : (await streamTurn(token, { model: await modelFor(agent, token), stream: true, messages: [{ role: 'system', content: agentIdentityPrompt(agent) }, { role: 'user', content }] }, () => undefined)).text
   const answers = (id: string) => isCloudAgent(agents.get(id)) || onHost(id)
 

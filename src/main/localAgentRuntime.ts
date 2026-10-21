@@ -695,6 +695,10 @@ export function releaseIdleLocalAgentConnections(conversationId: string, directA
   const matches = (sessionKey: string): boolean => conversation(sessionKey) || Boolean(room && sessionKey.startsWith('social:') && sessionKey.endsWith(room))
   for (const [key, entry] of connections) if (!entry.busy && matches(entry.sessionKey)) evictConnection(key, entry)
 }
+/** Closes one session's idle process (a one-off turn that is done). */
+export function releaseLocalAgentSession(sessionKey: string): void {
+  for (const [key, entry] of connections) if (!entry.busy && entry.sessionKey === sessionKey) evictConnection(key, entry)
+}
 export function resetLocalAgentConversation(conversationId: string, topicId?: string, directAgentIds: string[] = [], owner = ''): void {
   const matches = conversationMatcher(conversationId, topicId, directAgentIds)
   resetLocalWorkspaces(owner, (sessionKey) => matches(sessionKey))

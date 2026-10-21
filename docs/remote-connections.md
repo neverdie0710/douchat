@@ -235,7 +235,14 @@ SSH 的测试连接依次检查免密认证与 host key、`/bin/sh` 和 `base64`
 - **信任方式**：service 模式的 host 跟随服务。绑定、`host.agents` 配置、审批、停止和吊销都由主人的登录会话授权，服务端不验设备签名，B 也不再验签。owner 模式的 host 照旧只认主人设备签名，规则见下一条。桌面把 service 模式记为 `daemon.trust = 'service'`，这类连接固定由 host 执行，不能切回中继。
 - **信任边界（owner 模式）**：可执行文件、参数、身份、权限只来自主人签名的 `host.agents` 配置，B 用 `trust.json` 验签，并用签名时间下限防止旧配置回滚；任务只提供提示词。可执行文件须为绝对路径，或在 B 用户登录 PATH 上找到的命令名。审批（`otherTools`、共享房间里非主人的调用）和取消都要主人设备签名，B 再核对 taskId、requestId、paramsHash、bindingRevision、claimHash。
 - **网页审批**：网页登录时用 WebCrypto 生成 Ed25519 设备密钥（`src/web/webDevice.ts`，IndexedDB，不可导出），与桌面相同的登录证明绑定为 `desktop_device`。桌面在「设置 → 连接 → Host → 受信任的设备」核对指纹后签 `host.devices` 把它加入各 host 的信任列表，之后网页即可签审批和停止。
-- **限制**：B 执行时没有桌面的记忆、技能桥、connectors 和定时任务；每轮都是 transient 会话，靠提示词里的历史续接；网页群聊的后续轮次仍依赖标签页开着。
+- **能力**：
+  - B 支持桌面支持的所有 adapter（codex、claude、gemini、grok、cursor、opencode、kimi、openclaw、fastclaw、hermes、omp）和自定义命令（`{prompt}` 参数，回复读标准输出）；`host.discover` 按同一份 CLI 列表扫描登录 PATH。
+  - 配置里带 `model`、`thinkingLevel`。
+  - 任务带 `sessionKey`（会话、话题、上下文重置版本）时，B 为这个会话保留原生会话（Codex thread、Claude session），续接时只发 `continuation`。上下文重置会换新的 key。没有 key 的一次性任务用自己的会话，结束后关闭进程。
+  - 回复可以带图片和文件：B 在提示词里给出 outbox 目录，结束后收集 outbox 文件和 agent 生成的图片（最多 4 个，合计 20 MB），随 `complete` 上传。桌面把它们存成附件；网页的单聊回复里，图片经 `host-task-attachment` 显示，文件列出文件名。
+  - 审批带 `taskScope`（工具名）。主人选「本任务内允许」后，同一任务内的同一工具不再询问。Codex 在 Douchat 里只为原生 Computer Use 发起审批，shell 在它的 workspace-write 沙箱里运行，服务器上同样如此。
+  - 每个会话可以给 agent 指定服务器上的文件夹：B 的 `fs.listDirs` / `fs.resolveDir` 提供选择器，执行前再按同一套规则检查（必须存在，不能是主目录、系统目录或 `.ssh`、`.douchat-*`）。选择存在会话的 `hostWorkspaces` 里，跟着同步，网页和桌面都能设置。
+- **限制**：B 执行时没有桌面的记忆、技能桥、connectors 和定时任务；网页离线调度时也没有记忆；网页群聊的后续轮次仍依赖标签页开着。
 
 
 守护进程连接和 SSH 连接只有传输方式不同。SSH 下 A 通过 `ssh` 进程连到 B；守护进程下，A 和 B 都以出站 HTTPS 连到 douchat-tanstack，由它中转字节流。提示词组装、记忆读写、技能桥、审批、回复后处理、工作区和续接全部仍在 A，走与 SSH 完全相同的代码（`remoteExec`、`SshTransport.spawn`、`openBridge`、`RemoteRun`），B 只执行 A 下发的远程脚本并转发 stdio。

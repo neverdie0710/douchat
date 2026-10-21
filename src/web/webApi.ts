@@ -134,11 +134,11 @@ export function createWebApi(): DouchatApi {
   }
   /** A host's waiting approvals, shown with the desktop's approval card. */
   const hostApprovals = (): PermissionRequest[] => [...hostTasks.values()].flatMap(task => task.approvals.map((approval): PermissionRequest => {
-    const item = approval as { id: string; capability?: string; operation?: string; details?: string; requester?: string; createdAt?: number; expiresAt?: number }
+    const item = approval as { id: string; capability?: string; taskScope?: string; operation?: string; details?: string; requester?: string; createdAt?: number; expiresAt?: number }
     const chat = conversation(task.conversationId)
     return { id: `remote:${item.id}`, ownerId: user?.id ?? '', agentId: task.agentId, agentName: task.agentName, requester: item.requester || task.agentName,
       roomName: chat?.name ?? '', context: chat?.type === 'group' ? 'group' : 'direct', capability: (item.capability || 'otherTools') as PermissionRequest['capability'],
-      operation: item.operation ?? '', details: item.details ?? '', createdAt: item.createdAt ?? Date.now(), executorLabel: 'Server', ...(item.expiresAt ? { expiresAt: item.expiresAt } : {}) }
+      operation: item.operation ?? '', details: item.details ?? '', createdAt: item.createdAt ?? Date.now(), executorLabel: 'Server', ...(item.expiresAt ? { expiresAt: item.expiresAt } : {}), ...(item.taskScope ? { taskScope: item.taskScope } : {}) }
   }))
   /** An owner-signed answer from this browser; the host checks it against its own device list. */
   async function resolveHostApproval(id: string, allow: PermissionApproval): Promise<void> {
@@ -156,6 +156,41 @@ export function createWebApi(): DouchatApi {
       : { action: 'task-approval', hostId, signed: await signOwnerCommand({ origin: siteOrigin(), ownerId: user.id, hostId, method: 'task.approval', payload }) })
     task.approvals = task.approvals.filter(approval => approval.id !== approvalId)
     refresh()
+  }
+  /** This chat's agents that a douchat-host runs, with the folder chosen for each on its server. */
+  async function hostWorkspaceView(conversationId: string): Promise<import('../shared/types').ConversationWorkspaceView> {
+    await hostAgents.refresh()
+    const chat = conversation(conversationId)
+    const members = (chat?.agentIds ?? []).flatMap((agentId): import('../shared/types').MemberWorkspaceView[] => {
+      const agent = sync?.get<AgentConfig>('agent', agentId)
+      const host = hostAgents.host(agentId)
+      if (!agent || !host || agent.ownerId !== user?.id) return []
+      const saved = chat?.hostWorkspaces?.[agentId]
+      const path = saved?.executionTargetId === `daemon:${host.hostId}` ? saved.path : undefined
+      return [{ agentId, location: 'remote', host: host.name, noTerminal: true, ...(path ? { path, source: 'custom' as const } : { source: 'default' as const }) }]
+    })
+    return { eligible: members.length > 0, members }
+  }
+  async function hostFolderCall(agentId: string, method: 'fs.listDirs' | 'fs.resolveDir', params: Record<string, unknown>): Promise<unknown> {
+    const host = hostAgents.host(agentId)
+    if (!host) throw new Error(DESKTOP_OFFLINE)
+    const result = await socialCall<{ ok?: boolean; pending?: boolean; result?: unknown }>({ action: 'host-control', hostId: host.hostId, method, params })
+    if (result.pending) throw new Error('douchat-host did not answer in time. Check that it is online, then try again.')
+    if (!result.ok) throw new Error((result.result as { message?: string } | null)?.message || 'douchat-host could not open this folder.')
+    return result.result
+  }
+  async function setHostWorkspace(conversationId: string, agentId: string, binding: import('../shared/types').AgentWorkspaceBinding | undefined): Promise<void> {
+    if (!sync) throw new Error('Sign in first.')
+    await sync.mutate([{ kind: 'conversation', id: conversationId, apply: (current) => {
+      if (!current) throw new Error('Chat not found')
+      const next = structuredClone(current) as unknown as Conversation
+      const saved = { ...next.hostWorkspaces }
+      if (binding) saved[agentId] = binding
+      else delete saved[agentId]
+      if (Object.keys(saved).length) next.hostWorkspaces = saved
+      else delete next.hostWorkspaces
+      return next as unknown as SyncRecord
+    } }])
   }
   /** Stops this chat's host tasks with an owner-signed cancel. */
   async function cancelHostTasks(conversationId: string): Promise<void> {
@@ -789,7 +824,13 @@ export function createWebApi(): DouchatApi {
       void greetNewChat(sync!, token!, `direct-${agent.id}`).catch(() => undefined)
       return currentSnapshot()
     }),
-    updateAgent: viaDesktop('updateAgent', async (id, input) => { await updateCloudAgent(sync!, id, input); return currentSnapshot() }),
+    updateAgent: viaDesktop('updateAgent', async (id, input) => {
+      await updateCloudAgent(sync!, id, input)
+      // An agent on a host added here runs with the profile the host was given.
+      const agent = sync!.get<AgentConfig>('agent', id)
+      if (agent && hostAgents.host(agent.id)) await webHosts.agentChanged(agent).catch(() => undefined)
+      return currentSnapshot()
+    }),
     deleteAgent: viaDesktop('deleteAgent', async (id) => { await deleteCloudAgent(sync!, id); return currentSnapshot() }),
     createGroup: viaDesktop('createGroup', async (input) => {
       const group = await createGroup(sync!, user!.id, input)
@@ -808,6 +849,11 @@ export function createWebApi(): DouchatApi {
     getAttachmentData: async (id) => {
       const data = social?.attachmentData(id)
       if (data) return data
+      // An image a douchat-host task delivered: the service keeps it with the task.
+      if (id.startsWith('hosttask:')) {
+        const { attachment } = await socialCall<{ attachment: { mimeType?: string; base64: string } }>({ action: 'host-task-attachment', attachmentId: id })
+        return `data:${attachment.mimeType ?? 'application/octet-stream'};base64,${attachment.base64}`
+      }
       // Images live on the desktop that saved them.
       if (desktopOnline()) return desktop('getAttachmentData', [id])
       throw new Error('Open the Douchat desktop app to see this image.')
@@ -846,7 +892,20 @@ export function createWebApi(): DouchatApi {
     getCustomModels: viaDesktop('getCustomModels', async () => ({ providers: [], defaultModel: '' })),
     getDecisionSettings: viaDesktop('getDecisionSettings', async () => DEFAULT_DECISION_SETTINGS),
     getCloudDecisionModels: viaDesktop('getCloudDecisionModels', async () => []),
-    conversationWorkspaces: viaDesktop('conversationWorkspaces', async () => ({ eligible: false, members: [] })),
+    // Folders for agents a host runs are on that server and sync, so the web app can set them too.
+    conversationWorkspaces: viaDesktop('conversationWorkspaces', async (conversationId) => hostWorkspaceView(conversationId)),
+    listRemoteAgentDirectories: viaDesktop('listRemoteAgentDirectories', async (_conversationId, agentId, parent, name) =>
+      hostFolderCall(agentId, 'fs.listDirs', { ...(parent !== undefined ? { parent } : {}), ...(name !== undefined ? { name } : {}) }) as Promise<import('../shared/types').RemoteDirectoryListing>),
+    chooseRemoteAgentWorkspace: viaDesktop('chooseRemoteAgentWorkspace', async (conversationId, agentId, parent, name) => {
+      const host = hostAgents.host(agentId)
+      const { path } = await hostFolderCall(agentId, 'fs.resolveDir', { parent, ...(name !== undefined ? { name } : {}) }) as { path: string }
+      await setHostWorkspace(conversationId, agentId, { path, executionTargetId: `daemon:${host!.hostId}`, targetRevision: 0 })
+      return hostWorkspaceView(conversationId)
+    }),
+    clearAgentWorkspace: viaDesktop('clearAgentWorkspace', async (conversationId, agentId) => {
+      await setHostWorkspace(conversationId, agentId, undefined)
+      return hostWorkspaceView(conversationId)
+    }),
     getCodeArtifact: viaDesktop('getCodeArtifact', async () => null),
     getUserMemory: viaDesktop('getUserMemory', async (agentId) => emptyMemory(user?.id ?? '', agentId ? { agentId } : {})),
     getGroupMemory: viaDesktop('getGroupMemory', async (groupId) => emptyMemory(user?.id ?? '', { groupId })),

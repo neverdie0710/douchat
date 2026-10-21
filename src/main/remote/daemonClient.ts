@@ -58,6 +58,7 @@ interface OwnerTaskState {
   cursor: string
   status: string
   reply?: string
+  attachments?: { id: string; index: number; kind: string; name: string; mimeType?: string }[]
   progress: ProgressTask['progress']
   approvals: { id: string }[]
   hostId?: string
@@ -610,9 +611,11 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     const { hosts } = await this.request<{ hosts: { id: string; agents?: Record<string, unknown>[] }[] }>({ action: 'executor-list' })
     const current = hosts.find(item => item.id === hostId)?.agents ?? []
     const ids = new Set(own.map(entry => entry.localId))
+    // Only entries this computer manages are replaced. Everything else stays, including
+    // agents added in another app whose records have not reached this computer yet.
     return { current, added: current.filter(entry => {
       const agent = typeof entry.localId === 'string' ? this.store.agent(entry.localId) : undefined
-      return !ids.has(entry.localId) && Boolean(agent) && !cachedRemoteAgentLabel(agent!.localAgentId)
+      return !ids.has(entry.localId) && !(agent && cachedRemoteAgentLabel(agent.localAgentId))
     }) }
   }
 
@@ -687,7 +690,10 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
    */
   async runOnHost(config: AgentConfig, prompt: string, signal: AbortSignal | undefined, options: LocalRunOptions): Promise<LocalAgentReply> {
     const { taskId } = await timedRemote('host-task.create', { agentId: config.id }, () => this.request<{ taskId: string }>({ action: 'host-task-create', localId: config.id, clientTaskId: `desktop:${randomUUID()}`,
-      prompt, origin: 'desktop', target: { kind: 'none' } }, signal))
+      prompt, origin: 'desktop', target: { kind: 'none' },
+      // The host resumes this conversation's native session and then needs only the new part.
+      ...(options.hostSession ? { sessionKey: options.hostSession, ...(options.continuationPrompt ? { continuation: options.continuationPrompt } : {}) } : {}),
+      ...(options.remoteWorkspace?.path ? { workspace: options.remoteWorkspace.path } : {}) }, signal))
     const started = Date.now()
     const context = { taskId, agentId: config.id }
     let claimed = false
@@ -712,7 +718,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
       if (!claimed && state.status !== 'pending') { claimed = true; recordTiming('host-task.claimed', started, context) }
       if (!progressed && state.progress?.text) { progressed = true; recordTiming('host-task.first-progress', started, context) }
       if (state.status === 'succeeded' || state.status === 'failed') recordTiming('host-task.complete', started, { ...context, outcome: state.status })
-      if (state.status === 'succeeded') return { text: state.reply ?? '', images: [] }
+      if (state.status === 'succeeded') return { text: state.reply ?? '', ...await this.taskOutputs(state.attachments ?? [], signal) }
       if (state.status === 'failed') throw new Error(state.reply || 'The server could not complete this request.')
       const elapsedSeconds = Math.floor((Date.now() - started) / 1000)
       const at = Number(state.progress?.at) || 0
@@ -722,6 +728,35 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
         ...(state.progress?.detail ? { detail: state.progress.detail } : state.status === 'pending' ? { detail: `Waiting for ${state.hostId ? this.executorLabel(state.hostId) : 'the server'}` } : {})
       })
     }
+  }
+
+  /** The images and files a finished host task delivered, as a local turn returns them. */
+  private async taskOutputs(attachments: { id: string; index: number; kind: string; name: string; mimeType?: string }[], signal?: AbortSignal): Promise<Pick<LocalAgentReply, 'images' | 'files'>> {
+    const images: LocalAgentReply['images'] = []
+    const files: NonNullable<LocalAgentReply['files']> = []
+    for (const item of attachments.slice(0, 4)) {
+      const { attachment } = await this.request<{ attachment: { name: string; mimeType?: string; base64: string } }>({ action: 'host-task-attachment', attachmentId: item.id }, signal)
+      const data = Buffer.from(attachment.base64, 'base64')
+      if (item.kind === 'image' && attachment.mimeType) images.push({ name: attachment.name, mimeType: attachment.mimeType as LocalAgentReply['images'][number]['mimeType'], data })
+      else files.push({ name: attachment.name, data })
+    }
+    return { images, ...(files.length ? { files } : {}) }
+  }
+
+  /** Reads one image or file a host task produced (an attachment id `hosttask:…`). */
+  async hostTaskAttachment(attachmentId: string): Promise<{ name: string; mimeType?: string; base64: string }> {
+    return (await this.request<{ attachment: { name: string; mimeType?: string; base64: string } }>({ action: 'host-task-attachment', attachmentId })).attachment
+  }
+
+  /** The folder picker for an agent its host runs: the host lists and checks its own folders. */
+  async hostFolders(hostId: string, method: 'fs.listDirs' | 'fs.resolveDir', params: Record<string, unknown>): Promise<unknown> {
+    const result = await this.request<{ ok?: boolean; pending?: boolean; result?: unknown }>({ action: 'host-control', hostId, method, params })
+    if (result.pending) throw new Error('douchat-host did not answer in time. Check that it is online, then try again.')
+    if (!result.ok) {
+      const message = (result.result as { message?: unknown } | null)?.message
+      throw new Error(typeof message === 'string' && message ? message.slice(0, 300) : 'douchat-host could not open this folder.')
+    }
+    return result.result
   }
 
   /** The host an agent is bound to on the service, for agents not in this computer's registry. */
@@ -776,6 +811,7 @@ export function hostAgentConfig(agent: AgentConfig, binding: { adapter: string; 
     adapter: binding.adapter,
     executable: binding.executable,
     args: [...binding.args, ...(agent.startupArgs ?? [])],
+    ...(agent.model ? { model: agent.model } : {}),
     ...(agent.thinkingLevel ? { thinkingLevel: agent.thinkingLevel } : {}),
     ...(agent.permissions ? { permissions: agent.permissions } : {}),
     ...(agent.systemFiles ? { systemFiles: agent.systemFiles } : {}),

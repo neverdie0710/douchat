@@ -223,6 +223,17 @@ function DiscoverDialog({ connection, agents, onClose, onAdded }: { connection: 
   const [chosen, setChosen] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
+  // A command the scan does not know, run with a {prompt} argument (douchat-host servers added on the web).
+  const web = window.douchat.platform === 'web'
+  const [custom, setCustom] = useState({ name: '', command: '', args: '{prompt}' })
+  const customCommand = custom.command.trim()
+  const customValid = Boolean(custom.name.trim()) && (/^[A-Za-z0-9._+-]{1,100}$/.test(customCommand) || /^\/[^\0]{1,1000}$/.test(customCommand))
+  const addCustom = async (): Promise<void> => {
+    setBusy(true); setError('')
+    try {
+      onAdded(await window.douchat.addDiscoveredAgents(connection.id, [{ adapter: 'custom', executable: customCommand, name: custom.name.trim(), args: custom.args.trim() ? custom.args.trim().split(/\s+/) : [] }]))
+    } catch (cause) { setError(messageSendError(cause)); setBusy(false) }
+  }
   // An executable already registered on this connection is shown as added, not offered again.
   const added = (item: DiscoveredRemoteAgent) => agents.some(agent => (agent.remoteAgent?.connectionId ?? agent.connectionId) === connection.id && agent.remoteAgent?.executable === item.executable)
   useEffect(() => {
@@ -254,6 +265,13 @@ function DiscoverDialog({ connection, agents, onClose, onAdded }: { connection: 
           <input type="checkbox" aria-label={name} disabled={already} checked={already || chosen.has(item.adapter)} onChange={event => setChosen(current => { const next = new Set(current); if (event.target.checked) next.add(item.adapter); else next.delete(item.adapter); return next })} />
         </label>
       })}</div>}
+      {web && found && <details className="discover-custom"><summary>{t('Add a custom command')}</summary>
+        <label>{t('Name')}<input maxLength={80} value={custom.name} placeholder="My agent" onChange={event => setCustom(value => ({ ...value, name: event.target.value }))} /></label>
+        <label>{t('Command name or absolute path on the server')}<input maxLength={1000} value={custom.command} placeholder="my-agent" spellCheck={false} onChange={event => setCustom(value => ({ ...value, command: event.target.value }))} /></label>
+        <label>{t('Arguments')}<input maxLength={2000} value={custom.args} spellCheck={false} onChange={event => setCustom(value => ({ ...value, args: event.target.value }))} /></label>
+        <p className="settings-note">{t('{prompt} is replaced with the message; without it, the message is added as the last argument. The reply is read from standard output.')}</p>
+        <button type="button" className="secondary-button" disabled={busy || !customValid} onClick={() => void addCustom()}>{t('Add custom agent')}</button>
+      </details>}
       {error && <p className="settings-error" role="alert">{t(error)}</p>}
       <footer><span /><button type="button" className="secondary-button" onClick={onClose}>{t('Cancel')}</button><button type="button" className="primary-button" disabled={busy || !chosen.size} onClick={() => void add()}>{chosen.size ? tr(chosen.size === 1 ? 'Add {count} agent' : 'Add {count} agents', { count: chosen.size }) : t('Add agents')}</button></footer>
     </div>

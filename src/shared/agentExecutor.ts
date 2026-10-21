@@ -39,6 +39,8 @@ export interface LocalRunOptions {
   workspaceDirectory?: string
   /** Validated folder on a remote agent's server, bound to that server. */
   remoteWorkspace?: import('./types').AgentWorkspaceBinding
+  /** A host-run agent's native session: conversation, topic and context version. */
+  hostSession?: string
   sessionKey?: string
   /** Internal planning/probes must not retain workspace or thread history. */
   transient?: boolean

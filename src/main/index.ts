@@ -58,10 +58,10 @@ import type {
   MemberWorkspaceView
 } from '../shared/types'
 import { LocalComputerProvider } from './computer'
-import { DouchatRuntime } from './runtime'
+import { DouchatRuntime, hostTarget } from './runtime'
 import { RoutineScheduler } from './scheduler'
 import { DouchatStore } from './store'
-import { addCustomLocalAgent, agentsOnConnection, hasRemoteAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, setConnectionAccount, setHostBindingLookup, updateLocalAgent, validateLocalAgent } from './localAgents'
+import { addCustomLocalAgent, agentsOnConnection, hasRemoteAgent, configureLocalAgentRegistry, connectionRegistry, detectLocalAgents, remoteAgentPlacement, removeAgentsOnConnection, removeCustomLocalAgent, setConnectionAccount, setHostBindingLookup, hostExecutedAgent, updateLocalAgent, validateLocalAgent } from './localAgents'
 import { ConnectionManager } from './connectionManager'
 import { migrateConnections, skippedMigrationAgents } from './connectionStore'
 import { migrateWorkspaceTargets } from './workspaceMigration'
@@ -1113,6 +1113,13 @@ app.whenReady().then(async () => {
     clipboard.writeImage(image)
   })
   ipcMain.handle('douchat:attachment-data', async (event, attachmentId: string) => {
+    // An image a douchat-host task delivered for a chat started in the web app.
+    if (typeof attachmentId === 'string' && attachmentId.startsWith('hosttask:') && daemon) {
+      const item = await daemon.hostTaskAttachment(attachmentId)
+      if (!item.mimeType?.startsWith('image/')) throw new Error('This attachment is not an image.')
+      const dataUrl = `data:${item.mimeType};base64,${item.base64}`
+      return event.sender === REMOTE_SENDER ? fitImageForSync(dataUrl) : dataUrl
+    }
     const dataUrl = await store.attachmentDataUrl(attachmentId)
     // For the web app the image returns through a size-capped sync record.
     return event.sender === REMOTE_SENDER ? fitImageForSync(dataUrl) : dataUrl
@@ -1343,15 +1350,25 @@ app.whenReady().then(async () => {
     const conversation = workspaceChat(conversationId)
     const agent = typeof agentId === 'string' ? store.accountAgents.find(item => item.id === agentId) : undefined
     if (!agent || !canAssignAgentWorkspace(conversation, agent, store.currentAccountId)) throw new Error('Only the owner can choose a folder for this agent in this chat.')
+    // An agent its douchat-host runs works in a folder on that server, picked through the host.
+    const hostRun = await hostExecutedAgent(agent)
+    if (hostRun) return { conversation, agent, placement: undefined, hostRun, target: { ...hostTarget(hostRun.hostId), location: 'remote' as const } }
     const placement = await remoteAgentPlacement(agent.localAgentId)
     const target = placement ? { ...placement.target, location: 'remote' as const } : { ...localExecutionTarget(), location: 'local' as const }
-    return { conversation, agent, placement, target }
+    return { conversation, agent, placement, hostRun: undefined, target }
   }
   const workspaceView = async (conversationId: unknown): Promise<ConversationWorkspaceView> => {
     const conversation = workspaceChat(conversationId)
     const members = await Promise.all(ownMemberAgentIds(conversation, store.currentAccountId).map(async (agentId): Promise<MemberWorkspaceView | undefined> => {
       const agent = store.accountAgents.find(item => item.id === agentId)
       if (!agent) return undefined
+      const hostRun = await hostExecutedAgent(agent).catch(() => null)
+      if (hostRun) {
+        const target = { ...hostTarget(hostRun.hostId), location: 'remote' as const }
+        const resolved = memberWorkspace(conversation, agent, target, store.accountAgents, store.currentAccountId)
+        return { agentId, location: 'remote', host: hostRun.label, noTerminal: true,
+          ...(resolved.binding ? { path: resolved.binding.path, source: 'custom' as const } : { source: 'default' as const }) }
+      }
       // A member whose connection is off or removed has no folder to set right now.
       const placement = await remoteAgentPlacement(agent.localAgentId).catch(() => null)
       if (placement === null) return undefined
@@ -1398,16 +1415,25 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('douchat:list-remote-agent-directories', async (event, conversationId: unknown, agentId: unknown, parent: unknown, name: unknown) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
-    const { placement } = await workspaceMember(conversationId, agentId)
-    if (!placement) throw new Error('This agent runs on this computer.')
+    const { placement, hostRun } = await workspaceMember(conversationId, agentId)
     if (parent !== undefined && typeof parent !== 'string') throw new Error('Invalid folder')
     if (name !== undefined && typeof name !== 'string') throw new Error('Invalid folder')
+    if (hostRun) return daemon!.hostFolders(hostRun.hostId, 'fs.listDirs', { ...(parent !== undefined ? { parent } : {}), ...(name !== undefined ? { name } : {}) })
+    if (!placement) throw new Error('This agent runs on this computer.')
     const spec = await probeRemoteAgent(placement.spec)
     return listRemoteDirectories(spec, parent, name)
   })
   ipcMain.handle('douchat:choose-remote-agent-workspace', async (event, conversationId: unknown, agentId: unknown, parent: unknown, name: unknown) => {
     if (!isDouchatRenderer(event.sender)) throw new Error('Invalid workspace request')
-    const { conversation, agent, placement } = await workspaceMember(conversationId, agentId)
+    const { conversation, agent, placement, hostRun } = await workspaceMember(conversationId, agentId)
+    if (hostRun) {
+      // The host resolves and checks the folder on its own disk.
+      const { path } = await daemon!.hostFolders(hostRun.hostId, 'fs.resolveDir', { parent, ...(name !== undefined && name !== null ? { name } : {}) }) as { path: string }
+      const latest = await workspaceMember(conversation.id, agent.id)
+      if (latest.hostRun?.hostId !== hostRun.hostId) throw new Error('The agent\'s server changed. Try again.')
+      saveMemberWorkspace(latest.conversation, agent.id, { path, ...hostTarget(hostRun.hostId) })
+      return workspaceView(conversation.id)
+    }
     if (!placement) throw new Error('This agent runs on this computer. Choose a local folder instead.')
     const spec = await probeRemoteAgent(placement.spec)
     // The renderer names a listed folder and optionally one child; main joins and resolves.
@@ -1423,7 +1449,7 @@ app.whenReady().then(async () => {
     const conversation = workspaceChat(conversationId)
     const agent = typeof agentId === 'string' ? store.accountAgents.find(item => item.id === agentId) : undefined
     if (!agent || agent.ownerId !== store.currentAccountId) throw new Error('Only the owner can change this agent\'s folder.')
-    if (conversation.agentWorkspaces?.[agent.id]) saveMemberWorkspace(conversation, agent.id, undefined)
+    if (conversation.agentWorkspaces?.[agent.id] || conversation.hostWorkspaces?.[agent.id]) saveMemberWorkspace(conversation, agent.id, undefined)
     return workspaceView(conversation.id)
   })
   ipcMain.handle('douchat:clear-conversation-workspace', (event, conversationId: unknown) => {

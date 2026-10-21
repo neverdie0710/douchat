@@ -1,9 +1,9 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { Executor, OWNER_TASK_CAPABILITY, parseAgentConfig, resolveProgram, type AgentRunner } from '../../../host/src/executor'
+import { checkWorkspace, collectOutbox, Executor, listFolders, OWNER_TASK_CAPABILITY, parseAgentConfig, resolveProgram, type AgentRunner } from '../../../host/src/executor'
 import type { HostClient } from '../../../host/src/client'
 import type { SeenRequests, TrustState } from '../../../host/src/state'
 import { signCommand } from './ownerSigning'
@@ -92,7 +92,8 @@ describe('douchat-host executor', () => {
     await vi.waitFor(() => expect(service.calls.some(call => call.action === 'complete')).toBe(true))
     const [agent, prompt, , options] = run.mock.calls[0]
     expect(agent.localAgentId).toBe('claude')
-    expect(prompt.endsWith('hello')).toBe(true)
+    expect(prompt).toContain('hello')
+    expect(prompt).toContain('To deliver files to the human')
     expect(options.agentOverride).toMatchObject({ id: 'claude', path: executable, args: ['--x'] })
     expect(options.agentOverride?.remote).toBeUndefined()
     expect(service.calls.find(call => call.action === 'complete')).toMatchObject({ id: 'ot:task-1', claim: 'claim-1', reply: 'done' })
@@ -176,5 +177,73 @@ describe('douchat-host executor', () => {
       sleep: async () => { stop.abort() } })
     await executor.run(stop.signal)
     expect(service.calls.find(call => call.action === 'heartbeat')).toMatchObject({ capabilities: [OWNER_TASK_CAPABILITY], version: '0.2.0' })
+  })
+
+  it('runs any adapter and custom commands, with the model and a conversation session', async () => {
+    const executable = program()
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Tool', role: '', instructions: '', adapter: 'custom', executable, args: ['--ask', '{prompt}'], model: 'gpt-x' }
+    const service = fakeService({ payload: { agents: [config] } })
+    // The claimed task carries a session key and a short follow-up prompt.
+    const call = service.client.call as ReturnType<typeof vi.fn>
+    const original = call.getMockImplementation()!
+    call.mockImplementation(async (body: Record<string, any>) => body.action === 'claim'
+      ? { task: { id: body.id, claim: 'claim-1', localId: 'agent-1', prompt: 'full history', continuation: 'just the new message', sessionKey: 'direct:c1:t1:', bindingRevision: 2 } }
+      : original(body))
+    const run = vi.fn<AgentRunner>(async () => ({ text: 'ok', images: [] }))
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    await executor.refreshAgents()
+    expect(service.calls.find(item => item.action === 'config-applied')).toBeTruthy()
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(item => item.action === 'complete')).toBe(true))
+    const [agent, , , options] = run.mock.calls[0]
+    expect(agent.model).toBe('gpt-x')
+    expect(options.agentOverride).toMatchObject({ id: 'custom', custom: true, args: ['--ask', '{prompt}'] })
+    expect(options.transient).toBeUndefined()
+    expect(options.workspaceDirectory).toBeTruthy()
+    expect(options.sessionKey).toMatch(/^host:[0-9a-f]{32}$/)
+    expect(options.continuationPrompt).toContain('just the new message')
+  })
+
+  it('collects images and outbox files within the delivery limits', () => {
+    const outbox = mkdtempSync(join(tmpdir(), 'douchat-outbox-'))
+    writeFileSync(join(outbox, 'report.md'), '# done')
+    writeFileSync(join(outbox, 'chart.png'), Buffer.from([1, 2, 3]))
+    writeFileSync(join(outbox, 'huge.bin'), Buffer.alloc(9 * 1024 * 1024))
+    mkdirSync(join(outbox, 'folder'))
+    const result = collectOutbox(outbox, [{ name: 'gen.png', mimeType: 'image/png', data: new Uint8Array([9]) }])
+    expect(result.images.map(item => item.name)).toEqual(['gen.png', 'chart.png'])
+    expect(result.files.map(item => item.name)).toEqual(['report.md'])
+    expect(result.skipped).toEqual(['huge.bin'])
+  })
+
+  it('remembers "Allow for this task" for the same tool', async () => {
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
+    const service = fakeService({ payload: { agents: [config] } })
+    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => {
+      await options.onApproval!({ message: 'Claude: Bash', details: '{"a":1}' }, signal)
+      await options.onApproval!({ message: 'Claude: Bash', details: '{"a":2}' }, signal)
+      return { text: 'ran twice', images: [] }
+    })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    await executor.refreshAgents()
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(item => item.action === 'approval-request')).toBe(true))
+    const request = service.calls.find(item => item.action === 'approval-request')!
+    expect(request.taskScope).toBe('Claude: Bash')
+    const approvalId = `${request.taskId}:approval:${request.requestId}`
+    ;(executor as unknown as { decide(item: unknown): void }).decide({ id: approvalId, status: 'x-allowed', signed: { payload: { approvalId, taskId: request.taskId, requestId: request.requestId, paramsHash: request.paramsHash, bindingRevision: 2, claimHash: claimHash('claim-1'), decision: 'allow', scope: 'task' } } })
+    await vi.waitFor(() => expect(service.calls.find(item => item.action === 'complete')).toMatchObject({ reply: 'ran twice' }))
+    expect(service.calls.filter(item => item.action === 'approval-request')).toHaveLength(1)
+  })
+
+  it('accepts only real project folders inside the home folder', () => {
+    const home = mkdtempSync(join(tmpdir(), 'douchat-home-'))
+    mkdirSync(join(home, 'projects', 'app'), { recursive: true })
+    mkdirSync(join(home, '.ssh'))
+    expect(listFolders(undefined, undefined, home).directories).toEqual(['projects'])
+    expect(checkWorkspace(join(home, 'projects', 'app'), home)).toMatch(/projects\/app$/)
+    expect(() => checkWorkspace(home, home)).toThrow(/home folder/)
+    expect(() => checkWorkspace(join(home, '.ssh'), home)).toThrow(/SSH or Douchat data/)
+    expect(() => checkWorkspace(join(home, 'missing'), home)).toThrow(/missing/)
   })
 })
