@@ -206,7 +206,7 @@ async function run(): Promise<void> {
   const executor = new Executor({
     client, log, origin, ownerId: state.ownerId, hostId: state.hostId, trust: () => trust, seen, version: HOST_VERSION,
     serviceTrusted: state.trustMode === 'service',
-    run: (config, prompt, signal, options) => runLocalAgent(config, prompt, signal, [], options),
+    run: (config, prompt, signal, options, images) => runLocalAgent(config, prompt, signal, images ?? [], options),
     resolveCommand: resolveExecutable,
     readVersion: executableVersion,
     dispose: disposeLocalAgentSessions,

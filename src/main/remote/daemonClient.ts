@@ -1,5 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { AgentExecutor, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { AgentExecutor, LocalAgentImage, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteAgentAdapter, RemoteConnection } from '../../shared/types'
 import { recordTiming, timedRemote } from '../diagnostics'
@@ -688,9 +691,37 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
    * Progress and the result come back through the service; stopping sends the
    * owner-signed cancel.
    */
-  async runOnHost(config: AgentConfig, prompt: string, signal: AbortSignal | undefined, options: LocalRunOptions): Promise<LocalAgentReply> {
+  /**
+   * What the human sent with this message, for the host: the images, and the
+   * files the message links as Douchat documents (4 at most, 20 MB in total,
+   * like a room message). Only the current message is read, not the history.
+   */
+  private async taskInputs(message: string, images: LocalAgentImage[] = []): Promise<{ images?: { name: string; mimeType: string; base64: string }[]; files?: { name: string; base64: string }[] }> {
+    const outImages: { name: string; mimeType: string; base64: string }[] = []
+    const files: { name: string; base64: string }[] = []
+    let total = 0
+    const fits = (size: number) => outImages.length + files.length < 4 && size > 0 && total + size <= 20 * 1024 * 1024
+    for (const image of images) {
+      if (!fits(image.data.byteLength)) continue
+      total += image.data.byteLength
+      outImages.push({ name: image.name, mimeType: image.mimeType, base64: Buffer.from(image.data).toString('base64') })
+    }
+    for (const match of message.matchAll(/\]\(<(douchat-file:[^>]+)>\)/g)) {
+      const path = await this.store.ownedDocumentPath(fileURLToPath(match[1].replace(/^douchat-file:/, 'file:'))).catch(() => undefined)
+      if (!path) continue
+      const data = await readFile(path).catch(() => undefined)
+      if (!data || !fits(data.length)) continue
+      total += data.length
+      // Saved as "<uuid>-<name>"; the host sees the original name.
+      files.push({ name: basename(path).slice(37) || 'file', base64: data.toString('base64') })
+    }
+    return { ...(outImages.length ? { images: outImages } : {}), ...(files.length ? { files } : {}) }
+  }
+
+  async runOnHost(config: AgentConfig, prompt: string, signal: AbortSignal | undefined, options: LocalRunOptions, images?: LocalAgentImage[]): Promise<LocalAgentReply> {
+    const inputs = await this.taskInputs(options.continuationPrompt ?? prompt, images)
     const { taskId } = await timedRemote('host-task.create', { agentId: config.id }, () => this.request<{ taskId: string }>({ action: 'host-task-create', localId: config.id, clientTaskId: `desktop:${randomUUID()}`,
-      prompt, origin: 'desktop', target: { kind: 'none' },
+      prompt, origin: 'desktop', target: { kind: 'none' }, ...inputs,
       // The host resumes this conversation's native session and then needs only the new part.
       ...(options.hostSession ? { sessionKey: options.hostSession, ...(options.continuationPrompt ? { continuation: options.continuationPrompt } : {}) } : {}),
       ...(options.remoteWorkspace?.path ? { workspace: options.remoteWorkspace.path } : {}) }, signal))
@@ -787,7 +818,7 @@ export function hostAwareExecutor(local: AgentExecutor, host: () => DaemonClient
       if (!(await hostExecutedAgent(config))) return local.run(config, prompt, signal, images, options)
       const client = host()
       if (!client) throw new Error('douchat-host connections are unavailable. Sign in to Douchat first.')
-      return client.runOnHost(config, prompt, signal, options)
+      return client.runOnHost(config, prompt, signal, options, images)
     },
     async prepare(config, options) {
       // A host-run agent has nothing to warm up on this computer.

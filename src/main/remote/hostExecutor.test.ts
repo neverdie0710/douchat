@@ -246,4 +246,29 @@ describe('douchat-host executor', () => {
     expect(() => checkWorkspace(join(home, '.ssh'), home)).toThrow(/SSH or Douchat data/)
     expect(() => checkWorkspace(join(home, 'missing'), home)).toThrow(/missing/)
   })
+
+  it('hands the human\'s images and files to the agent', async () => {
+    const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Reader', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
+    const service = fakeService({ payload: { agents: [config] } })
+    const call = service.client.call as ReturnType<typeof vi.fn>
+    const original = call.getMockImplementation()!
+    call.mockImplementation(async (body: Record<string, any>) => body.action === 'claim'
+      ? { task: { id: body.id, claim: 'claim-1', localId: 'agent-1', prompt: 'look', bindingRevision: 2,
+        images: [{ name: 'id.jpg', mimeType: 'image/jpeg', base64: Buffer.from([1, 2]).toString('base64') }],
+        files: [{ name: 'notes.txt', base64: Buffer.from('hello').toString('base64') }] } }
+      : original(body))
+    let seenFile = ''
+    const run = vi.fn<AgentRunner>(async (_config, prompt) => {
+      const path = /\n(\/[^\n]+notes\.txt)/.exec(prompt)?.[1]
+      seenFile = path ? (await import('node:fs')).readFileSync(path, 'utf8') : ''
+      return { text: 'seen', images: [] }
+    })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    await executor.refreshAgents()
+    await executor.claimPending()
+    await vi.waitFor(() => expect(service.calls.some(item => item.action === 'complete')).toBe(true))
+    const images = run.mock.calls[0][4]
+    expect(images?.map(image => [image.name, image.mimeType, image.data.length])).toEqual([['id.jpg', 'image/jpeg', 2]])
+    expect(seenFile).toBe('hello')
+  })
 })

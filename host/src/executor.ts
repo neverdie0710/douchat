@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, posix } from 'node:path'
 import type { LocalAgentImage, LocalAgentReply, LocalApprovalHandler, LocalRunOptions } from '../../src/shared/agentExecutor'
@@ -68,6 +68,9 @@ interface ClaimedTask {
   sessionKey?: string
   /** A folder on this server chosen for the agent in this chat. */
   workspace?: string
+  /** What the human sent with this message. */
+  images?: { name: string; mimeType: string; base64: string }[]
+  files?: { name: string; base64: string }[]
   bindingRevision: number
   /** Set for a shared-room task: who asked, so group permissions apply. */
   room?: { name: string; requester: string; requesterKind: 'owner' | 'person' | 'agent' }
@@ -87,7 +90,7 @@ interface Running {
 }
 
 /** What the executor needs to run one agent turn; runLocalAgent in production. */
-export type AgentRunner = (config: AgentConfig, prompt: string, signal: AbortSignal, options: LocalRunOptions) => Promise<LocalAgentReply>
+export type AgentRunner = (config: AgentConfig, prompt: string, signal: AbortSignal, options: LocalRunOptions, images?: LocalAgentImage[]) => Promise<LocalAgentReply>
 
 export interface ExecutorOptions {
   client: HostClient
@@ -350,6 +353,7 @@ export class Executor {
     let outputs: ReturnType<typeof collectOutbox> = { images: [], files: [], skipped: [] }
     let sessionKey = ''
     const outbox = join(this.options.workRoot, 'outbox', sha256Hex(task.id).slice(0, 24))
+    const inbox = join(this.options.workRoot, 'inbox', sha256Hex(task.id).slice(0, 24))
     try {
       if (!config) throw new Error('This agent has no configuration on this server yet. Open Douchat and try again in a moment.')
       if (!ADAPTERS.has(config.adapter)) throw new Error(`${config.adapter} agents cannot run on the server.`)
@@ -372,14 +376,24 @@ export class Executor {
         id: config.adapter, name: config.name, command: basename(config.executable), path: program, args: config.args,
         installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', ...(custom ? { custom: true } : {})
       }
+      // Images go to the runtime, which saves them and asks the agent to look; files are placed here.
+      const images: LocalAgentImage[] = (task.images ?? []).filter(item => Object.values(MIME).includes(item.mimeType as LocalAgentImage['mimeType']))
+        .map(item => ({ name: item.name, mimeType: item.mimeType as LocalAgentImage['mimeType'], data: Buffer.from(item.base64, 'base64') }))
+      const received = (task.files ?? []).map(file => {
+        mkdirSync(inbox, { recursive: true, mode: 0o700 })
+        const path = join(inbox, basename(file.name).replace(/[\0/]/g, '_') || 'file')
+        writeFileSync(path, Buffer.from(file.base64, 'base64'), { mode: 0o600 })
+        return path
+      })
+      const attached = received.length ? `\n\nThe human attached ${received.length === 1 ? 'this file' : 'these files'}. Read ${received.length === 1 ? 'it' : 'them'} before answering:\n${received.join('\n')}` : ''
       const delivery = `To deliver files to the human, save them in ${outbox}. Douchat attaches up to ${MAX_OUTPUTS} of them (images show inline; ${MAX_OUTPUT_BYTES / 1024 / 1024} MB in total) after your reply.`
       let lastProgress = 0
-      const result = await this.options.run(agent, `${agentIdentityPrompt(agent)}\n\n${task.prompt}\n\n${delivery}`, entry.abort.signal, {
+      const result = await this.options.run(agent, `${agentIdentityPrompt(agent)}\n\n${task.prompt}${attached}\n\n${delivery}`, entry.abort.signal, {
         agentOverride: override,
         // A conversation keeps its native session (Codex thread, Claude session) between turns;
         // a one-off task gets its own, so it still works in the chosen folder, and is closed after.
         sessionKey,
-        ...(task.sessionKey && task.continuation ? { continuationPrompt: `${task.continuation}\n\n${delivery}` } : {}),
+        ...(task.sessionKey && task.continuation ? { continuationPrompt: `${task.continuation}${attached}\n\n${delivery}` } : {}),
         workspaceDirectory: directory,
         onProgress: progress => {
           const now = Date.now()
@@ -390,7 +404,7 @@ export class Executor {
         // Claude asks before each tool. Codex asks Douchat only for native Computer Use,
         // which a server does not have; its shell runs in its workspace sandbox.
         ...(config.adapter === 'claude' ? { onApproval: this.approvalHandler(entry, config) } : {})
-      })
+      }, images)
       outputs = collectOutbox(outbox, result.images)
       const skipped = outputs.skipped.length ? `\n\n(${outputs.skipped.length} more file${outputs.skipped.length === 1 ? '' : 's'} stayed on the server: ${outputs.skipped.join(', ')})` : ''
       reply = result.text.trim() + skipped
@@ -400,6 +414,7 @@ export class Executor {
       reply = entry.abort.signal.aborted ? '已被主人中断。' : errorText(error)
     } finally {
       rmSync(outbox, { recursive: true, force: true })
+      rmSync(inbox, { recursive: true, force: true })
       if (!task.sessionKey && sessionKey) this.options.release?.(sessionKey)
     }
     try {
