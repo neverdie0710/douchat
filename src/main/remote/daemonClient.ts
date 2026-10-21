@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentExecutor, LocalAgentImage, LocalAgentReply, LocalRunOptions } from '../../shared/agentExecutor'
+import type { AgentExecutor, AgentTurn, LocalAgentFile, LocalAgentReply } from '../../shared/agentExecutor'
+import { ATTACHMENT_LIMITS } from '../../shared/attachments'
+import { packTaskInputs, type HostTaskAttachment, type HostTaskState } from '../../shared/hostTask'
 import { agentPermissions, type PermissionApproval, type PermissionRequest } from '../../shared/agentPermissions'
 import type { AgentConfig, ConversationActivityState, DaemonEnrollment, DaemonEnrollmentResult, DiscoveredRemoteAgent, LocalAgent, RemoteAgentAdapter, RemoteConnection } from '../../shared/types'
 import { recordTiming, timedRemote } from '../diagnostics'
@@ -57,17 +59,6 @@ interface ProgressTask {
   approvals: ({ id: string } & Record<string, unknown>)[]
 }
 interface WatchResult { cursor: string; tasks: ProgressTask[]; bindings: BindingView[] }
-interface OwnerTaskState {
-  cursor: string
-  status: string
-  reply?: string
-  attachments?: { id: string; index: number; kind: string; name: string; mimeType?: string }[]
-  progress: ProgressTask['progress']
-  approvals: { id: string }[]
-  hostId?: string
-  bindingRevision?: number
-  claimHash?: string
-}
 
 /** What the runtime reads from the daemon client; nothing here starts a process. */
 export interface RemoteExecutionBridge {
@@ -686,40 +677,30 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
   }
 
   /**
+   * The files the message links as Douchat documents, for the host to place
+   * next to the agent. Only the current message is read, not the history.
+   */
+  private async linkedFiles(message: string): Promise<LocalAgentFile[]> {
+    const files: LocalAgentFile[] = []
+    for (const match of message.matchAll(/\]\(<(douchat-file:[^>]+)>\)/g)) {
+      const path = await this.store.ownedDocumentPath(fileURLToPath(match[1].replace(/^douchat-file:/, 'file:'))).catch(() => undefined)
+      const data = path ? await readFile(path).catch(() => undefined) : undefined
+      // Saved as "<uuid>-<name>"; the host sees the original name.
+      if (path && data) files.push({ name: basename(path).slice(37) || 'file', data })
+    }
+    return files
+  }
+
+  /**
    * Runs one turn of a host-run agent: the prompt this runtime assembled becomes
    * an owner task the host claims and runs with its signed configuration.
    * Progress and the result come back through the service; stopping sends the
    * owner-signed cancel.
    */
-  /**
-   * What the human sent with this message, for the host: the images, and the
-   * files the message links as Douchat documents (4 at most, 20 MB in total,
-   * like a room message). Only the current message is read, not the history.
-   */
-  private async taskInputs(message: string, images: LocalAgentImage[] = []): Promise<{ images?: { name: string; mimeType: string; base64: string }[]; files?: { name: string; base64: string }[] }> {
-    const outImages: { name: string; mimeType: string; base64: string }[] = []
-    const files: { name: string; base64: string }[] = []
-    let total = 0
-    const fits = (size: number) => outImages.length + files.length < 4 && size > 0 && total + size <= 20 * 1024 * 1024
-    for (const image of images) {
-      if (!fits(image.data.byteLength)) continue
-      total += image.data.byteLength
-      outImages.push({ name: image.name, mimeType: image.mimeType, base64: Buffer.from(image.data).toString('base64') })
-    }
-    for (const match of message.matchAll(/\]\(<(douchat-file:[^>]+)>\)/g)) {
-      const path = await this.store.ownedDocumentPath(fileURLToPath(match[1].replace(/^douchat-file:/, 'file:'))).catch(() => undefined)
-      if (!path) continue
-      const data = await readFile(path).catch(() => undefined)
-      if (!data || !fits(data.length)) continue
-      total += data.length
-      // Saved as "<uuid>-<name>"; the host sees the original name.
-      files.push({ name: basename(path).slice(37) || 'file', base64: data.toString('base64') })
-    }
-    return { ...(outImages.length ? { images: outImages } : {}), ...(files.length ? { files } : {}) }
-  }
-
-  async runOnHost(config: AgentConfig, prompt: string, signal: AbortSignal | undefined, options: LocalRunOptions, images?: LocalAgentImage[]): Promise<LocalAgentReply> {
-    const inputs = await this.taskInputs(options.continuationPrompt ?? prompt, images)
+  async runOnHost(config: AgentConfig, turn: AgentTurn): Promise<LocalAgentReply> {
+    const { prompt, signal, ...options } = turn
+    // The images and linked files go along, within the message limits.
+    const inputs = packTaskInputs(turn.images, await this.linkedFiles(options.continuationPrompt ?? prompt))
     const { taskId } = await timedRemote('host-task.create', { agentId: config.id }, () => this.request<{ taskId: string }>({ action: 'host-task-create', localId: config.id, clientTaskId: `desktop:${randomUUID()}`,
       prompt, origin: 'desktop', target: { kind: 'none' }, ...inputs,
       // The host resumes this conversation's native session and then needs only the new part.
@@ -730,7 +711,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
     let claimed = false
     let progressed = false
     let cursor: string | undefined
-    let state: OwnerTaskState | undefined
+    let state: HostTaskState | undefined
     for (;;) {
       if (signal?.aborted) {
         recordTiming('host-task.complete', started, { ...context, outcome: 'stopped' })
@@ -741,7 +722,7 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
         }
         throw new Error('Stopped')
       }
-      state = await this.request<OwnerTaskState>({ action: 'host-task-wait', taskId, ...(cursor ? { cursor } : {}) }, signal).catch(error => {
+      state = await this.request<HostTaskState>({ action: 'host-task-wait', taskId, ...(cursor ? { cursor } : {}) }, signal).catch(error => {
         if (signal?.aborted) return state!
         throw error
       })
@@ -762,10 +743,10 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
   }
 
   /** The images and files a finished host task delivered, as a local turn returns them. */
-  private async taskOutputs(attachments: { id: string; index: number; kind: string; name: string; mimeType?: string }[], signal?: AbortSignal): Promise<Pick<LocalAgentReply, 'images' | 'files'>> {
+  private async taskOutputs(attachments: HostTaskAttachment[], signal?: AbortSignal): Promise<Pick<LocalAgentReply, 'images' | 'files'>> {
     const images: LocalAgentReply['images'] = []
     const files: NonNullable<LocalAgentReply['files']> = []
-    for (const item of attachments.slice(0, 4)) {
+    for (const item of attachments.slice(0, ATTACHMENT_LIMITS.count)) {
       const { attachment } = await this.request<{ attachment: { name: string; mimeType?: string; base64: string } }>({ action: 'host-task-attachment', attachmentId: item.id }, signal)
       const data = Buffer.from(attachment.base64, 'base64')
       if (item.kind === 'image' && attachment.mimeType) images.push({ name: attachment.name, mimeType: attachment.mimeType as LocalAgentReply['images'][number]['mimeType'], data })
@@ -814,11 +795,11 @@ const progressPhase = (phase: unknown): 'ready' | 'working' | 'waiting' | 'conne
 export function hostAwareExecutor(local: AgentExecutor, host: () => DaemonClient | undefined): AgentExecutor {
   return {
     ...local,
-    async run(config, prompt, signal, images, options = {}) {
-      if (!(await hostExecutedAgent(config))) return local.run(config, prompt, signal, images, options)
+    async run(config, turn) {
+      if (!(await hostExecutedAgent(config))) return local.run(config, turn)
       const client = host()
       if (!client) throw new Error('douchat-host connections are unavailable. Sign in to Douchat first.')
-      return client.runOnHost(config, prompt, signal, options, images)
+      return client.runOnHost(config, turn)
     },
     async prepare(config, options) {
       // A host-run agent has nothing to warm up on this computer.

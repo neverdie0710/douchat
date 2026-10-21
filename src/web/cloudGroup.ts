@@ -7,7 +7,8 @@ import { privateReplyDeliveries } from '../shared/bot/privateMessages'
 import type { SyncRecord } from '../shared/cloudSync'
 import type { AgentConfig, ChatMessage, Conversation, DesktopAuthUser } from '../shared/types'
 import { interfaceLanguage, isCloudAgent, modelFor, streamTurn } from './cloudChat'
-import { runHostTurn, type HostAgents, type HostTaskState, type SocialCall } from './hostChat'
+import type { HostTaskState } from '../shared/hostTask'
+import { runHostTurn, type HostAgents, type SocialCall } from './hostChat'
 import type { WebSync } from './webSync'
 
 /**

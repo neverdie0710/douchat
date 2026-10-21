@@ -48,6 +48,7 @@ import type {
   UpdateConversationInput
 } from '../shared/types'
 import { normalizeAgentEmoji } from '../shared/avatar'
+import { ATTACHMENT_LIMITS } from '../shared/attachments'
 
 export const LOCAL_DATA_VERSION = 1
 const DEFAULT_TOPIC_ID = 'main'
@@ -65,7 +66,7 @@ const LEGACY_CONNECTORS_META = 'connectors:v1'
 const ACCOUNT_META_PREFIX = 'account:v1:'
 const LEGACY_DEMO_REMOVED_META = 'legacyDemoRemoved:v1'
 const ATTACHMENT_ID = /^[0-9a-f-]{36}$/i
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024
+const MAX_IMAGE_BYTES = ATTACHMENT_LIMITS.imageBytes
 const IMAGE_EXTENSION: Record<MessageAttachment['mimeType'], string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',

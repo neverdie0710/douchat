@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { checkWorkspace, collectOutbox, Executor, listFolders, OWNER_TASK_CAPABILITY, parseAgentConfig, resolveProgram, type AgentRunner } from '../../../host/src/executor'
+import { checkWorkspace, collectOutbox, Executor, listFolders, OWNER_TASK_CAPABILITY, parseAgentConfig, resolveProgram, type HostAgentExecutor } from '../../../host/src/executor'
 import type { HostClient } from '../../../host/src/client'
 import type { SeenRequests, TrustState } from '../../../host/src/state'
 import { signCommand } from './ownerSigning'
@@ -84,13 +84,14 @@ describe('douchat-host executor', () => {
     const executable = program()
     const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: 'dev', instructions: '', adapter: 'claude', executable, args: ['--x'] }
     const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
-    const run = vi.fn<AgentRunner>(async () => ({ text: 'done', images: [] }))
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    const run = vi.fn<HostAgentExecutor['run']>(async () => ({ text: 'done', images: [] }))
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), executor: { run }, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
     await executor.refreshAgents()
     expect(service.calls.find(call => call.action === 'config-applied')).toMatchObject({ localId: 'agent-1', configRevision: 3 })
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(call => call.action === 'complete')).toBe(true))
-    const [agent, prompt, , options] = run.mock.calls[0]
+    const [agent, options] = run.mock.calls[0]
+    const { prompt } = options
     expect(agent.localAgentId).toBe('claude')
     expect(prompt).toContain('hello')
     expect(prompt).toContain('To deliver files to the human')
@@ -104,7 +105,7 @@ describe('douchat-host executor', () => {
     const stranger = device()
     const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
     const service = fakeService(stranger.sign('host.agents', { expectedAgentsRevision: 0, agents: [] }))
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run: vi.fn(), workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), executor: { run: vi.fn() }, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
     await expect(executor.refreshAgents()).rejects.toThrow(/does not trust/)
   })
 
@@ -113,8 +114,8 @@ describe('douchat-host executor', () => {
     const trust: TrustState = { revision: 1, devices: [{ deviceId: owner.id, publicKey: owner.publicKey }] }
     const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'codex', executable: '/nonexistent/codex', args: [] }
     const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
-    const run = vi.fn<AgentRunner>()
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    const run = vi.fn<HostAgentExecutor['run']>()
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), executor: { run }, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
     await executor.refreshAgents()
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(call => call.action === 'complete')).toBe(true))
@@ -128,12 +129,12 @@ describe('douchat-host executor', () => {
     const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
     const service = fakeService(owner.sign('host.agents', { expectedAgentsRevision: 0, agents: [config] }))
     let approved: Promise<void> | undefined
-    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => {
-      approved = options.onApproval!({ message: 'Run rm -rf build', details: '{}' }, signal)
+    const run = vi.fn<HostAgentExecutor['run']>(async (_config, { signal, onApproval }) => {
+      approved = onApproval!({ message: 'Run rm -rf build', details: '{}' }, signal!)
       await approved
       return { text: 'ran', images: [] }
     })
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => trust, seen: memorySeen(), executor: { run }, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined })
     await executor.refreshAgents()
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(call => call.action === 'approval-request')).toBe(true))
@@ -156,8 +157,8 @@ describe('douchat-host executor', () => {
     const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
     // Unsigned: a payload exactly as the service stores it for a web-added host.
     const service = fakeService({ payload: { expectedAgentsRevision: 0, agents: [config] } })
-    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => { await options.onApproval!({ message: 'Run ls', details: '{}' }, signal); return { text: 'ok', images: [] } })
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0',
+    const run = vi.fn<HostAgentExecutor['run']>(async (_config, { signal, onApproval }) => { await onApproval!({ message: 'Run ls', details: '{}' }, signal!); return { text: 'ok', images: [] } })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), executor: { run }, workRoot: tmpdir(), version: '0.2.0',
       resolveCommand: async (command) => command === 'claude' ? config.executable : undefined, readVersion: async () => '2.1.0', log: () => undefined, serviceTrusted: true })
     await executor.refreshAgents()
     expect(service.calls.find(call => call.action === 'config-applied')).toMatchObject({ localId: 'agent-1' })
@@ -173,7 +174,7 @@ describe('douchat-host executor', () => {
   it('advertises owner tasks in its heartbeat', async () => {
     const service = fakeService(null)
     const stop = new AbortController()
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 1, devices: [] }), seen: memorySeen(), run: vi.fn(), workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined,
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 1, devices: [] }), seen: memorySeen(), executor: { run: vi.fn() }, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined,
       sleep: async () => { stop.abort() } })
     await executor.run(stop.signal)
     expect(service.calls.find(call => call.action === 'heartbeat')).toMatchObject({ capabilities: [OWNER_TASK_CAPABILITY], version: '0.2.0' })
@@ -189,13 +190,13 @@ describe('douchat-host executor', () => {
     call.mockImplementation(async (body: Record<string, any>) => body.action === 'claim'
       ? { task: { id: body.id, claim: 'claim-1', localId: 'agent-1', prompt: 'full history', continuation: 'just the new message', sessionKey: 'direct:c1:t1:', bindingRevision: 2 } }
       : original(body))
-    const run = vi.fn<AgentRunner>(async () => ({ text: 'ok', images: [] }))
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    const run = vi.fn<HostAgentExecutor['run']>(async () => ({ text: 'ok', images: [] }))
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), executor: { run }, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
     await executor.refreshAgents()
     expect(service.calls.find(item => item.action === 'config-applied')).toBeTruthy()
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(item => item.action === 'complete')).toBe(true))
-    const [agent, , , options] = run.mock.calls[0]
+    const [agent, options] = run.mock.calls[0]
     expect(agent.model).toBe('gpt-x')
     expect(options.agentOverride).toMatchObject({ id: 'custom', custom: true, args: ['--ask', '{prompt}'] })
     expect(options.transient).toBeUndefined()
@@ -219,12 +220,12 @@ describe('douchat-host executor', () => {
   it('remembers "Allow for this task" for the same tool', async () => {
     const config = { localId: 'agent-1', configRevision: 3, permissionsRevision: 3, name: 'Builder', role: '', instructions: '', adapter: 'claude', executable: program(), args: [] }
     const service = fakeService({ payload: { agents: [config] } })
-    const run = vi.fn<AgentRunner>(async (_config, _prompt, signal, options) => {
-      await options.onApproval!({ message: 'Claude: Bash', details: '{"a":1}' }, signal)
-      await options.onApproval!({ message: 'Claude: Bash', details: '{"a":2}' }, signal)
+    const run = vi.fn<HostAgentExecutor['run']>(async (_config, { signal, onApproval }) => {
+      await onApproval!({ message: 'Claude: Bash', details: '{"a":1}' }, signal!)
+      await onApproval!({ message: 'Claude: Bash', details: '{"a":2}' }, signal!)
       return { text: 'ran twice', images: [] }
     })
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), executor: { run }, workRoot: tmpdir(), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
     await executor.refreshAgents()
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(item => item.action === 'approval-request')).toBe(true))
@@ -258,16 +259,16 @@ describe('douchat-host executor', () => {
         files: [{ name: 'notes.txt', base64: Buffer.from('hello').toString('base64') }] } }
       : original(body))
     let seenFile = ''
-    const run = vi.fn<AgentRunner>(async (_config, prompt) => {
+    const run = vi.fn<HostAgentExecutor['run']>(async (_config, { prompt }) => {
       const path = /\n(\/[^\n]+notes\.txt)/.exec(prompt)?.[1]
       seenFile = path ? (await import('node:fs')).readFileSync(path, 'utf8') : ''
       return { text: 'seen', images: [] }
     })
-    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), run, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
+    const executor = new Executor({ client: service.client, origin: ORIGIN, ownerId: OWNER, hostId: HOST, trust: () => ({ revision: 0, devices: [] }), seen: memorySeen(), executor: { run }, workRoot: mkdtempSync(join(tmpdir(), 'douchat-work-')), version: '0.2.0', resolveCommand: async () => undefined, log: () => undefined, serviceTrusted: true })
     await executor.refreshAgents()
     await executor.claimPending()
     await vi.waitFor(() => expect(service.calls.some(item => item.action === 'complete')).toBe(true))
-    const images = run.mock.calls[0][4]
+    const images = run.mock.calls[0][1].images
     expect(images?.map(image => [image.name, image.mimeType, image.data.length])).toEqual([['id.jpg', 'image/jpeg', 2]])
     expect(seenFile).toBe('hello')
   })

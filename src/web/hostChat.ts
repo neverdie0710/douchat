@@ -1,4 +1,5 @@
 import type { SyncRecord } from '../shared/cloudSync'
+import { directSessionKey, hostAgentNote, hostSessionKey, type HostTaskState } from '../shared/hostTask'
 import type { AgentConfig, ChatMessage, Conversation, ConversationActivityState, DesktopAuthUser } from '../shared/types'
 import { chatHistory, type ChatTurn } from './cloudChat'
 import type { WebSync } from './webSync'
@@ -16,20 +17,6 @@ export type SocialCall = <T>(body: Record<string, unknown>) => Promise<T>
 interface ExecutorList {
   bindings: { localId: string; executor: string; state: string; ready: boolean }[]
   hosts: { id: string; name?: string | null; online: boolean; capabilities: string[]; trustMode?: string }[]
-}
-export interface HostTaskState {
-  cursor: string
-  taskId: string
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | string
-  reply?: string
-  /** What a finished task delivered; each opens with host-task-attachment. */
-  attachments?: { id: string; index: number; kind: 'image' | 'file'; name: string; mimeType?: string; size: number }[]
-  progress: { phase?: string; detail?: string; text?: string; at?: number } | null
-  approvals: ({ id: string } & Record<string, unknown>)[]
-  hostId?: string
-  bindingRevision?: number
-  claimHash?: string
-  cancelRequested?: boolean
 }
 
 const LIST_TTL_MS = 15_000
@@ -107,12 +94,10 @@ export async function runHostTurn(call: SocialCall, agent: AgentConfig, prompt: 
   return state.reply ?? ''
 }
 
-const SERVER_NOTE = 'You are running on your server, not on the human\'s computer. You cannot access the human\'s local files, desktop or browser, and paths you see refer to the server. Do not create douchat-file: or file: links; deliver files through the outbox folder named at the end of this request.'
-
 /** The direct-chat prompt: the topic so far, newest message last. The host adds the agent's signed identity. */
-function directPrompt(agent: AgentConfig, user: DesktopAuthUser, turns: ChatTurn[]): string {
+function directPrompt(agent: AgentConfig, user: DesktopAuthUser, host: string, turns: ChatTurn[]): string {
   const transcript = turns.map(turn => `${turn.role === 'user' ? user.name : agent.name}: ${turn.content ?? ''}`).join('\n').slice(-24_000)
-  return [SERVER_NOTE, `Conversation so far:\n${transcript}`, `Reply to ${user.name}'s latest message as ${agent.name}.`].join('\n\n')
+  return [hostAgentNote(host), `Conversation so far:\n${transcript}`, `Reply to ${user.name}'s latest message as ${agent.name}.`].join('\n\n')
 }
 
 /**
@@ -125,13 +110,15 @@ export async function sendToHostAgent(params: {
   call: SocialCall
   user: DesktopAuthUser
   agent: AgentConfig
+  /** The server the agent runs on, as the owner named it. */
+  host: string
   conversation: Conversation
   text: string
   /** The human message's id, when it continues a queued request. */
   messageId?: string
   onState: (state: HostTaskState) => void
 }): Promise<void> {
-  const { sync, call, user, agent, conversation, text, messageId, onState } = params
+  const { sync, call, user, agent, host, conversation, text, messageId, onState } = params
   const topic = conversation.topics.find((item) => item.id === conversation.activeTopicId) ?? conversation.topics[0]
   const topicId = topic?.id ?? conversation.activeTopicId
   const now = Date.now()
@@ -158,10 +145,10 @@ export async function sendToHostAgent(params: {
     const workspace = conversation.hostWorkspaces?.[agent.id]?.path
     state = await runHostTask(call, {
       localId: agent.id, clientTaskId: message.id,
-      prompt: directPrompt(agent, user, chatHistory(sync, conversation.id, topicId, agent.id, topic?.contextReset)),
+      prompt: directPrompt(agent, user, host, chatHistory(sync, conversation.id, topicId, agent.id, topic?.contextReset)),
       // The host keeps this chat's native session; a reset starts a new one.
-      sessionKey: `direct:${conversation.id}:${topicId}:${topic?.contextReset?.id ?? ''}`,
-      continuation: [SERVER_NOTE, `${user.name}: ${text}`, `Reply to ${user.name}'s latest message as ${agent.name}.`].join('\n\n'),
+      sessionKey: hostSessionKey(directSessionKey(conversation.id, topicId), topic?.contextReset?.id),
+      continuation: [hostAgentNote(host), `${user.name}: ${text}`, `Reply to ${user.name}'s latest message as ${agent.name}.`].join('\n\n'),
       ...(workspace ? { workspace } : {}),
       target: { kind: 'direct', conversationId: conversation.id, topicId, replyMessageId: replyId, ...(messageId ? { requestId: messageId } : {}), authorName: agent.name, ...version }
     }, onState)

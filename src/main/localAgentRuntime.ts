@@ -25,6 +25,7 @@ import { assertArgvPrompt, remotePrompt } from './remoteTransport'
 import { openSshTransport } from './remote/sshTransport'
 import { recordTiming, timedRemote } from './diagnostics'
 import { PROMPT_ARG, customRemoteArguments, markPromptArguments, type PromptChannel, type RemoteArg, type RemoteWorkspaceRef } from './remoteScript'
+import { ATTACHMENT_LIMITS } from '../shared/attachments'
 
 /** Optional locally built Grok with the macOS socket-denial compatibility patch.
  * Keep the official CLI untouched and retain strict sandbox arguments below. */
@@ -237,7 +238,7 @@ async function generatedImages(threadId: string | undefined, env: NodeJS.Process
   let total = 0
   for (const candidate of candidates) {
     if (candidate.info.mtimeMs < since) continue
-    if (images.length >= 4 || candidate.info.size > 8 * 1024 * 1024 || total + candidate.info.size > 20 * 1024 * 1024) continue
+    if (images.length >= ATTACHMENT_LIMITS.count || candidate.info.size > ATTACHMENT_LIMITS.imageBytes || total + candidate.info.size > ATTACHMENT_LIMITS.totalBytes) continue
     const data = await readFile(candidate.path)
     const mimeType = imageMime(data)
     if (!mimeType) continue
@@ -278,7 +279,7 @@ export async function grokGeneratedImages(
       if (!workspaces.includes(cwd)) throw new Error('Grok: Image output is outside this workspace')
     }
     const info = await stat(resolved)
-    if (!info.isFile() || images.length >= 4 || info.size > 8 * 1024 * 1024 || total + info.size > 20 * 1024 * 1024) {
+    if (!info.isFile() || images.length >= ATTACHMENT_LIMITS.count || info.size > ATTACHMENT_LIMITS.imageBytes || total + info.size > ATTACHMENT_LIMITS.totalBytes) {
       throw new Error('Grok: Generated image exceeds attachment limits')
     }
     const data = await readFile(resolved)
@@ -313,7 +314,7 @@ export async function geminiGeneratedImages(workspace: string, before: Set<strin
     const path = join(root, name)
     if (dirname(await realpath(path)) !== root) throw new Error('Gemini: Image output is outside this workspace')
     const info = await stat(path)
-    if (!info.isFile() || images.length >= 4 || info.size > 8 * 1024 * 1024 || total + info.size > 20 * 1024 * 1024) throw new Error('Gemini: Generated image exceeds attachment limits')
+    if (!info.isFile() || images.length >= ATTACHMENT_LIMITS.count || info.size > ATTACHMENT_LIMITS.imageBytes || total + info.size > ATTACHMENT_LIMITS.totalBytes) throw new Error('Gemini: Generated image exceeds attachment limits')
     const data = await readFile(path)
     const mimeType = imageMime(data)
     if (!mimeType) throw new Error('Gemini: Generated file is not a supported image')

@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { accessSync, constants, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, posix } from 'node:path'
-import type { LocalAgentImage, LocalAgentReply, LocalApprovalHandler, LocalRunOptions } from '../../src/shared/agentExecutor'
+import type { AgentExecutor, LocalAgentImage, LocalApprovalHandler } from '../../src/shared/agentExecutor'
+import { ATTACHMENT_LIMITS, isImageMimeType } from '../../src/shared/attachments'
+import type { HostTaskInputs, WireFile, WireImage } from '../../src/shared/hostTask'
 import { agentIdentityPrompt } from '../../src/shared/agentCustomization'
 import { agentPermissions } from '../../src/shared/agentPermissions'
 import { REMOTE_AGENT_ADAPTERS, type AgentConfig, type LocalAgent } from '../../src/shared/types'
@@ -25,10 +27,7 @@ import { acceptOwnerCommand, verifyOwnerCommand, VerifyError } from './verify'
 export const OWNER_TASK_CAPABILITY = 'owner-tasks'
 /** Every adapter the desktop runs, plus user-registered commands ("custom"). */
 const ADAPTERS = new Set<string>(REMOTE_AGENT_ADAPTERS)
-/** Delivered with a reply: at most this many images and files, as for room tasks. */
-const MAX_OUTPUTS = 4
-const MAX_OUTPUT_BYTES = 20 * 1024 * 1024
-const MAX_OUTPUT_FILE_BYTES = 8 * 1024 * 1024
+/** Images by extension; delivered with a reply within the message limits (ATTACHMENT_LIMITS). */
 const MIME: Record<string, LocalAgentImage['mimeType']> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
 const MAX_CONCURRENT = 4
 const POLL_MS = 15_000
@@ -69,8 +68,8 @@ interface ClaimedTask {
   /** A folder on this server chosen for the agent in this chat. */
   workspace?: string
   /** What the human sent with this message. */
-  images?: { name: string; mimeType: string; base64: string }[]
-  files?: { name: string; base64: string }[]
+  images?: HostTaskInputs['images']
+  files?: HostTaskInputs['files']
   bindingRevision: number
   /** Set for a shared-room task: who asked, so group permissions apply. */
   room?: { name: string; requester: string; requesterKind: 'owner' | 'person' | 'agent' }
@@ -89,8 +88,8 @@ interface Running {
   allowedForTask: Set<string>
 }
 
-/** What the executor needs to run one agent turn; runLocalAgent in production. */
-export type AgentRunner = (config: AgentConfig, prompt: string, signal: AbortSignal, options: LocalRunOptions, images?: LocalAgentImage[]) => Promise<LocalAgentReply>
+/** Runs the agents: the desktop's own executor (desktopAgentExecutor) in production. */
+export type HostAgentExecutor = Pick<AgentExecutor, 'run'> & Partial<Pick<AgentExecutor, 'disposeAgent' | 'releaseSession'>>
 
 export interface ExecutorOptions {
   client: HostClient
@@ -99,7 +98,7 @@ export interface ExecutorOptions {
   hostId: string
   trust(): TrustState
   seen: SeenRequests
-  run: AgentRunner
+  executor: HostAgentExecutor
   /** Where per-agent working folders live. */
   workRoot: string
   /** A web-added host: configuration, approvals and cancels come from the service unsigned. */
@@ -114,10 +113,6 @@ export interface ExecutorOptions {
   resolveCommand(command: string): Promise<string | undefined>
   /** Reads a CLI's version for discovery. */
   readVersion?(executable: string): Promise<string | undefined>
-  /** Stops an edited agent's CLI processes. */
-  dispose?(localId: string): void
-  /** Closes a one-off task's process once it is done. */
-  release?(sessionKey: string): void
   sleep?(ms: number, signal: AbortSignal): Promise<void>
 }
 
@@ -196,12 +191,12 @@ export function listFolders(parent: unknown, name: unknown, home = homedir()): {
 }
 
 /** Files an agent left in its outbox, within the delivery limits. */
-export function collectOutbox(directory: string, images: LocalAgentImage[]): { images: { name: string; mimeType: string; base64: string }[]; files: { name: string; base64: string }[]; skipped: string[] } {
-  const outImages: { name: string; mimeType: string; base64: string }[] = []
-  const files: { name: string; base64: string }[] = []
+export function collectOutbox(directory: string, images: LocalAgentImage[]): Required<HostTaskInputs> & { skipped: string[] } {
+  const outImages: WireImage[] = []
+  const files: WireFile[] = []
   const skipped: string[] = []
   let total = 0
-  const take = (size: number) => outImages.length + files.length < MAX_OUTPUTS && size > 0 && size <= MAX_OUTPUT_FILE_BYTES && total + size <= MAX_OUTPUT_BYTES
+  const take = (size: number) => outImages.length + files.length < ATTACHMENT_LIMITS.count && size > 0 && size <= ATTACHMENT_LIMITS.imageBytes && total + size <= ATTACHMENT_LIMITS.totalBytes
   for (const image of images) {
     if (!take(image.data.byteLength)) { skipped.push(image.name); continue }
     total += image.data.byteLength
@@ -298,7 +293,7 @@ export class Executor {
     // An edited agent starts fresh processes; its old sessions belong to the old settings.
     for (const [localId, previous] of this.agents) {
       const current = next.get(localId)
-      if (!current || current.configRevision !== previous.configRevision || current.permissionsRevision !== previous.permissionsRevision) this.options.dispose?.(localId)
+      if (!current || current.configRevision !== previous.configRevision || current.permissionsRevision !== previous.permissionsRevision) this.options.executor.disposeAgent?.(localId)
     }
     this.agents = next
     this.agentsRevision = agentsRevision
@@ -377,8 +372,7 @@ export class Executor {
         installed: true, discovered: true, chatSupported: true, status: 'ready', authentication: 'unchecked', ...(custom ? { custom: true } : {})
       }
       // Images go to the runtime, which saves them and asks the agent to look; files are placed here.
-      const images: LocalAgentImage[] = (task.images ?? []).filter(item => Object.values(MIME).includes(item.mimeType as LocalAgentImage['mimeType']))
-        .map(item => ({ name: item.name, mimeType: item.mimeType as LocalAgentImage['mimeType'], data: Buffer.from(item.base64, 'base64') }))
+      const images: LocalAgentImage[] = (task.images ?? []).flatMap(item => isImageMimeType(item.mimeType) ? [{ name: item.name, mimeType: item.mimeType, data: Buffer.from(item.base64, 'base64') }] : [])
       const received = (task.files ?? []).map(file => {
         mkdirSync(inbox, { recursive: true, mode: 0o700 })
         const path = join(inbox, basename(file.name).replace(/[\0/]/g, '_') || 'file')
@@ -386,9 +380,12 @@ export class Executor {
         return path
       })
       const attached = received.length ? `\n\nThe human attached ${received.length === 1 ? 'this file' : 'these files'}. Read ${received.length === 1 ? 'it' : 'them'} before answering:\n${received.join('\n')}` : ''
-      const delivery = `To deliver files to the human, save them in ${outbox}. Douchat attaches up to ${MAX_OUTPUTS} of them (images show inline; ${MAX_OUTPUT_BYTES / 1024 / 1024} MB in total) after your reply.`
+      const delivery = `To deliver files to the human, save them in ${outbox}. Douchat attaches up to ${ATTACHMENT_LIMITS.count} of them (images show inline; ${ATTACHMENT_LIMITS.totalBytes / 1024 / 1024} MB in total) after your reply.`
       let lastProgress = 0
-      const result = await this.options.run(agent, `${agentIdentityPrompt(agent)}\n\n${task.prompt}${attached}\n\n${delivery}`, entry.abort.signal, {
+      const result = await this.options.executor.run(agent, {
+        prompt: `${agentIdentityPrompt(agent)}\n\n${task.prompt}${attached}\n\n${delivery}`,
+        signal: entry.abort.signal,
+        images,
         agentOverride: override,
         // A conversation keeps its native session (Codex thread, Claude session) between turns;
         // a one-off task gets its own, so it still works in the chosen folder, and is closed after.
@@ -404,7 +401,7 @@ export class Executor {
         // Claude asks before each tool. Codex asks Douchat only for native Computer Use,
         // which a server does not have; its shell runs in its workspace sandbox.
         ...(config.adapter === 'claude' ? { onApproval: this.approvalHandler(entry, config) } : {})
-      }, images)
+      })
       outputs = collectOutbox(outbox, result.images)
       const skipped = outputs.skipped.length ? `\n\n(${outputs.skipped.length} more file${outputs.skipped.length === 1 ? '' : 's'} stayed on the server: ${outputs.skipped.join(', ')})` : ''
       reply = result.text.trim() + skipped
@@ -415,7 +412,7 @@ export class Executor {
     } finally {
       rmSync(outbox, { recursive: true, force: true })
       rmSync(inbox, { recursive: true, force: true })
-      if (!task.sessionKey && sessionKey) this.options.release?.(sessionKey)
+      if (!task.sessionKey && sessionKey) this.options.executor.releaseSession?.(sessionKey)
     }
     try {
       await this.options.client.call({ action: 'complete', id: task.id, claim: task.claim, reply,

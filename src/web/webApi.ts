@@ -24,7 +24,8 @@ import { siteOrigin } from './site'
 import { WebSocial } from './webSocial'
 import { BUILT_IN_PRODUCTS, parseProducts } from '../shared/products'
 import { canRunCloudGroup, runCloudGroupRound, sendToCloudGroup } from './cloudGroup'
-import { HostAgents, hostActivity, sendToHostAgent, type HostTaskState, type SocialCall } from './hostChat'
+import type { HostTaskState } from '../shared/hostTask'
+import { HostAgents, hostActivity, sendToHostAgent, type SocialCall } from './hostChat'
 import { forgetActiveDevice, loginProofs, signOwnerCommand } from './webDevice'
 import { WEB_HOST_PREFIX, WebHosts } from './webHosts'
 import type { PermissionApproval, PermissionRequest } from '../shared/agentPermissions'
@@ -453,14 +454,15 @@ export function createWebApi(): DouchatApi {
     if (!target || desktopOnline() || !syncNow || !tokenNow || !userNow) return false
     await hostAgents.refresh()
     const agent = target.type === 'direct' && !target.id.startsWith('im-') ? syncNow.get<AgentConfig>('agent', target.agentIds[0]) : undefined
-    if (agent && hostAgents.host(agent.id)) {
+    const host = agent && hostAgents.host(agent.id)
+    if (agent && host) {
       if (replying.has(conversationId)) throw new Error('This conversation is still replying')
       const startedAt = Date.now()
       const base: ConversationActivityState = { conversationId, topicId: target.activeTopicId, phase: 'replying', agentIds: [agent.id], label: agent.name, startedAt }
       replying.set(conversationId, { activity: base })
       refresh()
       try {
-        await sendToHostAgent({ sync: syncNow, call: socialCall, user: userNow, agent, conversation: target, text, messageId,
+        await sendToHostAgent({ sync: syncNow, call: socialCall, user: userNow, agent, host: host.name, conversation: target, text, messageId,
           onState: (state) => { replying.set(conversationId, { activity: hostActivity(base, state, startedAt) }); trackHostTask(conversationId, agent, state) } })
       } finally {
         replying.delete(conversationId)

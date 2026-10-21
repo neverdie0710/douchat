@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { callChannel, HostClient, UnauthorizedError } from './client'
 import { Relay, type OpenRequest } from './relay'
 import { Executor } from './executor'
-import { disposeLocalAgentSessions, releaseLocalAgentSession, runLocalAgent } from '../../src/main/localAgentRuntime'
+import { desktopAgentExecutor } from '../../src/main/desktopAgentExecutor'
 import { configureLocalWorkspaces } from '../../src/main/localWorkspaces'
 import { resolveExecutable } from '../../src/main/shellPath'
 import { executableVersion } from '../../src/main/localAgents'
@@ -206,11 +206,9 @@ async function run(): Promise<void> {
   const executor = new Executor({
     client, log, origin, ownerId: state.ownerId, hostId: state.hostId, trust: () => trust, seen, version: HOST_VERSION,
     serviceTrusted: state.trustMode === 'service',
-    run: (config, prompt, signal, options, images) => runLocalAgent(config, prompt, signal, images ?? [], options),
+    executor: desktopAgentExecutor,
     resolveCommand: resolveExecutable,
     readVersion: executableVersion,
-    dispose: disposeLocalAgentSessions,
-    release: releaseLocalAgentSession,
     workRoot: join(HOST_HOME, 'work'),
     sessionRoot: join(data, 'local-workspaces', 'sessions'),
     configFloor
