@@ -413,20 +413,18 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
         const identity = this.identity()
         const daemons = (await this.connections.store.list()).filter(item => item.kind === 'daemon' && item.daemon?.ownerId === identity.id)
         this.rememberHostNames(daemons)
-        // Only hosts that run agents themselves have tasks to watch; relayed ones run from here.
-        const hasDaemons = daemons.some(item => item.daemon?.hostExecution) || [...this.bindings.values()].some(item => item.executor.startsWith('host:'))
-        if (!hasDaemons && !this.tasks.length) {
-          this.cursor = undefined
-          delay = 30_000
-        } else {
-          const result = await this.request<WatchResult>({ action: 'task-progress-watch', ...(this.cursor ? { cursor: this.cursor } : {}) }, signal, identity)
-          if (signal.aborted || generation !== this.generation) return
-          this.cursor = result.cursor
-          this.tasks = Array.isArray(result.tasks) ? result.tasks : []
-          this.bindings = new Map((result.bindings ?? []).map(item => [item.localId, item]))
-          this.publish(identity.id)
-          failures = 0
-        }
+        // The owner channel also moves when a host is added, renamed or removed in
+        // another app, so this watch keeps the connection list the account's.
+        const result = await this.request<WatchResult>({ action: 'task-progress-watch', ...(this.cursor ? { cursor: this.cursor } : {}) }, signal, identity)
+        if (signal.aborted || generation !== this.generation) return
+        this.cursor = result.cursor
+        this.tasks = Array.isArray(result.tasks) ? result.tasks : []
+        const bindings = new Map((result.bindings ?? []).map(item => [item.localId, item]))
+        const hostsChanged = canonicalJson([...bindings.values()].map(item => [item.localId, item.executor, item.state])) !== canonicalJson([...this.bindings.values()].map(item => [item.localId, item.executor, item.state]))
+        this.bindings = bindings
+        this.publish(identity.id)
+        failures = 0
+        if (hostsChanged || await this.accountHostsChanged()) this.scheduleSync()
       } catch {
         if (signal.aborted || generation !== this.generation) return
         delay = WATCH_BACKOFF[Math.min(failures++, WATCH_BACKOFF.length - 1)]
@@ -579,7 +577,14 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
   private async importAccountHosts(ownerId: string): Promise<void> {
     const saved = new Map((await this.connections.store.list()).flatMap(item => item.kind === 'daemon' && item.daemon ? [[item.daemon.hostId, item] as const] : []))
     let added = false
-    for (const host of await this.hosts(true)) {
+    const hosts = await this.hosts(true)
+    // Removed in another app: a host that follows the account goes from here too (it is already revoked).
+    for (const [hostId, connection] of saved) {
+      if (connection.daemon?.trust !== 'service' || connection.daemon.ownerId !== ownerId || hosts.some(host => host.id === hostId && host.status === 'active')) continue
+      await this.connections.store.remove(connection.id)
+      added = true
+    }
+    for (const host of hosts) {
       if (host.status !== 'active' || host.trustMode !== 'service') continue
       const existing = saved.get(host.id)
       if (existing?.daemon?.trust === 'service') continue
@@ -588,6 +593,14 @@ export class DaemonClient implements DaemonBackend, RemoteExecutionBridge {
       added = true
     }
     if (added) this.onConnectionsImported?.()
+  }
+  /** Whether the account's hosts differ from the connections saved here (added or switched elsewhere). */
+  private async accountHostsChanged(): Promise<boolean> {
+    const saved = new Map((await this.connections.store.list()).flatMap(item => item.kind === 'daemon' && item.daemon ? [[item.daemon.hostId, item.daemon.trust] as const] : []))
+    const hosts = await this.hosts()
+    const active = new Set(hosts.filter(host => host.status === 'active').map(host => host.id))
+    return hosts.some(host => host.status === 'active' && host.trustMode === 'service' && saved.get(host.id) !== 'service')
+      || [...saved].some(([hostId, trust]) => trust === 'service' && !active.has(hostId))
   }
   /** Lets the window reload its connection list after hosts were brought in. */
   onConnectionsImported?: () => void
